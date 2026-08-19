@@ -1,0 +1,38 @@
+Bootstrap: docker
+From: docker.m.daocloud.io/library/almalinux:9
+
+# Runtime for the SimpleEvolution xsbench_opt example. The target repo is a C
+# benchmark (gcc + OpenMP + make), and the executor role needs node/claude.
+# The XSBench source itself is supplied by the run-directory bind and is not
+# baked into this image.
+#
+# Build (on a host with Apptainer):
+#   cd examples/xsbench_opt && apptainer build --fakeroot apptainer.sif apptainer.def
+# (On IHEP JUNO the build runs inside a nested container, so unset the outer
+#  APPTAINER_BIND/SINGULARITY_BIND first — see setup.sh.)
+
+%post
+    set -eux
+    dnf install -y \
+        bash ca-certificates diffutils findutils git which \
+        gcc gcc-c++ make libgomp \
+        python3 python3-pip python-unversioned-command tar xz
+    curl -fsSLO https://nodejs.org/dist/v22.19.0/node-v22.19.0-linux-x64.tar.xz
+    tar -xJf node-v22.19.0-linux-x64.tar.xz -C /usr/local --strip-components=1
+    rm -f node-v22.19.0-linux-x64.tar.xz
+    npm install -g @anthropic-ai/claude-code@2.1.216
+    dnf clean all
+    rm -rf /var/cache/dnf
+
+%environment
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+
+%test
+    set -e
+    for t in bash git gcc make node claude python3; do
+        command -v "$t" >/dev/null
+    done
+    # gcc with OpenMP must produce a working binary (XSBench builds with
+    # -fopenmp and links libgomp).
+    printf 'int main(){return 0;}\n' | gcc -x c -fopenmp -o /tmp/xs_omp_test - && /tmp/xs_omp_test

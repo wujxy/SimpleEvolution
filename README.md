@@ -34,5 +34,11 @@ simpleevo --run-dir runs/tiny-001 inspect --node <node_id>
 simpleevo --run-dir runs/tiny-001 reseed --node <node_id>
 ```
 
-A worked example (the `tinyalgo` speed-optimization task) lives in
-[examples/tiny_algo_opt/](examples/tiny_algo_opt/).
+Worked examples:
+
+- [examples/tiny_algo_opt/](examples/tiny_algo_opt/) — pure-Python pair-counting
+  speed task (`tinyalgo`).
+- [examples/xsbench_opt/](examples/xsbench_opt/) — compiled-C benchmark: optimize
+  the XSBench macroscopic cross-section lookup kernel for single-threaded
+  lookups/s while keeping its verification checksum bit-identical. Ships a
+  hidden human-expert reference for comparison (`reference/`).
