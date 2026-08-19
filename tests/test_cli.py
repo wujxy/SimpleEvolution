@@ -1,0 +1,178 @@
+"""Tests for ``simpleevo.cli``."""
+from __future__ import annotations
+
+import subprocess
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from simpleevo.cli import main
+from simpleevo.config import EvolutionConfig
+from simpleevo.db.queries import ResearchQueries
+
+
+def _write_repo(path: Path) -> None:
+    """Create a tiny git repo with one commit."""
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+    (path / "README.md").write_text("hello\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "init"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+    )
+
+
+def _config_for_repo(repo: Path) -> EvolutionConfig:
+    return EvolutionConfig(
+        goal="test goal",
+        repo_path=repo,
+        runtime_image=Path("/tmp/nonexistent.sif"),
+        editable_paths=("README.md",),
+        frozen_paths=(),
+        eval_commands=("echo TOTAL_MS=100",),
+        metrics_schema={"objective": {"key": "TOTAL_MS", "lower_is_better": True}},
+        axes=("TOTAL_MS",),
+    )
+
+
+def test_run_seeds_root_node_and_thread():
+    with tempfile.TemporaryDirectory() as tmp:
+        run_dir = Path(tmp) / "run"
+        repo = Path(tmp) / "repo"
+        _write_repo(repo)
+        config = _config_for_repo(repo)
+        config_path = Path(tmp) / "task.yaml"
+        config_path.write_text(
+            """
+goal: test goal
+repo_path: {repo}
+runtime_image: /tmp/nonexistent.sif
+editable_paths:
+  - README.md
+eval_commands:
+  - echo TOTAL_MS=100
+metrics_schema:
+  objective:
+    key: TOTAL_MS
+    lower_is_better: true
+axes:
+  - TOTAL_MS
+""".format(repo=repo),
+            encoding="utf-8",
+        )
+        rc = main(["--run-dir", str(run_dir), "run", "--config", str(config_path), "--max-steps", "1"])
+        assert rc == 0
+        queries = ResearchQueries(run_dir / "simpleevo.db")
+        nodes = queries.list_nodes()
+        assert len(nodes) == 1
+        assert nodes[0].depth == 0
+        threads = queries.threads_for_node(nodes[0].node_id)
+        assert len(threads) == 1
+        assert (run_dir / "task.yaml").exists()
+
+
+def test_init_seeds_root_node_and_saves_config():
+    with tempfile.TemporaryDirectory() as tmp:
+        run_dir = Path(tmp) / "run"
+        repo = Path(tmp) / "repo"
+        _write_repo(repo)
+        config_path = Path(tmp) / "task.yaml"
+        config_path.write_text(
+            """
+goal: test goal
+repo_path: {repo}
+runtime_image: /tmp/nonexistent.sif
+editable_paths:
+  - README.md
+eval_commands:
+  - echo TOTAL_MS=100
+metrics_schema:
+  objective:
+    key: TOTAL_MS
+    lower_is_better: true
+axes:
+  - TOTAL_MS
+""".format(repo=repo),
+            encoding="utf-8",
+        )
+        rc = main(["--run-dir", str(run_dir), "init", "--config", str(config_path)])
+        assert rc == 0
+        queries = ResearchQueries(run_dir / "simpleevo.db")
+        assert len(queries.list_nodes()) == 1
+        assert (run_dir / "task.yaml").exists()
+
+
+def test_resume_without_init_fails():
+    with tempfile.TemporaryDirectory() as tmp:
+        run_dir = Path(tmp) / "run"
+        rc = main(["--run-dir", str(run_dir), "resume"])
+        assert rc == 1
+
+
+def test_resume_continues_without_config():
+    with tempfile.TemporaryDirectory() as tmp:
+        run_dir = Path(tmp) / "run"
+        repo = Path(tmp) / "repo"
+        _write_repo(repo)
+        config_path = Path(tmp) / "task.yaml"
+        config_path.write_text(
+            """
+goal: test goal
+repo_path: {repo}
+runtime_image: /tmp/nonexistent.sif
+editable_paths:
+  - README.md
+eval_commands:
+  - echo TOTAL_MS=100
+metrics_schema:
+  objective:
+    key: TOTAL_MS
+    lower_is_better: true
+axes:
+  - TOTAL_MS
+""".format(repo=repo),
+            encoding="utf-8",
+        )
+        main(["--run-dir", str(run_dir), "init", "--config", str(config_path)])
+        # resume without --config, zero scheduler steps (no worker launch).
+        rc = main(["--run-dir", str(run_dir), "resume", "--max-steps", "0"])
+        assert rc == 0
+
+
+def test_reseed_creates_fresh_thread():
+    with tempfile.TemporaryDirectory() as tmp:
+        run_dir = Path(tmp) / "run"
+        repo = Path(tmp) / "repo"
+        _write_repo(repo)
+        config = _config_for_repo(repo)
+        config_path = Path(tmp) / "task.yaml"
+        config_path.write_text(
+            """
+goal: test goal
+repo_path: {repo}
+runtime_image: /tmp/nonexistent.sif
+editable_paths:
+  - README.md
+eval_commands:
+  - echo TOTAL_MS=100
+metrics_schema:
+  objective:
+    key: TOTAL_MS
+    lower_is_better: true
+axes:
+  - TOTAL_MS
+""".format(repo=repo),
+            encoding="utf-8",
+        )
+        main(["--run-dir", str(run_dir), "run", "--config", str(config_path), "--max-steps", "1"])
+        queries = ResearchQueries(run_dir / "simpleevo.db")
+        node = queries.list_nodes()[0]
+        before = len(queries.threads_for_node(node.node_id, limit=100))
+        rc = main(["--run-dir", str(run_dir), "reseed", "--node", node.node_id])
+        assert rc == 0
+        after = len(queries.threads_for_node(node.node_id, limit=100))
+        assert after == before + 1

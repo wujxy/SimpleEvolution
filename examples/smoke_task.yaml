@@ -1,0 +1,29 @@
+goal: "Smoke test: produce a tiny code change in a test file"
+repo_path: /tmp/simpleevo_smoke_repo
+runtime_image: /tmp/nonexistent.sif
+editable_paths:
+  - README.md
+frozen_paths: []
+eval_commands:
+  - "echo TOTAL_MS=100.0"
+  - "echo PATHS=pass"
+metrics_schema:
+  objective:
+    key: TOTAL_MS
+    lower_is_better: true
+  gates:
+    - key: PATHS
+axes:
+  - TOTAL_MS
+gate_block: |
+  Only modify files under tests/fixtures.
+max_proposer_inflight: 1
+max_experiment_inflight: 1
+poll_seconds: 1.0
+queue_max_size: 10
+proposal_slots: 1
+scientist_steps: 10
+agent_timeout_seconds: 30
+eval_timeout_seconds: 30
+command_timeout_seconds: 10
+command_output_cap_chars: 1000

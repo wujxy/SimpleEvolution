@@ -1,0 +1,77 @@
+# SimpleEvolution task: optimize tinyalgo.count_pairs for speed.
+#
+# Paths below are relative to this file (load_config resolves them against
+# the config's own directory), so the example is runnable from anywhere:
+#
+#   python -m simpleevo --run-dir runs/tiny-001 \
+#     init --config examples/tiny_algo_opt/task.yaml
+#   python -m simpleevo --run-dir runs/tiny-001 \
+#     run --config examples/tiny_algo_opt/task.yaml
+#
+# Before the first run, `setup.sh` must have initialized the target repo as a
+# git repository and built the Apptainer runtime image (see README.md).
+
+goal: >
+  Optimize the tinyalgo pair-counting implementation in tinyalgo/__init__.py
+  for speed (lower ms_per_call) while keeping results exactly correct: the
+  pytest suite and scripts/check_drift.py must still pass. Edit only tinyalgo.
+
+repo_path: repo
+runtime_image: apptainer.sif
+
+editable_paths:
+  - tinyalgo
+frozen_paths: []
+
+eval_commands:
+  - PYTHONPATH=. python -m pytest tests/ -q && echo CORRECTNESS=PASS || echo CORRECTNESS=FAIL
+  - PYTHONPATH=. python scripts/check_drift.py && echo DRIFT=PASS || echo DRIFT=FAIL
+  - PYTHONPATH=. python scripts/bench.py
+
+metrics_schema:
+  objective:
+    key: ms_per_call
+    lower_is_better: true
+  gates:
+    - key: CORRECTNESS
+      description: >
+        The pytest suite passes. Pair counts must be exactly correct; a change
+        that alters any computed count fails.
+    - key: DRIFT
+      description: >
+        Per-call output is identical to the frozen reference. Any change to
+        operation order, accumulation, or control flow that shifts it fails.
+
+axes:
+  - ms_per_call
+
+gate_block: |
+  Only modify files under tinyalgo/. The harness runs, in order:
+    - PYTHONPATH=. python -m pytest tests/ -q   (CORRECTNESS gate)
+    - PYTHONPATH=. python scripts/check_drift.py (DRIFT gate)
+    - PYTHONPATH=. python scripts/bench.py      (objective: ms_per_call)
+  A change is accepted only if CORRECTNESS=PASS and DRIFT=PASS; among
+  accepted changes, lower ms_per_call is better.
+
+# Proposer (Scientist) chat-model configuration. Any OpenAI-compatible
+# provider supported by proposer/model.py works: api is one of
+# hepai | openai | zhipu | anthropic, with base_url and model to match. The
+# API key is read from the environment (HEPAI_API_KEY / OPENAI_API_KEY /
+# ZHIPU_API_KEY / ANTHROPIC_API_KEY), never from this file.
+researcher:
+  api: openai
+  model: deepseek-v4-flash
+  base_url: https://api.deepseek.com
+  command_timeout_seconds: 120
+  command_output_cap_chars: 12000
+
+# Scheduling / episode budgets (local smoke defaults; raise for real runs).
+proposal_slots: 2
+scientist_steps: 200
+agent_timeout_seconds: 3600
+eval_timeout_seconds: 600
+max_proposer_inflight: 1
+max_experiment_inflight: 1
+poll_seconds: 2.0
+queue_max_size: 10
+quiescence_window_proposals: 2

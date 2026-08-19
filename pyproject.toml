@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simpleevo"
+version = "0.1.0"
+description = "Event-driven Research Tree evolution: Node -> Proposer -> Proposal -> Experiment -> New Node."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "PyYAML>=6",
+]
+
+[project.optional-dependencies]
+# Proposer chat-model transports (one per `researcher.api` value).
+hepai = ["hepai"]
+openai = ["openai>=1"]
+zhipu = ["openai>=1"]
+anthropic = ["anthropic>=0.34"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+simpleevo = "simpleevo.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["simpleevo*", "proposer*", "experiment*"]

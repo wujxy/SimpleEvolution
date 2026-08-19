@@ -1,0 +1,116 @@
+"""Thin Claude CLI adapter over a prepared sandbox."""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from typing import Callable
+
+from .contracts import ExecutionSandbox, ProcessRequest
+
+
+class AgentError(RuntimeError):
+    """Raised when the agent call fails or returns unparseable output."""
+
+    def __init__(self, message: str, raw_output: str = "",
+                 cause: str = ""):
+        super().__init__(message)
+        self.raw_output = raw_output
+        self.cause = cause
+
+
+@dataclass
+class AgentResult:
+    text: str
+    usage: object = None
+
+
+def _decode_output(stdout: str) -> AgentResult:
+    """Decode Claude's JSON envelope without interpreting usage semantics."""
+    text = stdout
+    usage: object = None
+    try:
+        outer = json.loads(stdout)
+        if isinstance(outer, dict):
+            if isinstance(outer.get("result"), str):
+                text = outer["result"]
+            usage = outer.get("usage")
+    except json.JSONDecodeError:
+        pass
+    return AgentResult(text=text, usage=usage)
+
+
+class Agent:
+    def __init__(
+        self,
+        *,
+        world: ExecutionSandbox,
+        command: str = "claude",
+        timeout_seconds: int = 1800,
+        extra_args: list[str] | None = None,
+        model: str | None = None,
+        allowed_tools: str = "Read,Edit,Write,Bash",
+        usage_observer: Callable[[object], None] | None = None,
+    ):
+        self.world = world
+        self.command = command
+        self.timeout_seconds = timeout_seconds
+        self.extra_args = list(extra_args or [])
+        self.model = model
+        self.allowed_tools = allowed_tools
+        self.usage_observer = usage_observer
+
+    def _notify_usage(self, usage: object, label: str) -> None:
+        if self.usage_observer is None:
+            return
+        try:
+            self.usage_observer(usage)
+        except Exception as exc:
+            print(
+                f"[telemetry] warning: {label} usage was not recorded: {exc}",
+                flush=True,
+            )
+
+    def run_text(self, prompt: str, *, cwd: Path, label: str = "agent") -> str:
+        """Run the agent, return its raw text."""
+        return self._run(prompt, cwd=cwd, label=label).text
+
+    def _run(self, prompt: str, *, cwd: Path, label: str) -> AgentResult:
+        payload = [
+            self.command, "-p",
+            "--input-format", "text",
+            "--output-format", "json",
+            "--allowedTools", self.allowed_tools,
+        ]
+        if self.model:
+            payload += ["--model", self.model]
+        payload += self.extra_args
+        print(
+            f"[{label}] claude call started "
+            f"(timeout={self.timeout_seconds}s, world=/work)",
+            flush=True,
+        )
+        completed = self.world.run(ProcessRequest(
+            tuple(payload), PurePosixPath("/work"), self.timeout_seconds,
+            stdin=prompt, label=label,
+        ))
+        result = _decode_output(completed.stdout)
+        self._notify_usage(result.usage, label)
+        if completed.timed_out:
+            raise AgentError(
+                f"[{label}] timed out after {self.timeout_seconds}s\n"
+                f"stderr: {completed.stderr.strip()[:2000]}",
+                cause="timed_out",
+            )
+        if completed.exit_code != 0:
+            raise AgentError(
+                f"[{label}] claude exited {completed.exit_code}\n"
+                f"stdout: {completed.stdout.strip()[:2000]}\n"
+                f"stderr: {completed.stderr.strip()[:2000]}",
+                cause="crashed",
+            )
+        print(
+            f"[{label}] claude call finished "
+            f"({completed.duration_seconds:.0f}s)", flush=True,
+        )
+        return result
