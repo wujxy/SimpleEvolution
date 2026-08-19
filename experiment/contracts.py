@@ -90,6 +90,7 @@ class ExperimentRequest:
     agent_timeout_seconds: int = 3600
     eval_timeout_seconds: int = 600
     attempt: int = 1
+    attempt_id: str = ""
     executor: Mapping[str, Any] = field(default_factory=dict)
 
 

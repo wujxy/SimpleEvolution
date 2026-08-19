@@ -69,7 +69,6 @@ def test_scheduler_closes_proposer_experiment_loop(env):
                             "proposal_id": payload["proposal_ids"][0],
                             "instruction": "inline a small helper to reduce total_ms",
                             "rationale": {"why": "expected faster"},
-                            "snapshot_ref": "",
                         }
                     ],
                 },

@@ -59,7 +59,6 @@ CREATE TABLE IF NOT EXISTS proposals (
     thread_id TEXT NOT NULL REFERENCES threads(thread_id),
     instruction TEXT NOT NULL,
     rationale TEXT NOT NULL DEFAULT '{}',
-    snapshot_ref TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'queued'
         CHECK (status IN (
             'queued', 'running', 'done',

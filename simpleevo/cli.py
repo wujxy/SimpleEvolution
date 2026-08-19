@@ -269,6 +269,31 @@ def _cmd_reseed(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_tree(args: argparse.Namespace) -> int:
+    from .reporting.ascii import render
+
+    print(render(str(args.run_dir)))
+    return 0
+
+
+def _cmd_plot(args: argparse.Namespace) -> int:
+    from .reporting.plots import render
+
+    out_dir = args.out_dir or (Path(args.run_dir) / "reports")
+    for path in render(str(args.run_dir), out_dir):
+        print(f"wrote {path}")
+    return 0
+
+
+def _cmd_tree_graph(args: argparse.Namespace) -> int:
+    from .reporting.graphviz_tree import render
+
+    out_dir = args.out_dir or (Path(args.run_dir) / "reports")
+    for path in render(str(args.run_dir), out_dir):
+        print(f"wrote {path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="simpleevo")
     parser.add_argument("--run-dir", required=True, type=Path)
@@ -297,6 +322,25 @@ def main(argv: list[str] | None = None) -> int:
     reseed_p = sub.add_parser("reseed", help="attach a fresh thread to a node")
     reseed_p.add_argument("--node", required=True)
     reseed_p.set_defaults(func=_cmd_reseed)
+
+    tree_p = sub.add_parser("tree", help="print the research tree as ASCII")
+    tree_p.set_defaults(func=_cmd_tree)
+
+    plot_p = sub.add_parser("plot", help="write progress/pareto PNGs")
+    plot_p.add_argument(
+        "--out-dir", type=Path, default=None,
+        help="output dir (default: <run-dir>/reports)",
+    )
+    plot_p.set_defaults(func=_cmd_plot)
+
+    tree_graph_p = sub.add_parser(
+        "tree-graph", help="write Graphviz tree (.dot/.png/.svg)",
+    )
+    tree_graph_p.add_argument(
+        "--out-dir", type=Path, default=None,
+        help="output dir (default: <run-dir>/reports)",
+    )
+    tree_graph_p.set_defaults(func=_cmd_tree_graph)
 
     args = parser.parse_args(argv)
     return args.func(args)

@@ -196,15 +196,18 @@ class Scheduler:
                 thread_id=thread.thread_id,
                 proposal_slots=self.config.proposal_slots,
             )
-            self.store.record_attempt(
+            attempt = self.store.record_attempt(
                 logical_work_id=allocation.allocation_id,
                 kind="proposer",
                 status="running",
                 started_at=self.clock(),
             )
+            ordinal = len(self.store.attempts_for_work(
+                allocation.allocation_id, "proposer"))
             self.submit_proposer(
                 allocation.allocation_id,
-                self._proposer_payload(allocation, node, thread),
+                self._proposer_payload(
+                    allocation, node, thread, attempt.attempt_id, ordinal),
             )
             jobs.append(allocation.allocation_id)
         return jobs
@@ -224,7 +227,9 @@ class Scheduler:
                 return thread
         return None
 
-    def _proposer_payload(self, allocation, node, thread) -> dict[str, Any]:
+    def _proposer_payload(
+        self, allocation, node, thread, attempt_id: str, attempt: int,
+    ) -> dict[str, Any]:
         """Assemble the proposer job payload from L2 (also used on re-submit)."""
         return {
             "allocation_id": allocation.allocation_id,
@@ -234,6 +239,8 @@ class Scheduler:
             "snapshot_ref": thread.snapshot_ref,
             "proposal_ids": list(allocation.reserved_proposal_ids),
             "world_transition": self._world_transition_for(node),
+            "attempt_id": attempt_id,
+            "attempt": attempt,
         }
 
     def _world_transition_for(self, node) -> dict[str, Any]:
@@ -299,12 +306,14 @@ class Scheduler:
                     status="pending",
                 )
                 tx.transition_proposal_status(proposal_id, "running")
-            self.store.record_attempt(
+            attempt = self.store.record_attempt(
                 logical_work_id=experiment.experiment_id,
                 kind="experiment",
                 status="running",
                 started_at=self.clock(),
             )
+            ordinal = len(self.store.attempts_for_work(
+                experiment.experiment_id, "experiment"))
             self.store.mark_experiment_running(experiment.experiment_id)
             self.submit_experiment(
                 experiment.experiment_id,
@@ -314,6 +323,8 @@ class Scheduler:
                     "parent_node_id": proposal.node_id,
                     "parent_sha": node.sha,
                     "proposal": proposal.instruction,
+                    "attempt_id": attempt.attempt_id,
+                    "attempt": ordinal,
                 },
             )
             jobs.append(experiment.experiment_id)
@@ -371,12 +382,15 @@ class Scheduler:
                     allocation_id=allocation_id,
                     attempt_id=attempt.attempt_id,
                 )
+            self._archive_result(
+                result_path, attempt.attempt_id if attempt else None)
             return False
 
         result = raw.get("result", {})
         node_id = result.get("node_id")
         thread_id = result.get("thread_id")
         proposals = result.get("proposals", [])
+        final_snapshot_ref = result.get("final_snapshot_ref")
         allocation = self.store.get_allocation(allocation_id)
         reserved = allocation.reserved_proposal_ids if allocation else ()
         if node_id and thread_id and proposals:
@@ -385,6 +399,7 @@ class Scheduler:
                 thread_id=thread_id,
                 proposals=proposals,
                 reserved_proposal_ids=reserved,
+                final_snapshot_ref=final_snapshot_ref,
             )
         self.store.deallocate_proposer(
             allocation_id=allocation_id,
@@ -392,6 +407,8 @@ class Scheduler:
         )
         if attempt is not None:
             self.store.mark_attempt_succeeded(attempt.attempt_id)
+        self._archive_result(
+            result_path, attempt.attempt_id if attempt else None)
         return True
 
     def _ingest_experiment_result(
@@ -415,6 +432,8 @@ class Scheduler:
                     experiment_id=experiment_id,
                     attempt_id=attempt.attempt_id,
                 )
+            self._archive_result(
+                result_path, attempt.attempt_id if attempt else None)
             return True
 
         result = raw.get("result", {})
@@ -431,6 +450,8 @@ class Scheduler:
                     experiment_id=experiment_id,
                     attempt_id=attempt.attempt_id,
                 )
+            self._archive_result(
+                result_path, attempt.attempt_id if attempt else None)
             return True
 
         gate_raw = result.get("gate", {})
@@ -452,11 +473,27 @@ class Scheduler:
         )
         if attempt is not None:
             self.store.mark_attempt_succeeded(attempt.attempt_id)
+        self._archive_result(
+            result_path, attempt.attempt_id if attempt else None)
         return True
 
     def _latest_attempt(self, logical_work_id: str, kind: str):
         attempts = self.store.attempts_for_work(logical_work_id, kind)
         return attempts[-1] if attempts else None
+
+    def _archive_result(self, result_path: Path, attempt_id: str | None) -> None:
+        """Consume a result artifact so the reconciler cannot re-read it.
+
+        After ingest, the fixed ``result.json`` path must no longer exist;
+        otherwise the reconciler keeps feeding the same (possibly
+        infra-failed) result back into the loop instead of reaching the
+        ``reattach_or_wait`` branch that re-submits a fresh attempt (§18).
+        Rename preserves the artifact for audit while clearing the path.
+        """
+        if not result_path.exists():
+            return
+        suffix = f".{attempt_id}.ingested" if attempt_id else ".ingested"
+        result_path.rename(result_path.with_name(result_path.name + suffix))
 
     # ------------------------------------------------------------------
     # Reconciliation / resume
@@ -519,15 +556,17 @@ class Scheduler:
         thread = self._queries.get_thread(allocation.thread_id)
         if node is None or thread is None:
             return
-        self.store.record_attempt(
+        attempt = self.store.record_attempt(
             logical_work_id=allocation_id,
             kind="proposer",
             status="running",
             started_at=self.clock(),
         )
+        ordinal = len(self.store.attempts_for_work(allocation_id, "proposer"))
         self.submit_proposer(
             allocation_id,
-            self._proposer_payload(allocation, node, thread),
+            self._proposer_payload(
+                allocation, node, thread, attempt.attempt_id, ordinal),
         )
 
     def _resubmit_experiment(self, experiment_id: str) -> None:
@@ -542,12 +581,13 @@ class Scheduler:
         node = self._queries.get_node(experiment.parent_node_id)
         if node is None:
             return
-        self.store.record_attempt(
+        attempt = self.store.record_attempt(
             logical_work_id=experiment_id,
             kind="experiment",
             status="running",
             started_at=self.clock(),
         )
+        ordinal = len(self.store.attempts_for_work(experiment_id, "experiment"))
         self.store.mark_experiment_running(experiment_id)
         self.submit_experiment(
             experiment_id,
@@ -557,6 +597,8 @@ class Scheduler:
                 "parent_node_id": experiment.parent_node_id,
                 "parent_sha": node.sha,
                 "proposal": self._proposal_instruction(experiment.proposal_id),
+                "attempt_id": attempt.attempt_id,
+                "attempt": ordinal,
             },
         )
 

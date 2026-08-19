@@ -31,7 +31,6 @@ def test_ingest_persists_frontier_axes():
                     thread_id=thread.thread_id,
                     instruction="go faster",
                     rationale={},
-                    snapshot_ref="",
                     status="queued",
                     created_at=1.0,
                 )

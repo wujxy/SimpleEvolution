@@ -39,7 +39,6 @@ def test_inspect_experiment(store: ResearchStore):
                 "thread_id": thread.thread_id,
                 "instruction": "try X",
                 "rationale": {},
-                "snapshot_ref": "",
                 "status": "queued",
                 "created_at": 0.0,
             })()
@@ -92,7 +91,6 @@ def test_search_experiments(store: ResearchStore):
                 "thread_id": thread.thread_id,
                 "instruction": "try X",
                 "rationale": {},
-                "snapshot_ref": "",
                 "status": "queued",
                 "created_at": 0.0,
             })()

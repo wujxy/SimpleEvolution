@@ -74,7 +74,6 @@ def test_reconcile_ingests_offline_experiment_result():
                     thread_id=thread.thread_id,
                     instruction="x",
                     rationale={},
-                    snapshot_ref="",
                     status="running",
                     created_at=1.0,
                 )

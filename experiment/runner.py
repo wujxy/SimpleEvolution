@@ -147,12 +147,17 @@ class ExperimentRunner:
             allowed_tools="Read,Edit,Write,Bash",
             model=executor_cfg.get("model") or None,
             trace_store=self._trace_store(),
-            invocation_id=f"experiment-{self.request.experiment_id}",
+            invocation_id=(
+                f"experiment-{self.request.attempt_id}"
+                if self.request.attempt_id
+                else f"experiment-{self.request.experiment_id}"
+            ),
             role="executor",
             identity={
                 "experiment_id": self.request.experiment_id,
                 "proposal_id": self.request.proposal_id,
                 "parent_node_id": self.request.parent_node_id,
+                "attempt_id": self.request.attempt_id,
                 "attempt": str(self.request.attempt),
             },
         )

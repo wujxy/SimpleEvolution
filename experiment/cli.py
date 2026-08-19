@@ -34,6 +34,7 @@ def _build_request(payload: dict) -> ExperimentRequest:
         agent_timeout_seconds=int(payload.get("agent_timeout_seconds", 3600)),
         eval_timeout_seconds=int(payload.get("eval_timeout_seconds", 600)),
         attempt=int(payload.get("attempt", 1)),
+        attempt_id=str(payload.get("attempt_id", "")),
         executor=dict(payload.get("executor", {})),
     )
 

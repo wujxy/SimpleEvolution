@@ -37,7 +37,6 @@ def _seed(store: ResearchStore):
                 thread_id=thread.thread_id,
                 instruction="go faster",
                 rationale={},
-                snapshot_ref="",
                 status="running",
                 created_at=1.0,
             )
@@ -199,3 +198,54 @@ def test_startup_marks_running_attempts_lost():
         with store.transaction() as tx:
             att = tx.get_attempt(attempt.attempt_id)
             assert att.status == "lost"
+
+
+def test_infra_failed_result_does_not_block_next_attempt():
+    """A failed result.json must be consumed so the next reconcile re-submits
+    a fresh attempt instead of re-reading the same failed artifact (§18)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        run_dir = Path(tmp)
+        store = ResearchStore(run_dir / "simpleevo.db")
+        root, thread, experiment = _seed(store)
+
+        store.record_attempt(
+            logical_work_id=experiment.experiment_id,
+            kind="experiment",
+            status="running",
+            started_at=1.0,
+        )
+        result_path = run_dir / "experiments" / experiment.experiment_id / "result.json"
+        _write_json(
+            result_path,
+            {
+                "protocol": "simpleevo.worker.v1",
+                "kind": "experiment",
+                "request_id": experiment.experiment_id,
+                "status": "failed",
+                "result": {
+                    "experiment_id": experiment.experiment_id,
+                    "outcome": "infra_failed",
+                    "reason": "claude timed out",
+                },
+            },
+        )
+
+        scheduler = Scheduler(
+            store,
+            run_dir,
+            SchedulerConfig(max_proposer_inflight=0, max_experiment_inflight=0),
+        )
+
+        # Step 1: ingest the failed result, mark A1 failed, archive the artifact.
+        scheduler.step()
+        attempts = store.attempts_for_work(experiment.experiment_id, "experiment")
+        assert len(attempts) == 1
+        assert attempts[0].status == "failed"
+        assert not result_path.exists()
+
+        # Step 2: reconcile sees pending + no result.json → re-submit A2.
+        scheduler.step()
+        attempts = store.attempts_for_work(experiment.experiment_id, "experiment")
+        assert len(attempts) == 2
+        assert attempts[0].status == "failed"
+        assert attempts[1].status == "running"

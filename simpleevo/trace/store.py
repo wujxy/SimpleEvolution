@@ -38,10 +38,10 @@ class TraceStore:
             output_refs=output_refs or [],
             timestamp=time.time(),
         )
-        path.write_text(
-            json.dumps(_serialize(envelope), ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        with path.open("a", encoding="utf-8") as stream:
+            stream.write(
+                json.dumps(_serialize(envelope), ensure_ascii=False) + "\n")
+            stream.flush()
         return path
 
     def append_event(

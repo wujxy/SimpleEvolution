@@ -62,7 +62,7 @@ def test_ingest_experiment_result_creates_child_node(store: ResearchStore):
         thread = tx.create_thread(
             parent_thread_id=None,
             node_id=root.node_id,
-            snapshot_ref="",
+            snapshot_ref="snap.tgz",
         )
         proposal = tx.create_proposal(
             type("P", (), {
@@ -71,7 +71,6 @@ def test_ingest_experiment_result_creates_child_node(store: ResearchStore):
                 "thread_id": thread.thread_id,
                 "instruction": "try X",
                 "rationale": {},
-                "snapshot_ref": "snap.tgz",
                 "status": "queued",
                 "created_at": 0.0,
             })()
@@ -103,6 +102,12 @@ def test_ingest_experiment_result_creates_child_node(store: ResearchStore):
     assert exp.child_node_id == child.node_id
     assert exp.status == "completed"
 
+    # The forked child thread inherits the PARENT thread's final state, not a
+    # per-proposal snapshot.
+    child_thread = q.get_thread(
+        q.threads_for_node(child.node_id)[0].thread_id)
+    assert child_thread.snapshot_ref == "snap.tgz"
+
 
 def test_ingest_gate_failed_does_not_create_node(store: ResearchStore):
     with store.transaction() as tx:
@@ -127,7 +132,6 @@ def test_ingest_gate_failed_does_not_create_node(store: ResearchStore):
                 "thread_id": thread.thread_id,
                 "instruction": "try X",
                 "rationale": {},
-                "snapshot_ref": "snap.tgz",
                 "status": "queued",
                 "created_at": 0.0,
             })()
@@ -180,15 +184,14 @@ def test_publish_proposals(store: ResearchStore):
                 "proposal_id": "prop-a",
                 "instruction": "inline A",
                 "rationale": {"why": "reason A"},
-                "snapshot_ref": "snap-a.tgz",
             },
             {
                 "proposal_id": "prop-b",
                 "instruction": "inline B",
                 "rationale": {"why": "reason B"},
-                "snapshot_ref": "snap-b.tgz",
             },
         ],
+        final_snapshot_ref="final.tgz",
     )
 
     assert len(proposals) == 2
@@ -198,6 +201,7 @@ def test_publish_proposals(store: ResearchStore):
 
     q = ResearchQueries(store.path)
     assert len(q.queued_proposals()) == 2
+    assert q.get_thread(thread.thread_id).snapshot_ref == "final.tgz"
 
 
 def test_publish_proposals_rejects_id_outside_reserved_pool(store: ResearchStore):
@@ -226,7 +230,6 @@ def test_publish_proposals_rejects_id_outside_reserved_pool(store: ResearchStore
                     "proposal_id": "forged-id",
                     "instruction": "inline A",
                     "rationale": {},
-                    "snapshot_ref": "snap-a.tgz",
                 },
             ],
             reserved_proposal_ids=("prop-a", "prop-b"),
@@ -296,7 +299,6 @@ def test_ingest_idempotency_rejects_double_terminal(store: ResearchStore):
                 "thread_id": thread.thread_id,
                 "instruction": "try X",
                 "rationale": {},
-                "snapshot_ref": "snap.tgz",
                 "status": "queued",
                 "created_at": 0.0,
             })()

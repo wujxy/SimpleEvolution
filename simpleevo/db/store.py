@@ -71,7 +71,6 @@ class Proposal:
     thread_id: str
     instruction: str
     rationale: dict[str, Any]
-    snapshot_ref: str
     status: str
     created_at: float
 
@@ -214,13 +213,15 @@ class ResearchStore:
                 )
                 tx.link_experiment_child(experiment_id, child.node_id)
 
-                # Fork the Scientist Thread from the proposal snapshot.
+                # Fork the Scientist Thread, inheriting the parent thread's
+                # final cognitive state (not a per-proposal snapshot).
                 proposal = tx.get_proposal(exp.proposal_id)
                 if proposal is not None:
+                    parent_thread = tx.get_thread(proposal.thread_id)
                     tx.create_thread(
                         parent_thread_id=proposal.thread_id,
                         node_id=child.node_id,
-                        snapshot_ref=proposal.snapshot_ref,
+                        snapshot_ref=parent_thread.snapshot_ref if parent_thread else "",
                     )
 
             if frontier_config is not None:
@@ -270,6 +271,7 @@ class ResearchStore:
         thread_id: str,
         proposals: Iterable[dict[str, Any]],
         reserved_proposal_ids: Iterable[str] | None = None,
+        final_snapshot_ref: str | None = None,
     ) -> list[Proposal]:
         """Atomically publish a batch of fully-formed proposals.
 
@@ -277,6 +279,11 @@ class ResearchStore:
         Scheduler when the proposer allocation was created, §2.4
         identity-first).  When ``reserved_proposal_ids`` is given, every
         incoming id is validated against it so a worker cannot mint ids.
+
+        ``final_snapshot_ref`` is the ONE final cognitive state of the
+        completed episode that produced this batch; it is recorded on the
+        thread (not per-proposal) so forked child threads inherit the parent
+        Scientist's final state.
         """
         reserved = set(reserved_proposal_ids) if reserved_proposal_ids is not None else None
         created: list[Proposal] = []
@@ -303,13 +310,14 @@ class ResearchStore:
                         thread_id=thread_id,
                         instruction=raw["instruction"],
                         rationale=raw.get("rationale", {}),
-                        snapshot_ref=raw.get("snapshot_ref", ""),
                         status="queued",
                         created_at=now,
                     )
                 )
                 created.append(tx.get_proposal(proposal_id))
             tx.update_thread_last_active(thread_id, now)
+            if final_snapshot_ref:
+                tx.update_thread_snapshot_ref(thread_id, final_snapshot_ref)
         return created
 
     def allocate_proposer(
@@ -680,6 +688,12 @@ class _Transaction:
             (when, thread_id),
         )
 
+    def update_thread_snapshot_ref(self, thread_id: str, snapshot_ref: str) -> None:
+        self._conn.execute(
+            "UPDATE threads SET snapshot_ref = ? WHERE thread_id = ?",
+            (snapshot_ref, thread_id),
+        )
+
     def create_experiment(
         self,
         *,
@@ -763,8 +777,8 @@ class _Transaction:
             """
             INSERT INTO proposals
             (proposal_id, node_id, thread_id, instruction, rationale,
-             snapshot_ref, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 proposal.proposal_id,
@@ -772,7 +786,6 @@ class _Transaction:
                 proposal.thread_id,
                 proposal.instruction,
                 _json(proposal.rationale),
-                proposal.snapshot_ref,
                 proposal.status,
                 proposal.created_at,
             ),
@@ -949,7 +962,6 @@ def _proposal_from_row(row: sqlite3.Row) -> Proposal:
         thread_id=row["thread_id"],
         instruction=row["instruction"],
         rationale=_unjson(row["rationale"]),
-        snapshot_ref=row["snapshot_ref"],
         status=row["status"],
         created_at=row["created_at"],
     )

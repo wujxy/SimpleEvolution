@@ -73,20 +73,21 @@ def _write_l1_trace(
         print(f"[trace] proposer L1 write failed: {exc}", flush=True)
 
 
-def _result_to_dict(result, proposals_with_meta) -> dict:
+def _result_to_dict(result, proposals_with_meta, final_snapshot_ref) -> dict:
     return {
         "thread_id": result.thread_id,
         "node_id": result.node_id,
         "outcome": result.outcome,
         "proposals": proposals_with_meta,
+        "final_snapshot_ref": final_snapshot_ref,
         "abstain_reason": result.abstain_reason,
         "telemetry": result.deliberation_telemetry,
         "trace": result.trace,
     }
 
 
-def _proposal_to_dict(proposal, proposal_id: str, snapshot_ref: Path) -> dict:
-    """Serialize a ResearchProposal and attach SimpleEvolution identity fields."""
+def _proposal_to_dict(proposal, proposal_id: str) -> dict:
+    """Serialize a ResearchProposal and attach its L2 identity (proposal_id)."""
     target: dict = {}
     rt = proposal.research_target
     if hasattr(rt, "finding_id"):
@@ -108,37 +109,34 @@ def _proposal_to_dict(proposal, proposal_id: str, snapshot_ref: Path) -> dict:
         "expectations": [],
         "falsifiers": [],
         "evidence_refs": list(proposal.evidence_refs),
-        "snapshot_ref": str(snapshot_ref),
     }
 
 
-def _pack_proposal_snapshots(
-    session_dir: Path,
-    proposals: tuple,
-    thread_id: str,
-    run_dir: Path,
-    proposal_ids: list[str],
-) -> list[dict]:
-    """Create one immutable snapshot per proposal and return enriched proposal dicts.
+def _pack_final_snapshot(
+    session_dir: Path, thread_id: str, run_dir: Path,
+) -> Path:
+    """Freeze one completed episode's final cognition into ONE snapshot.
 
-    ``proposal_ids`` are issued by the Scheduler (single writer) when the
-    proposer allocation was created.  The snapshot filename IS the proposal
-    identity (§2.4): snapshot name == L2 proposal_id, so lineage audit and
-    resume stay identity-first.
+    One Node = one Scientist episode = one final cognitive state; the whole
+    proposal batch shares this single snapshot (§ snapshot semantics), not one
+    snapshot per proposal.
     """
-    snapshot_dir = run_dir / "threads" / thread_id / "snapshots"
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path = run_dir / "threads" / thread_id / "final.tgz"
+    _pack_snapshot(session_dir, snapshot_path)
+    return snapshot_path
+
+
+def _enrich_proposals(proposals: tuple, proposal_ids: list[str]) -> list[dict]:
+    """Attach the Scheduler-issued proposal_ids to the proposals."""
     if len(proposal_ids) < len(proposals):
         raise ValueError(
             f"reserved {len(proposal_ids)} proposal ids but produced "
             f"{len(proposals)} proposals"
         )
-    enriched: list[dict] = []
-    for proposal, proposal_id in zip(proposals, proposal_ids):
-        snapshot_path = snapshot_dir / f"{proposal_id}.tgz"
-        _pack_snapshot(session_dir, snapshot_path)
-        enriched.append(_proposal_to_dict(proposal, proposal_id, snapshot_path))
-    return enriched
+    return [
+        _proposal_to_dict(proposal, proposal_id)
+        for proposal, proposal_id in zip(proposals, proposal_ids)
+    ]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -154,6 +152,8 @@ def main(argv: list[str] | None = None) -> int:
     node_id = payload["node_id"]
     node_sha = payload["node_sha"]
     proposal_ids = list(payload.get("proposal_ids", []))
+    attempt_id = str(payload.get("attempt_id", ""))
+    attempt = int(payload.get("attempt", 1))
     snapshot_ref_raw = payload.get("snapshot_ref") or ""
     snapshot_ref = Path(snapshot_ref_raw) if snapshot_ref_raw else None
     world_transition = payload.get("world_transition") or {}
@@ -175,10 +175,15 @@ def main(argv: list[str] | None = None) -> int:
         node_sha,
     ))
 
-    # Session handling: unpack snapshot into a temp session dir, run, repack.
+    # Session handling: unpack the inherited parent cognition only on FIRST
+    # entry (no lived trajectory yet).  A crash-retry of the same episode
+    # resumes the already-persisted session instead of overwriting it with the
+    # entry snapshot (Resume ≠ Evolution).
     session_dir = run_dir / "threads" / thread_id / "session"
-    if snapshot_ref is not None and snapshot_ref.exists():
-        _unpack_snapshot(snapshot_ref, session_dir)
+    session_dir.mkdir(parents=True, exist_ok=True)
+    if not (session_dir / "session.jsonl").exists():
+        if snapshot_ref is not None and snapshot_ref.exists():
+            _unpack_snapshot(snapshot_ref, session_dir)
 
     memory_service = L2MemoryService(run_dir)
     runtime = ApptainerRuntime(
@@ -199,6 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     status = "completed"
     error = None
     proposals_with_meta: list[dict] = []
+    final_snapshot_ref = ""
     try:
         result = orchestrator.run_thread_episode(
             thread_id=thread_id,
@@ -221,9 +227,11 @@ def main(argv: list[str] | None = None) -> int:
             proposal_slots=proposal_slots,
             scientist_steps=scientist_steps,
         )
-        proposals_with_meta = _pack_proposal_snapshots(
-            session_dir, result.proposals, thread_id, run_dir, proposal_ids
-        )
+        proposals_with_meta = _enrich_proposals(
+            result.proposals, proposal_ids)
+        if result.proposals:
+            final_snapshot_ref = str(_pack_final_snapshot(
+                session_dir, thread_id, run_dir))
     except Exception as exc:
         status = "failed"
         error = str(exc)
@@ -241,9 +249,14 @@ def main(argv: list[str] | None = None) -> int:
 
     _write_l1_trace(
         run_dir,
-        f"proposer-{thread_id}",
+        f"proposer-{attempt_id}" if attempt_id else f"proposer-{thread_id}",
         role="proposer",
-        identity={"thread_id": thread_id, "node_id": node_id},
+        identity={
+            "thread_id": thread_id,
+            "node_id": node_id,
+            "attempt_id": attempt_id or None,
+            "attempt": str(attempt),
+        },
         trace=result.trace,
         error=error,
     )
@@ -256,12 +269,12 @@ def main(argv: list[str] | None = None) -> int:
             "kind": "proposer",
             "request_id": manifest.get("request_id", thread_id),
             "status": status,
-            "result": _result_to_dict(result, proposals_with_meta),
+            "result": _result_to_dict(result, proposals_with_meta, final_snapshot_ref),
             "error": error,
             "execution": {
                 "scheduler": "local",
                 "job_id": None,
-                "attempt": payload.get("attempt", 1),
+                "attempt": attempt,
                 "host": "",
             },
         },

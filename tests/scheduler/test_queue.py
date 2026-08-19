@@ -42,7 +42,6 @@ def _seed(store: ResearchStore):
                 "thread_id": thread.thread_id,
                 "instruction": "A",
                 "rationale": {},
-                "snapshot_ref": "",
                 "status": "queued",
                 "created_at": 1.0,
             })()
@@ -54,7 +53,6 @@ def _seed(store: ResearchStore):
                 "thread_id": thread.thread_id,
                 "instruction": "B",
                 "rationale": {},
-                "snapshot_ref": "",
                 "status": "queued",
                 "created_at": 2.0,
             })()
