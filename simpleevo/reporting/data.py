@@ -17,7 +17,11 @@ from typing import Any, Mapping
 from simpleevo.config import load_config
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.db.store import FrontierAxis, Node
-from simpleevo.scheduler.frontier import FrontierConfig, compute_frontier
+from simpleevo.scheduler.frontier import (
+    FrontierConfig,
+    build_policy,
+    compute_frontier,
+)
 
 
 @dataclass(frozen=True)
@@ -50,6 +54,8 @@ class TreeView:
     children: Mapping[str, tuple[str, ...]]  # parent -> child ids (created_at order)
     current_frontier: Mapping[str, frozenset[str]]  # axis -> current winner ids
     raw_nodes: tuple[Node, ...]  # for winner-history replay
+    frontier_policy: str = "gepa"
+    frontier_top_k: int = 3
 
 
 def _as_float(value: Any) -> float | None:
@@ -136,6 +142,8 @@ def load_tree_view(run_dir: str | Path) -> TreeView:
         axes=axes,
         metrics_schema=schema,
         pricing=dict(cfg.pricing),
+        frontier_policy=cfg.frontier_policy,
+        frontier_top_k=cfg.frontier_top_k,
         nodes=views,
         by_id=by_id,
         children={k: tuple(v) for k, v in children.items()},
@@ -168,10 +176,14 @@ def winner_history(view: TreeView) -> dict[str, list[tuple[int, str, float]]]:
 
     ``frontier_axes`` is a current snapshot (rewritten on every ingest), so the
     historical winner sequence must be replayed from the nodes themselves. The
-    replay uses the same ``FrontierConfig`` shape as the scheduler (default
-    tie_band/hysteresis), so it matches the live frontier exactly.
+    replay uses the same ``FrontierConfig`` shape as the scheduler (same
+    policy/top_k), so it matches the live frontier exactly.
     """
-    config = FrontierConfig(axes=view.axes, schema=dict(view.metrics_schema))
+    config = FrontierConfig(
+        axes=view.axes,
+        schema=dict(view.metrics_schema),
+        policy=build_policy(view.frontier_policy, top_k=view.frontier_top_k),
+    )
     active = [n for n in view.raw_nodes if n.gate_result.passed]
 
     history: dict[str, list[tuple[int, str, float]]] = {
@@ -202,8 +214,8 @@ def winner_history(view: TreeView) -> dict[str, list[tuple[int, str, float]]]:
                     axis=ax,
                     node_id=nid,
                     value=value if value is not None else 0.0,
-                    margin=config.tie_band,
-                    hysteresis_anchor=value if value is not None else 0.0,
+                    margin=0.0,
+                    hysteresis_anchor=None,
                     since=node.created_at,
                 ))
     return history

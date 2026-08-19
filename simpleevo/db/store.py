@@ -240,8 +240,8 @@ class ResearchStore:
                                 axis=axis,
                                 node_id=node_id,
                                 value=value,
-                                margin=frontier_config.tie_band,
-                                hysteresis_anchor=value,
+                                margin=0.0,
+                                hysteresis_anchor=None,
                                 since=now,
                             )
                         )
@@ -375,6 +375,35 @@ class ResearchStore:
                 "SELECT DISTINCT episode_id FROM proposer_allocations"
             ).fetchall()
             return {row["episode_id"] for row in rows}
+
+    def count_allocations_for_node(self, node_id: str) -> int:
+        """Total proposer allocations a node has received over its lifetime.
+
+        Used as the reseed budget: a frontier node whose fresh episodes are
+        exhausted may be programmatically re-studied until this count reaches
+        ``max_research_per_node``.
+        """
+        with self.transaction() as tx:
+            row = tx._conn.execute(
+                "SELECT COUNT(*) AS n FROM proposer_allocations WHERE node_id = ?",
+                (node_id,),
+            ).fetchone()
+            return int(row["n"])
+
+    def episode_allocation_finished(self, episode_id: str) -> bool:
+        """Whether an episode's most recent proposer allocation has finished.
+
+        A reseed must not fork an in-flight scientist: until its allocation is
+        closed (``finished_at`` set), the episode has no frozen final cognition
+        for a child episode to inherit.
+        """
+        with self.transaction() as tx:
+            row = tx._conn.execute(
+                "SELECT finished_at FROM proposer_allocations "
+                "WHERE episode_id = ? ORDER BY started_at DESC LIMIT 1",
+                (episode_id,),
+            ).fetchone()
+            return row is not None and row["finished_at"] is not None
 
     def attempts_for_work(
         self,

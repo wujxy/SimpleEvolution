@@ -11,7 +11,12 @@ from simpleevo.config import EvolutionConfig
 from simpleevo.db.store import FrontierAxis, GateDecision, GateResult, ResearchStore
 from simpleevo.db.queries import ResearchQueries
 
-from .frontier import FrontierConfig, compute_frontier, sample_proposer_nodes
+from .frontier import (
+    FrontierConfig,
+    build_policy,
+    compute_frontier,
+    sample_proposer_nodes,
+)
 from .queue import ExecutorQueue, QueueConfig
 from .reconcile import Reconciler
 from .telemetry import TelemetryRecorder
@@ -142,6 +147,10 @@ class Scheduler:
             return FrontierConfig(
                 axes=self.evolution_config.axes,
                 schema=dict(self.evolution_config.metrics_schema),
+                policy=build_policy(
+                    self.evolution_config.frontier_policy,
+                    top_k=self.evolution_config.frontier_top_k,
+                ),
             )
         return FrontierConfig(axes=())
 
@@ -184,10 +193,16 @@ class Scheduler:
             frontier,
             self._allocations_counter,
             capacity,
+            self._frontier_config(),
         ):
             episode = self._idle_episode_for_node(node_id)
             if episode is None:
-                continue
+                # Frontier node whose episodes are all terminal: re-study it
+                # by reseeding a fresh episode (GEPA pool semantics), bounded
+                # by max_research_per_node. Skip when the budget is spent.
+                episode = self._reseed_episode(node_id)
+                if episode is None:
+                    continue
             node = self._queries.get_node(node_id)
             if node is None:
                 continue
@@ -229,6 +244,40 @@ class Scheduler:
             if episode.episode_id not in allocated:
                 return episode
         return None
+
+    def _reseed_episode(self, node_id: str):
+        """Fresh episode for a frontier node whose episodes are all terminal.
+
+        Mirrors the manual ``reseed`` CLI (cli.py:_cmd_reseed) but records
+        inheritance: the new episode's ``inherited_from_episode_id`` is the
+        node's most recent episode, so the forked Scientist resumes the prior
+        final cognition. Bounded by ``max_research_per_node`` (total lifetime
+        proposer allocations). Returns the fresh Episode, or None when the
+        node is at its research budget.
+        """
+        budget = self._max_research_per_node()
+        if self.store.count_allocations_for_node(node_id) >= budget:
+            return None
+        episodes = self._queries.episodes_for_node(node_id, limit=1000)
+        most_recent = episodes[0] if episodes else None  # last_active_at DESC
+        if most_recent is None:
+            return None
+        if not self.store.episode_allocation_finished(most_recent.episode_id):
+            # Previous scientist is still in flight: no frozen final cognition
+            # to inherit yet, so this node cannot be re-studied right now.
+            return None
+        with self.store.transaction() as tx:
+            return tx.create_episode(
+                node_id=node_id,
+                inherited_from_episode_id=(
+                    most_recent.episode_id if most_recent else None
+                ),
+            )
+
+    def _max_research_per_node(self) -> int:
+        if self.evolution_config is not None:
+            return self.evolution_config.max_research_per_node
+        return 3
 
     def _proposer_payload(
         self, allocation, node, episode, attempt_id: str, attempt: int,

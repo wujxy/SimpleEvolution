@@ -1,0 +1,2158 @@
+nohup: ignoring input
+{
+  "steps": 269,
+  "telemetry": [
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 1,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 0
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 1,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    },
+    {
+      "frontier_size": 1,
+      "proposer_jobs": 0,
+      "published": 0,
+      "experiment_jobs": 0,
+      "ingested": 0,
+      "reconcile_actions": 1
+    }
+  ]
+}

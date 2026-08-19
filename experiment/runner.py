@@ -145,7 +145,7 @@ class ExperimentRunner:
                 ),
                 network=True,
             ),
-            mounts=self._mounts(workspace),
+            mounts=self._mounts(workspace, writable=False),
         )
         agent = Agent(
             world=builder,
@@ -193,7 +193,7 @@ class ExperimentRunner:
                 },
                 network=True,
             ),
-            mounts=self._mounts(workspace),
+            mounts=self._mounts(workspace, writable=True),
         )
         result = run_eval(
             list(self.request.eval_commands),
@@ -207,8 +207,14 @@ class ExperimentRunner:
             result.returncodes,
         )
 
-    def _mounts(self, workspace: SourceWorkspace) -> tuple[MountSpec, ...]:
-        mounts = []
+    def _mounts(self, workspace: SourceWorkspace, *, writable: bool) -> tuple[MountSpec, ...]:
+        mounts = [
+            MountSpec(
+                source=workspace.path,
+                target=PurePosixPath("/work"),
+                mode=MountMode.READ_WRITE if writable else MountMode.READ_ONLY,
+            ),
+        ]
         repo = GitWorkspaceProvider(self.request.run_dir, self.request.repo_path).repo
         mounts.append(MountSpec(
             source=repo,

@@ -46,6 +46,9 @@ class EvolutionConfig:
     queue_max_size: int = 10
     quiescence_window_proposals: int = 2
     root_fresh_scientists: int = 1
+    frontier_policy: str = "gepa"
+    frontier_top_k: int = 3
+    max_research_per_node: int = 3
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict (safe for YAML/JSON)."""
@@ -79,6 +82,9 @@ class EvolutionConfig:
             "queue_max_size": self.queue_max_size,
             "quiescence_window_proposals": self.quiescence_window_proposals,
             "root_fresh_scientists": self.root_fresh_scientists,
+            "frontier_policy": self.frontier_policy,
+            "frontier_top_k": self.frontier_top_k,
+            "max_research_per_node": self.max_research_per_node,
         }
 
     @classmethod
@@ -117,6 +123,9 @@ class EvolutionConfig:
             queue_max_size=int(raw.get("queue_max_size", 10)),
             quiescence_window_proposals=int(raw.get("quiescence_window_proposals", 2)),
             root_fresh_scientists=int(raw.get("root_fresh_scientists", 1)),
+            frontier_policy=str(raw.get("frontier_policy", "gepa")),
+            frontier_top_k=int(raw.get("frontier_top_k", 3)),
+            max_research_per_node=int(raw.get("max_research_per_node", 3)),
         )
 
 

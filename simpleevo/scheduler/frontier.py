@@ -1,19 +1,50 @@
-"""GEPA-style frontier computation: per-axis winners with tie/hysteresis."""
+"""Pluggable frontier policies for the scheduler.
+
+A ``FrontierPolicy`` decides two things: which active nodes win a place on the
+resource-allocation frontier (``compute``), and how proposer slots are drawn
+from that frontier (``sample``).  The scheduler, the store's persistence path,
+and the reporting replay all go through the thin ``compute_frontier`` /
+``sample_proposer_nodes`` facades, so adding a policy means adding one class in
+this module (plus a config resolver) — nothing downstream needs to know its
+parameters.
+"""
 from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass
-from typing import Any, Iterable
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Protocol
 
 from simpleevo.db.store import FrontierAxis, Node
+
+
+class FrontierPolicy(Protocol):
+    """A frontier selection policy: computes winners and samples proposers."""
+
+    def compute(self, nodes: Iterable[Node], config: "FrontierConfig") -> "Frontier":
+        """Return the frontier (winner view) over ``nodes``."""
+        ...
+
+    def sample(
+        self,
+        frontier: "Frontier",
+        allocations: dict[str, int],
+        capacity: int,
+        *,
+        random_seed: int | None = None,
+    ) -> list[str]:
+        """Draw up to ``capacity`` proposer slots from ``frontier``.
+
+        ``allocations`` is a mutable counter used to spread capacity across
+        the frontier over repeated calls.
+        """
+        ...
 
 
 @dataclass(frozen=True)
 class FrontierConfig:
     axes: tuple[str, ...]
-    tie_band: float = 0.01
-    hysteresis_margin: float = 0.01
+    policy: FrontierPolicy = field(default_factory=lambda: GepaPolicy())
     schema: dict[str, Any] | None = None
 
 
@@ -49,100 +80,70 @@ def compute_frontier(
     *,
     random_seed: int | None = None,
 ) -> Frontier:
-    """Compute the new frontier from active nodes and current axis winners.
-
-    For each axis:
-      1. Find the best value among active nodes.
-      2. Challengers are nodes within ``tie_band`` of the best value.
-      3. If current axis winners exist and no challenger beats them by more
-         than ``hysteresis_margin``, keep the current winners.
-      4. Otherwise, replace with challengers.
-
-    The returned Frontier is the union of per-axis winner sets.
-    """
-    rng = random.Random(random_seed)
-    active = [n for n in nodes if n.status == "active"]
-    current_by_axis: dict[str, set[str]] = {}
-    for ax in current_axes:
-        current_by_axis.setdefault(ax.axis, set()).add(ax.node_id)
-
-    axes_winners: dict[str, set[str]] = {}
-    for axis in config.axes:
-        lower_is_better = _axis_direction(axis, config.schema)
-        values = [
-            (n, n.metrics.get(axis))
-            for n in active
-            if isinstance(n.metrics.get(axis), (int, float))
-            and not isinstance(n.metrics.get(axis), bool)
-            and math.isfinite(n.metrics.get(axis))
-        ]
-        if not values:
-            continue
-
-        if lower_is_better:
-            best = min(v for _, v in values)
-            challengers = {
-                n.node_id for n, v in values
-                if v <= best + config.tie_band
-            }
-        else:
-            best = max(v for _, v in values)
-            challengers = {
-                n.node_id for n, v in values
-                if v >= best - config.tie_band
-            }
-
-        current_winners = current_by_axis.get(axis, set()) & {n.node_id for n, _ in values}
-        if current_winners:
-            dethroned = False
-            for winner_id in current_winners:
-                winner_val = next(v for n, v in values if n.node_id == winner_id)
-                for challenger_id in challengers:
-                    challenger_val = next(
-                        v for n, v in values if n.node_id == challenger_id
-                    )
-                    if lower_is_better:
-                        if challenger_val < winner_val - config.hysteresis_margin:
-                            dethroned = True
-                            break
-                    else:
-                        if challenger_val > winner_val + config.hysteresis_margin:
-                            dethroned = True
-                            break
-                if dethroned:
-                    break
-            axes_winners[axis] = (
-                current_winners if not dethroned else challengers
-            )
-        else:
-            axes_winners[axis] = challengers
-
-    frontier_nodes: set[str] = set()
-    for winner_set in axes_winners.values():
-        frontier_nodes.update(winner_set)
+    """Compute the frontier from active nodes via the configured policy."""
+    frontier = config.policy.compute(nodes, config)
 
     # Bootstrap: if no measured axis has a winner yet, allow fresh scientists
     # to study active root nodes so the tree can start growing.
-    if not frontier_nodes:
+    if not frontier.node_ids:
+        active = [n for n in nodes if n.status == "active"]
         root_nodes = {n.node_id for n in active if n.depth == 0}
-        frontier_nodes.update(root_nodes)
+        frontier = Frontier(root_nodes, {})
 
-    return Frontier(frontier_nodes, axes_winners)
+    return frontier
 
 
 def sample_proposer_nodes(
     frontier: Frontier,
     allocations: dict[str, int],
     capacity: int,
+    config: FrontierConfig,
     *,
     random_seed: int | None = None,
 ) -> list[str]:
-    """Sample up to ``capacity`` nodes weighted by f[node] (axis count).
+    """Sample up to ``capacity`` proposer slots via the configured policy."""
+    return config.policy.sample(
+        frontier, allocations, capacity, random_seed=random_seed
+    )
 
-    ``allocations`` is a mutable counter used to spread capacity across the
-    frontier over repeated calls.  The returned list may contain duplicates
-    when capacity exceeds |Frontier|, allowing the same node to receive more
-    than one proposer slot.
+
+def build_policy(name: str, *, top_k: int = 3) -> FrontierPolicy:
+    """Resolve a frontier policy by name (from task config)."""
+    if name == "topk":
+        return TopKPolicy(k=top_k)
+    return GepaPolicy()
+
+
+def _metric_values(
+    nodes: Iterable[Node],
+    axes: tuple[str, ...],
+) -> dict[str, dict[str, float]]:
+    """Map node_id -> {axis: finite numeric value}, restricted to ``axes``."""
+    values: dict[str, dict[str, float]] = {}
+    for n in nodes:
+        node_vals: dict[str, float] = {}
+        metrics = n.metrics or {}
+        for axis in axes:
+            v = metrics.get(axis)
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v):
+                node_vals[axis] = float(v)
+        if node_vals:
+            values[n.node_id] = node_vals
+    return values
+
+
+def _frequency_weighted_sample(
+    frontier: Frontier,
+    allocations: dict[str, int],
+    capacity: int,
+    *,
+    random_seed: int | None = None,
+) -> list[str]:
+    """Sample weighted by axis count, discounted by past allocations.
+
+    Weighting by axis count favours multi-axis winners; the ``(1 + 0.5*past)``
+    discount prevents starvation over repeated calls.  May return duplicates
+    when ``capacity`` exceeds |Frontier|.
     """
     rng = random.Random(random_seed)
     if not frontier.node_ids:
@@ -152,9 +153,6 @@ def sample_proposer_nodes(
     for node_id in frontier.node_ids:
         f = frontier.axis_count(node_id)
         past = allocations.get(node_id, 0)
-        # Weight by axis count, discounted by how many times this node has
-        # already been allocated recently.  This prevents starvation while
-        # still favouring multi-axis winners.
         weights[node_id] = max(0.1, f / (1.0 + 0.5 * past))
 
     total = sum(weights.values())
@@ -171,3 +169,132 @@ def sample_proposer_nodes(
         sampled.append(pick)
         allocations[pick] = allocations.get(pick, 0) + 1
     return sampled
+
+
+class GepaPolicy:
+    """GEPA frontier (arXiv:2507.19457): per-axis best + dominated prune.
+
+    For each axis the winner set is every active node achieving the best
+    (direction-aware) value on that axis — statistical ties are all retained.
+    The union across axes is then pruned: a node is removed when another node
+    is no worse on every axis it is measured on and strictly better on at
+    least one. A node missing a value on an axis another node has cannot claim
+    dominance, so the measured node is conservatively kept. No hysteresis /
+    tie-band.
+    """
+
+    def compute(self, nodes: Iterable[Node], config: FrontierConfig) -> Frontier:
+        active = [n for n in nodes if n.status == "active"]
+        values = _metric_values(active, config.axes)
+
+        axes_winners: dict[str, set[str]] = {}
+        for axis in config.axes:
+            lower = _axis_direction(axis, config.schema)
+            best: float | None = None
+            winners: set[str] = set()
+            for nid, node_vals in values.items():
+                v = node_vals.get(axis)
+                if v is None:
+                    continue
+                if best is None or (v < best if lower else v > best):
+                    best, winners = v, {nid}
+                elif v == best:
+                    winners.add(nid)
+            if winners:
+                axes_winners[axis] = winners
+
+        union: set[str] = set()
+        for w in axes_winners.values():
+            union.update(w)
+
+        def dominates(u: str, v: str) -> bool:
+            u_vals, v_vals = values[u], values[v]
+            strictly = False
+            for axis in v_vals:  # only axes where v is measured
+                if axis not in u_vals:
+                    return False
+                if _axis_direction(axis, config.schema):
+                    if u_vals[axis] > v_vals[axis]:
+                        return False
+                    if u_vals[axis] < v_vals[axis]:
+                        strictly = True
+                else:
+                    if u_vals[axis] < v_vals[axis]:
+                        return False
+                    if u_vals[axis] > v_vals[axis]:
+                        strictly = True
+            return strictly
+
+        non_dominated = {
+            nid for nid in union
+            if not any(dominates(other, nid) for other in union if other != nid)
+        }
+
+        # Keep the axes map consistent with the surviving frontier (the
+        # persisted rows are written from frontier.axes, so pruned nodes must
+        # not linger there).
+        axes_winners = {
+            axis: (w & non_dominated)
+            for axis, w in axes_winners.items()
+            if (w & non_dominated)
+        }
+        return Frontier(non_dominated, axes_winners)
+
+    def sample(
+        self,
+        frontier: Frontier,
+        allocations: dict[str, int],
+        capacity: int,
+        *,
+        random_seed: int | None = None,
+    ) -> list[str]:
+        return _frequency_weighted_sample(
+            frontier, allocations, capacity, random_seed=random_seed
+        )
+
+
+class TopKPolicy:
+    """Top-K frontier: the ``k`` best active nodes per axis, unioned.
+
+    Simple breadth policy: any node in the top ``k`` on an axis keeps its place
+    on the frontier (no dominated pruning), so up to ``k`` lineages evolve in
+    parallel while enough distinct measured nodes exist.
+    """
+
+    def __init__(self, k: int = 3):
+        self.k = max(1, int(k))
+
+    def compute(self, nodes: Iterable[Node], config: FrontierConfig) -> Frontier:
+        active = [n for n in nodes if n.status == "active"]
+        values = _metric_values(active, config.axes)
+        axes_winners: dict[str, set[str]] = {}
+        for axis in config.axes:
+            lower = _axis_direction(axis, config.schema)
+            entries = [
+                (nid, v)
+                for nid, node_vals in values.items()
+                if (v := node_vals.get(axis)) is not None
+            ]
+            if not entries:
+                continue
+            entries.sort(key=lambda t: (t[1], t[0]))  # value asc, id tiebreak
+            if not lower:
+                entries = entries[::-1]                # higher-better -> take top
+            axes_winners[axis] = {nid for nid, _ in entries[: self.k]}
+
+        frontier_nodes: set[str] = set()
+        for w in axes_winners.values():
+            frontier_nodes.update(w)
+        return Frontier(frontier_nodes, axes_winners)
+
+    def sample(
+        self,
+        frontier: Frontier,
+        allocations: dict[str, int],
+        capacity: int,
+        *,
+        random_seed: int | None = None,
+    ) -> list[str]:
+        return _frequency_weighted_sample(
+            frontier, allocations, capacity, random_seed=random_seed
+        )
