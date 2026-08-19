@@ -249,3 +249,76 @@ def test_infra_failed_result_does_not_block_next_attempt():
         assert len(attempts) == 2
         assert attempts[0].status == "failed"
         assert attempts[1].status == "running"
+
+
+def test_proposer_infra_failed_result_does_not_block_next_attempt():
+    """A failed proposer result.json must be consumed so the next reconcile
+    re-submits a fresh proposer attempt instead of re-reading it (§18)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        run_dir = Path(tmp)
+        store = ResearchStore(run_dir / "simpleevo.db")
+        with store.transaction() as tx:
+            root = tx.create_node(
+                parent_node_id=None,
+                experiment_id=None,
+                sha="sha-root",
+                metrics={"total_ms": 100.0},
+                gate_result=GateDecision({}, True),
+                depth=0,
+                status="active",
+            )
+            thread = tx.create_thread(
+                parent_thread_id=None, node_id=root.node_id, snapshot_ref=""
+            )
+
+        allocation = store.allocate_proposer(
+            node_id=root.node_id,
+            thread_id=thread.thread_id,
+            proposal_slots=2,
+        )
+        store.record_attempt(
+            logical_work_id=allocation.allocation_id,
+            kind="proposer",
+            status="running",
+            started_at=1.0,
+        )
+        result_path = (
+            run_dir / "proposer_allocations" / allocation.allocation_id / "result.json"
+        )
+        _write_json(
+            result_path,
+            {
+                "protocol": "simpleevo.worker.v1",
+                "kind": "proposer",
+                "request_id": allocation.allocation_id,
+                "status": "failed",
+                "result": {
+                    "thread_id": thread.thread_id,
+                    "node_id": root.node_id,
+                    "outcome": "error",
+                    "proposals": [],
+                },
+                "error": "claude api failure",
+            },
+        )
+
+        scheduler = Scheduler(
+            store,
+            run_dir,
+            SchedulerConfig(max_proposer_inflight=0, max_experiment_inflight=0),
+        )
+
+        # Step 1: ingest the failed proposer result, mark A1 failed, archive.
+        scheduler.step()
+        attempts = store.attempts_for_work(allocation.allocation_id, "proposer")
+        assert len(attempts) == 1
+        assert attempts[0].status == "failed"
+        assert not result_path.exists()
+        assert store.get_allocation(allocation.allocation_id).finished_at is None
+
+        # Step 2: reconcile re-submits a fresh proposer attempt.
+        scheduler.step()
+        attempts = store.attempts_for_work(allocation.allocation_id, "proposer")
+        assert len(attempts) == 2
+        assert attempts[0].status == "failed"
+        assert attempts[1].status == "running"

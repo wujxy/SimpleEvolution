@@ -296,37 +296,62 @@ def _cmd_tree_graph(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="simpleevo")
-    parser.add_argument("--run-dir", required=True, type=Path)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    init_p = sub.add_parser("init", help="prepare git + image + run-dir + root node")
+    # ``--run-dir`` is accepted both before the subcommand
+    # (``simpleevo --run-dir runs/x init ...``) and after it
+    # (``simpleevo init --config ... --run-dir runs/x``). A shared parent
+    # parser adds it to every subcommand, and a top-level copy covers the
+    # pre-subcommand position. ``argparse.SUPPRESS`` defaults stop whichever
+    # position did not supply the value from clobbering the one that did.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--run-dir", type=Path, default=argparse.SUPPRESS)
+    parser.add_argument("--run-dir", type=Path, default=argparse.SUPPRESS)
+
+    init_p = sub.add_parser(
+        "init", parents=[common], help="prepare git + image + run-dir + root node"
+    )
     init_p.add_argument("--config", required=True, type=Path)
     init_p.set_defaults(func=_cmd_init)
 
-    run_p = sub.add_parser("run", help="start the evolution (config required)")
+    run_p = sub.add_parser(
+        "run", parents=[common], help="start the evolution (config required)"
+    )
     run_p.add_argument("--config", required=True, type=Path)
     run_p.add_argument("--max-steps", type=int, default=None)
     run_p.set_defaults(func=_cmd_run)
 
-    resume_p = sub.add_parser("resume", help="continue an existing run")
+    resume_p = sub.add_parser(
+        "resume", parents=[common], help="continue an existing run"
+    )
     resume_p.add_argument("--max-steps", type=int, default=None)
     resume_p.set_defaults(func=_cmd_resume)
 
-    status_p = sub.add_parser("status", help="show current research state")
+    status_p = sub.add_parser(
+        "status", parents=[common], help="show current research state"
+    )
     status_p.set_defaults(func=_cmd_status)
 
-    inspect_p = sub.add_parser("inspect", help="inspect a node")
+    inspect_p = sub.add_parser(
+        "inspect", parents=[common], help="inspect a node"
+    )
     inspect_p.add_argument("--node", required=True)
     inspect_p.set_defaults(func=_cmd_inspect)
 
-    reseed_p = sub.add_parser("reseed", help="attach a fresh thread to a node")
+    reseed_p = sub.add_parser(
+        "reseed", parents=[common], help="attach a fresh thread to a node"
+    )
     reseed_p.add_argument("--node", required=True)
     reseed_p.set_defaults(func=_cmd_reseed)
 
-    tree_p = sub.add_parser("tree", help="print the research tree as ASCII")
+    tree_p = sub.add_parser(
+        "tree", parents=[common], help="print the research tree as ASCII"
+    )
     tree_p.set_defaults(func=_cmd_tree)
 
-    plot_p = sub.add_parser("plot", help="write progress/pareto PNGs")
+    plot_p = sub.add_parser(
+        "plot", parents=[common], help="write progress/pareto PNGs"
+    )
     plot_p.add_argument(
         "--out-dir", type=Path, default=None,
         help="output dir (default: <run-dir>/reports)",
@@ -334,7 +359,8 @@ def main(argv: list[str] | None = None) -> int:
     plot_p.set_defaults(func=_cmd_plot)
 
     tree_graph_p = sub.add_parser(
-        "tree-graph", help="write Graphviz tree (.dot/.png/.svg)",
+        "tree-graph", parents=[common],
+        help="write Graphviz tree (.dot/.png/.svg)",
     )
     tree_graph_p.add_argument(
         "--out-dir", type=Path, default=None,
@@ -343,6 +369,8 @@ def main(argv: list[str] | None = None) -> int:
     tree_graph_p.set_defaults(func=_cmd_tree_graph)
 
     args = parser.parse_args(argv)
+    if not hasattr(args, "run_dir"):
+        parser.error("the following arguments are required: --run-dir")
     return args.func(args)
 
 

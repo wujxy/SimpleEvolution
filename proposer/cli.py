@@ -227,6 +227,14 @@ def main(argv: list[str] | None = None) -> int:
             proposal_slots=proposal_slots,
             scientist_steps=scientist_steps,
         )
+        if result.outcome == "error":
+            # The orchestrator converts a research crash (API/network/protocol
+            # failure) into outcome="error" rather than raising.  Treat it as
+            # infra: report status="failed" so the Scheduler marks the Attempt
+            # failed and keeps the allocation open for retry (§16/§17) — never
+            # as a clean "completed" abstention that would close the allocation.
+            raise RuntimeError(
+                result.abstain_reason or "proposer episode errored")
         proposals_with_meta = _enrich_proposals(
             result.proposals, proposal_ids)
         if result.proposals:
