@@ -69,12 +69,11 @@ executor:
   model: deepseek-v4-flash
   base_url: https://api.deepseek.com/anthropic
 
-# LLM token pricing for budget accounting (USD per 1M tokens). Edit to match
-# the models configured above; these are placeholder defaults.
+# LLM token pricing for budget accounting (USD per 1M tokens). 1 $ = 6.7 CNY
 pricing:
-  input_usd_per_1m: 4.5
-  output_usd_per_1m: 13.5
-  cache_read_usd_per_1m: 0.15
+  input_usd_per_1m: 0.67
+  output_usd_per_1m: 2.02
+  cache_read_usd_per_1m: 0.02
   cache_creation_usd_per_1m: 0.0
 
 # Scheduling / episode budgets (local smoke defaults; raise for real runs).
@@ -99,3 +98,8 @@ frontier_top_k: 3
 # programmatically reseeded (fresh episode inheriting its most recent one)
 # until this budget is spent.
 max_research_per_node: 3
+# Inject variation-factor directives (G1..G10 from generator.json) into
+# reseeded episodes: each re-study is pointed at 1-2 generators not yet tried
+# on that node, sampled by the harness. Set false for the pure
+# cognition-fork-reseed control arm.
+generator_reseed: true

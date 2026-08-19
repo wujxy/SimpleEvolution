@@ -1,0 +1,52 @@
+[
+  {
+    "id": "G1",
+    "name_zh": "跨域同构移植",
+    "description": "Find a problem elsewhere whose RELATIONAL structure matches the current one — similar information flow, producer-consumer relationships, repeated-computation structure, state lifecycle, or search/index/reduction patterns — and map that solution wholesale onto this problem. Do not search by name, terminology, or surface similarity. The mapping may be rough, incomplete, or even strained; follow it anyway and see what new structure appears."
+  },
+  {
+    "id": "G2",
+    "name_zh": "分解与重组",
+    "description": "Re-slice the problem along dimensions other than its current boundaries: time stages, data flow, state lifecycle, abstraction levels, spatial components, invariants vs variables, event/object/loop granularity, compute/access/allocate/reduce, producer vs consumer. Do not assume the current function/class/file/module boundaries are natural. Then independently change one part, reorder processing, merge or split stages, change interfaces, and recombine pieces into a different structure."
+  },
+  {
+    "id": "G3",
+    "name_zh": "理想化与极限化",
+    "description": "Push one condition to its extreme — compute cost zero, memory infinite, data access free, precomputation free, initialization free, event/candidate count infinite, some error zero, a component completely absent, all inputs identical or maximally different — and design the system in that limit world, then retreat back toward reality and see which structures survive. Or compress to the opposite extreme (tiny memory, a single pass, one kept intermediate state, some computation forbidden). Limits expose what is genuinely core vs. genuinely redundant."
+  },
+  {
+    "id": "G4",
+    "name_zh": "对称提升",
+    "description": "Find symmetries the current design ignores, breaks, or fails to exploit: results that should be invariant under reordering or object interchange, forward and reverse directions that could be unified, multiple branches that are instances of one structure, modules performing the same relation transform, representations that normalize to one canonical form, rotation/translation/permutation/time/scale equivalences. Lift special cases into a unified form, or deliberately break an over-unified symmetry with an asymmetric fast path for a specific workload."
+  },
+  {
+    "id": "G5",
+    "name_zh": "反演",
+    "description": "Reverse the default direction of the design: not 'make it faster' but 'make it not happen'; not forward computation from input but backward derivation from the final output; not eager generation but on-demand pull; not computing but precomputing (or the reverse); not storing results but storing the minimal state to regenerate them; not scanning all objects but locating from likely hits; not optimizing the happy path but redesigning the error/edge path. Ask 'when is this work not needed at all?' and construct the dual, mirrored, or responsibility-flipped version."
+  },
+  {
+    "id": "G6",
+    "name_zh": "算法、表示与计算范式遍历",
+    "description": "Treat the current implementation as one choice among many, not as the problem itself. Freely consider other algorithm families, data structures, data layouts, indexing and search schemes, numeric representations, reduction strategies, scheduling and batching models, sparse vs dense, exact vs approximate vs hybrid, offline/online/incremental/streaming, table-driven/rule-driven/data-driven/generative, CPU/GPU/vectorized/parallel. Allow replacing the core algorithm, changing the data representation wholesale, rewriting module boundaries, adopting a different complexity curve, or layering several algorithms into a hybrid. Do not settle for small parameter changes near the existing algorithm."
+  },
+  {
+    "id": "G7",
+    "name_zh": "异常放大",
+    "description": "Treat failures, regressions, no-gain results, and unexpected phenomena as entry points rather than noise: changes that should have worked but didn't, changes that made things slower, tiny changes with abnormally large gains, results that flip direction under different workloads, profiles inconsistent with the objective, repeatedly gate-failing implementation classes, local changes that move distant behavior, mechanisms that broke or revived after accepted changes. Amplify the anomaly — what if it reveals a hidden dominant term, a wrong bottleneck explanation, a regression that can be exploited in reverse, or two separately-failing ideas that combine?"
+  },
+  {
+    "id": "G8",
+    "name_zh": "形式先行，解释随后",
+    "description": "Allow discovering or constructing an interesting structure before having a full explanation of why it might help. Seek form in common transforms across successful diffs, performance patterns across experiments, recurring structures in the source, empirical parameter-objective relations, the geometry of data-access or call graphs, repeated state-transition templates, or special paths that could be unified. Or boldly construct a new layout, intermediate representation, pipeline, module interface, specialized fast path, or empirical model. Let the form itself generate further ideas; explanation can come later."
+  },
+  {
+    "id": "G9",
+    "name_zh": "量纲、尺度与增长规律",
+    "description": "Change the scale of the problem and observe what becomes dominant. Identify the scale variables — event count, hit count, object count, trial count, table size, data dimension, candidate count, memory footprint, call frequency, initialization count, parallelism, precision — and imagine each larger, smaller, or in different proportions. Which cost grows fastest and which vanishes? Does the current optimization lower a constant or change the growth class? Do different scales admit different optimal algorithms? Can per-object work move to per-event, per-run, or offline? Is there a critical point past which an entirely different structure is best?"
+  },
+  {
+    "id": "G10",
+    "name_zh": "价目表攻击",
+    "description": "Read the system's cost like a ledger: itemize what each component or operation costs (execution time, memory, allocation, call counts). Find the dominant term — the single largest line item; if one item clearly exceeds the rest, attacking it yields the most. Then generate concrete ways to make that term cheaper: a cheaper algorithm, caching, pruning, approximation, deferred invocation, a different representation, or moving the work off the hot path. Profile first, attack the biggest number first, iterate."
+  }
+]

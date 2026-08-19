@@ -2,15 +2,21 @@
 
 Reads the run's ``task.yaml`` (objective key + axis directions) and the SQLite
 research DB, projects them into a single ``TreeView`` consumed by every
-renderer, and computes the quality series (best-so-far, per-axis winner
-history) that the plots need.
+renderer, and computes the quality series the plots need:
+
+- ``best_so_far`` — best objective vs the unified experiment ordinal (every
+  submitted experiment consumes one x-slot, gate-rejected / no-change included).
+- ``experiment_marks`` — gate-rejected / no-change experiments for the × layer.
+- ``winner_history`` / ``improvement_series`` — per-axis frontier-winner
+  replay, as absolute value or % vs the root baseline when one is measured.
 
 Read-only: never mutates the run directory or the database.
 """
 from __future__ import annotations
 
+import math
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -36,8 +42,27 @@ class NodeView:
     objective: float | None
     passed: bool
     created_at: float
-    experiment_idx: int | None  # 1-based completed-experiment ordinal (None = root)
+    experiment_idx: int | None  # 1-based ordinal over ALL experiments (None = root/orphan)
     frontier_axes: frozenset[str]
+
+
+@dataclass(frozen=True)
+class ExperimentView:
+    """One experiment row flattened for the ordinal x-axis.
+
+    Gate-rejected / no-change experiments create no node and carry no objective
+    of their own; ``parent_objective`` is the parent NODE's objective so a
+    rejection can be drawn as a × at the parent's y.
+    """
+
+    exp_idx: int  # 1-based ordinal over ALL experiments (created_at order)
+    experiment_id: str
+    status: str  # pending | running | completed | gate_rejected | no_change
+    parent_objective: float | None
+    created_at: float
+    parent_node_id: str
+    child_node_id: str | None
+    gate_result: Any
 
 
 @dataclass(frozen=True)
@@ -56,6 +81,8 @@ class TreeView:
     raw_nodes: tuple[Node, ...]  # for winner-history replay
     frontier_policy: str = "gepa"
     frontier_top_k: int = 3
+    experiments: tuple[ExperimentView, ...] = field(default_factory=tuple)
+    root_objective: Mapping[str, float | None] = field(default_factory=dict)
 
 
 def _as_float(value: Any) -> float | None:
@@ -96,16 +123,44 @@ def load_tree_view(run_dir: str | Path) -> TreeView:
     queries = ResearchQueries(run_dir / "simpleevo.db")
     nodes = sorted(queries.list_nodes(), key=lambda n: n.created_at)
 
-    # Assign the completed-experiment ordinal: root has none, every other node
-    # is one finished experiment, numbered in creation order.
-    experiment_idx: dict[str, int | None] = {}
-    counter = 0
-    for n in nodes:
-        if n.parent_node_id is None:
-            experiment_idx[n.node_id] = None
-        else:
-            counter += 1
-            experiment_idx[n.node_id] = counter
+    # Unified experiment ordinal: every submitted experiment consumes one x-slot
+    # (gate-rejected / no-change included), numbered in submission order so a
+    # run's figure is stable across re-renders.  A node inherits the ordinal of
+    # the experiment that created it; root/orphan nodes get None.
+    # ``list_experiments`` has no ORDER BY, so sort here (id tie-breaks ticks).
+    experiments = sorted(
+        queries.list_experiments(),
+        key=lambda e: (e.created_at, e.experiment_id),
+    )
+    exp_ordinal = {e.experiment_id: i + 1 for i, e in enumerate(experiments)}
+    node_objective = {
+        n.node_id: _as_float((n.metrics or {}).get(objective_key))
+        for n in nodes
+    }
+    experiment_idx: dict[str, int | None] = {
+        n.node_id: (
+            None if n.experiment_id is None else exp_ordinal.get(n.experiment_id)
+        )
+        for n in nodes
+    }
+    experiment_views = tuple(
+        ExperimentView(
+            exp_idx=i + 1,
+            experiment_id=e.experiment_id,
+            status=e.status,
+            parent_objective=node_objective.get(e.parent_node_id),
+            created_at=e.created_at,
+            parent_node_id=e.parent_node_id,
+            child_node_id=e.child_node_id,
+            gate_result=e.gate_result,
+        )
+        for i, e in enumerate(experiments)
+    )
+    root = next((n for n in nodes if n.parent_node_id is None), None)
+    root_objective = {
+        ax: _as_float((root.metrics or {}).get(ax)) if root else None
+        for ax in axes
+    }
 
     # Current frontier membership, filtered to real axes (drop __bootstrap__).
     current_frontier: dict[str, set[str]] = {ax: set() for ax in axes}
@@ -149,19 +204,27 @@ def load_tree_view(run_dir: str | Path) -> TreeView:
         children={k: tuple(v) for k, v in children.items()},
         current_frontier={k: frozenset(v) for k, v in current_frontier.items()},
         raw_nodes=tuple(nodes),
+        experiments=experiment_views,
+        root_objective=root_objective,
     )
 
 
 def best_so_far(view: TreeView) -> list[tuple[int, float]]:
-    """Best objective seen after each completed experiment.
+    """Best objective seen after each passed node.
 
     Only gate-passed nodes are worlds; dead nodes never enter the series.
-    Returns [(completed_experiments, best_value)] in creation order.
+    Iterates in ``experiment_idx`` order (not ``created_at``) so the envelope
+    stays monotonic on the unified experiment x-axis even when completions land
+    out of submission order (``max_experiment_inflight > 1``).
+    Returns [(experiment_ordinal, best_value)].
     """
     points: list[tuple[int, float]] = []
     best: float | None = None
-    for v in view.nodes:
-        if v.experiment_idx is None or not v.passed or v.objective is None:
+    for v in sorted(
+        (v for v in view.nodes if v.experiment_idx is not None),
+        key=lambda v: v.experiment_idx,
+    ):
+        if not v.passed or v.objective is None:
             continue
         if best is None or (
             v.objective < best if view.lower_is_better else v.objective > best
@@ -169,6 +232,21 @@ def best_so_far(view: TreeView) -> list[tuple[int, float]]:
             best = v.objective
         points.append((v.experiment_idx, best))
     return points
+
+
+def experiment_marks(view: TreeView) -> list[tuple[int, float | None, str]]:
+    """Rejected / no-change experiments as (exp_idx, parent_objective, status).
+
+    These experiments never created a node, so they carry no objective of their
+    own; the marker is drawn at the parent node's objective (None when the
+    parent was never measured, e.g. the root).  Pending/running rows are not
+    marks — they only occupy an empty x-slot.
+    """
+    return [
+        (e.exp_idx, e.parent_objective, e.status)
+        for e in view.experiments
+        if e.status in ("gate_rejected", "no_change")
+    ]
 
 
 def winner_history(view: TreeView) -> dict[str, list[tuple[int, str, float]]]:
@@ -184,7 +262,13 @@ def winner_history(view: TreeView) -> dict[str, list[tuple[int, str, float]]]:
         schema=dict(view.metrics_schema),
         policy=build_policy(view.frontier_policy, top_k=view.frontier_top_k),
     )
-    active = [n for n in view.raw_nodes if n.gate_result.passed]
+    # Replay prefixes in experiment-ordinal order (not created_at) so the
+    # reconstructed frontier at each x-slot reflects the nodes known at that
+    # point; identical to created_at order while max_experiment_inflight == 1.
+    active = sorted(
+        (n for n in view.raw_nodes if n.gate_result.passed),
+        key=lambda n: view.by_id[n.node_id].experiment_idx or 0,
+    )
 
     history: dict[str, list[tuple[int, str, float]]] = {
         ax: [] for ax in view.axes
@@ -219,6 +303,47 @@ def winner_history(view: TreeView) -> dict[str, list[tuple[int, str, float]]]:
                     since=node.created_at,
                 ))
     return history
+
+
+def _axis_lower(axis: str, schema: Mapping[str, Any]) -> bool:
+    """Per-axis direction, mirroring ``frontier._axis_direction`` exactly so the
+    %-sign matches the frontier replay's notion of "better"."""
+    axis_schema = (schema or {}).get(axis, {})
+    return bool(axis_schema.get("lower_is_better", True))
+
+
+def _pct_change(
+    root: float | None, value: float, lower_is_better: bool,
+) -> float | None:
+    """Root-relative % change, signed so improvement is always positive.
+
+    Returns None when the root baseline is missing, zero, or non-finite (a %
+    against an unknown baseline would be fabricated).
+    """
+    if root is None or root == 0 or not math.isfinite(root):
+        return None
+    delta = (root - value) if lower_is_better else (value - root)
+    return delta / abs(root) * 100.0
+
+
+def improvement_series(view: TreeView) -> dict[str, list[tuple[int, float]]]:
+    """Per-axis frontier-winner series from ``winner_history``, y = % vs root.
+
+    Falls back to the raw winner value when the axis has no valid root baseline
+    (every real run today: the root node is seeded with empty metrics), so the
+    panel stays meaningful; the title should annotate which mode it is in.
+    """
+    history = winner_history(view)
+    series: dict[str, list[tuple[int, float]]] = {}
+    for ax in view.axes:
+        lower = _axis_lower(ax, view.metrics_schema)
+        root = view.root_objective.get(ax)
+        out: list[tuple[int, float]] = []
+        for idx, _nid, value in history.get(ax, []):
+            pct = _pct_change(root, value, lower)
+            out.append((idx, pct if pct is not None else value))
+        series[ax] = out
+    return series
 
 
 def _load_usage(run_dir: Path) -> list[dict[str, Any]]:

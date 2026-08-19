@@ -115,6 +115,32 @@ def _proposal_to_dict(proposal, proposal_id: str) -> dict:
     }
 
 
+def _variation_hints(variation_operators: list) -> list[str]:
+    """Format scheduler-sent generator directives as system-prompt hints.
+
+    Each directive is a re-framing for this episode — the generator.md
+    preamble spirit: suggested, not a boundary; the Scientist may freely
+    combine, invert, apply recursively, or ignore it.  The resolved
+    {id, name, description} triples travel in the payload so the worker never
+    needs generator.json itself.
+    """
+    hints: list[str] = []
+    for directive in variation_operators:
+        if not isinstance(directive, dict):
+            continue
+        generator_id = directive.get("id") or ""
+        description = directive.get("description") or ""
+        if not description:
+            continue
+        tag = generator_id or "variation direction"
+        hints.append(
+            f"[{tag}] {description} — a suggested re-framing for this episode, "
+            "not a boundary; you may freely combine, invert, apply recursively, "
+            "or ignore it."
+        )
+    return hints
+
+
 def _enrich_proposals(proposals: tuple, proposal_ids: list[str]) -> list[dict]:
     """Attach the Scheduler-issued proposal_ids to the proposals."""
     if len(proposal_ids) < len(proposals):
@@ -144,6 +170,8 @@ def main(argv: list[str] | None = None) -> int:
     attempt_id = str(payload.get("attempt_id", ""))
     attempt = int(payload.get("attempt", 1))
     inherited_from_episode_id = payload.get("inherited_from_episode_id") or None
+    variation_operators = payload.get("variation_operators") or []
+    hints = _variation_hints(variation_operators)
     world_transition = payload.get("world_transition") or {}
     goal = payload["goal"]
     editable = list(payload.get("editable_paths", []))
@@ -219,6 +247,7 @@ def main(argv: list[str] | None = None) -> int:
             gate_block=gate_block,
             prompt_dir=Path(payload["prompt_dir"]) if payload.get("prompt_dir") else None,
             world_transition=world_transition,
+            hints=hints,
             proposal_slots=proposal_slots,
             scientist_steps=scientist_steps,
         )
