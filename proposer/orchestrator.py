@@ -259,7 +259,7 @@ class ProposerOrchestrator:
         session = ScientistSession.load_or_create_for_thread(
             run_dir, thread_id, prompt_version=SCIENTIST_PROMPT_VERSION,
         )
-        transition_text = build_world_transition_pack(world_transition or {})
+        transition_text = build_world_transition_pack(world_transition or {}) or None
         try:
             result = self.scientist.research(
                 goal=goal, editable=editable, world_mount=world_mount,

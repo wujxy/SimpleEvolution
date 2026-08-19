@@ -70,7 +70,6 @@ class LocalSubmitter:
         full_payload.setdefault("context", dict(self.config.context))
         full_payload.setdefault("prompt_dir", str(self.config.prompt_dir) if self.config.prompt_dir else "")
         full_payload.setdefault("attempt", 1)
-        full_payload.setdefault("workspace_path", str(self.config.workspace_path))
 
         request = WorkerRequest(
             kind="proposer",
@@ -97,8 +96,8 @@ class LocalSubmitter:
         full_payload.setdefault("metrics_schema", dict(self.config.metrics_schema))
         full_payload.setdefault("agent_timeout_seconds", self.config.agent_timeout_seconds)
         full_payload.setdefault("eval_timeout_seconds", self.config.eval_timeout_seconds)
+        full_payload.setdefault("executor", dict(self.config.executor))
         full_payload.setdefault("attempt", 1)
-        full_payload.setdefault("workspace_path", str(self.config.workspace_path))
 
         request = WorkerRequest(
             kind="experiment",

@@ -5,7 +5,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .agent import Agent
-from .apptainer import ApptainerSandbox, SandboxSpec, forwarded_payload_env
+from .apptainer import (
+    ApptainerSandbox,
+    SandboxSpec,
+    executor_environment,
+    forwarded_payload_env,
+)
 from .contracts import (
     CommitRequest,
     EvaluationResult,
@@ -23,6 +28,15 @@ from .evaluator import run_eval
 from .executor import AgentExecutor, ExecutorConfig
 from .gate import GateSpec, apply_gates, paths_allowed
 from .git_worktree import GitWorkspaceProvider
+
+
+class InfraFailure(RuntimeError):
+    """An infrastructure failure (executor crash / timeout / API failure).
+
+    Distinct from a scientific result: it must land on the Attempt table and
+    leave the Experiment open for retry (§16/§17), never on the Experiment's
+    scientific status.
+    """
 
 
 class ExperimentRunner:
@@ -45,12 +59,8 @@ class ExperimentRunner:
 
             execution = self._run_executor(workspace)
             if execution.status != "EXECUTED":
-                return self._result(
-                    status="EXECUTOR_FAILED",
-                    execution=execution,
-                    evaluation=None,
-                    gate=None,
-                    sha=None,
+                raise InfraFailure(
+                    execution.reason or "executor did not produce a valid result"
                 )
 
             changed_paths = provider.inspect(workspace).paths
@@ -62,6 +72,7 @@ class ExperimentRunner:
                     evaluation=None,
                     gate=None,
                     sha=None,
+                    changed_paths=(),
                 )
 
             if not paths_allowed(changed_strs, list(self.request.editable_paths)):
@@ -74,6 +85,7 @@ class ExperimentRunner:
                         passed=False,
                     ),
                     sha=None,
+                    changed_paths=(),
                 )
 
             sha = provider.commit(workspace, CommitRequest(
@@ -108,12 +120,22 @@ class ExperimentRunner:
             if workspace is not None:
                 provider.remove(workspace)
 
+    def _trace_store(self):
+        """Build a bound L1 TraceStore (import cycle safe)."""
+        from simpleevo.trace.store import TraceStore
+
+        return TraceStore(self.request.run_dir)
+
     def _run_executor(self, workspace: SourceWorkspace) -> ExecutionResult:
         sandbox = ApptainerSandbox(userns=True)
+        executor_cfg = dict(self.request.executor)
         builder = sandbox.bind(
             SandboxSpec(
                 image=self.request.runtime_image,
-                environment=forwarded_payload_env(),
+                environment=executor_environment(
+                    base_url=executor_cfg.get("base_url"),
+                    max_output_tokens=64000,
+                ),
                 network=True,
             ),
             mounts=self._mounts(workspace),
@@ -123,6 +145,16 @@ class ExperimentRunner:
             command="claude",
             timeout_seconds=self.request.agent_timeout_seconds,
             allowed_tools="Read,Edit,Write,Bash",
+            model=executor_cfg.get("model") or None,
+            trace_store=self._trace_store(),
+            invocation_id=f"experiment-{self.request.experiment_id}",
+            role="executor",
+            identity={
+                "experiment_id": self.request.experiment_id,
+                "proposal_id": self.request.proposal_id,
+                "parent_node_id": self.request.parent_node_id,
+                "attempt": str(self.request.attempt),
+            },
         )
         executor = AgentExecutor(agent, ExecutorConfig(
             goal="",  # filled below from request if available
@@ -188,6 +220,7 @@ class ExperimentRunner:
         evaluation: EvaluationResult | None,
         gate: GateDecision | None,
         sha: str | None,
+        changed_paths: tuple[PurePosixPath, ...],
     ) -> ExperimentResult:
         return ExperimentResult(
             experiment_id=self.request.experiment_id,
@@ -199,6 +232,6 @@ class ExperimentRunner:
             metrics=evaluation.metrics if evaluation else {},
             gate=gate or GateDecision({}, False),
             eval_block=evaluation.text if evaluation else execution.output,
-            changed_paths=tuple(),  # populated by caller if needed
+            changed_paths=changed_paths,
             execution=execution,
         )

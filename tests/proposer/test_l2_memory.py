@@ -61,7 +61,7 @@ def test_inspect_experiment(store: ResearchStore):
         )
 
     mem = L2MemoryService(store.path.parent)
-    episode = mem.inspect_episode("exp-1")
+    episode = mem.inspect_experiment("exp-1")
     assert episode["experiment_id"] == "exp-1"
     assert episode["parent_sha"] == "sha-root"
     assert episode["result_sha"] == "sha-child"

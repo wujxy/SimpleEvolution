@@ -110,16 +110,15 @@ RESEARCH_TOOL_SPECS = (
         ),
     ),
     ResearchToolSpec(
-        action="inspect_episode",
-        schema='{"action":"inspect_episode","ref":"r<round>c<candidate>"}',
+        action="inspect_experiment",
+        schema='{"action":"inspect_experiment","experiment_id":"<id>"}',
         description=(
-            "Resolve ONE candidate experiment by ref (e.g. r0c1) in full "
-            "detail — proposal, status, gates, metrics, eval output, "
-            "parent/candidate shas, and its finding_id. This is the "
-            "deliberate, one-at-a-time way to understand a specific past "
-            "outcome; it is the only channel that returns a proposal's text. "
-            "Pair with run_research_command + "
-            "'git diff parent_sha..candidate_sha' to see the code change."
+            "Resolve ONE experiment by its experiment_id in full detail — "
+            "proposal, status, gates, metrics, parent/child node shas. This "
+            "is the deliberate, one-at-a-time way to understand a specific "
+            "past outcome; it is the only channel that returns a proposal's "
+            "text. Pair with run_research_command + "
+            "'git diff parent_sha..child_sha' to see the code change."
         ),
     ),
     ResearchToolSpec(
@@ -162,21 +161,20 @@ RESEARCH_TOOL_SPECS = (
         action="search_experiments",
         schema=(
             '{"action":"search_experiments","query":"...",'
-            '"filters":{"gate_passed":bool,"selected":bool,'
-            '"finding_id":"F-NNN","changed_path":"path/prefix",'
-            '"round_min":int,"round_max":int,"status":"..."},'
+            '"filters":{"gate_passed":bool,'
+            '"changed_path":"path/prefix","status":"..."},'
             '"limit":1-50,"buckets":true|false}'
         ),
         description=(
             "A COVERAGE query over past experiments — use it to check whether "
             "ground you are considering is already covered, and to see where "
             "the gaps (uncovered regions) are. Returns coverage rows only "
-            "(experiment_id, outcome, changed region, metrics, finding_id) — "
+            "(experiment_id, outcome, changed region, metrics) — "
             "NO proposal or eval text, because this is not a direction "
             "retriever. Default buckets=true returns {relevant, contrasting, "
             "diverse}; the contrasting/diverse buckets point at un- or "
             "differently-explored regions. To understand one experiment's "
-            "actual change and result in detail, inspect_episode it "
+            "actual change and result in detail, inspect_experiment it "
             "deliberately. Filters stack as AND. Read the metrics and gates as "
             "facts; never read a hit's score or similarity as a reason to "
             "pursue or continue a direction."
@@ -186,7 +184,7 @@ RESEARCH_TOOL_SPECS = (
 
 
 MEMORY_TOOL_ACTIONS = frozenset({
-    "inspect_episode",
+    "inspect_experiment",
     "list_findings",
     "search_findings",
     "inspect_finding",
@@ -264,7 +262,7 @@ class ResearchCommandRunner:
         # map, not an idea mine: bulk shell access to every past proposal text
         # + eval would make history-mining trivial (the charter forbids it, but
         # prose cannot restrain a grep). History access is routed through the
-        # framed memory tools (inspect_episode / search_experiments), which
+        # framed memory tools (inspect_experiment / search_experiments), which
         # return coverage or single-experiment detail on demand. The
         # ``history_dir`` param is retained for call-site compatibility.
         argv = self.runtime.exec_argv(
@@ -436,10 +434,9 @@ class ResearchTools:
         memory_service,
         command_timeout_seconds: int,
         command_output_cap_chars: int,
-        current_round: int,
+        current_round: int | None = None,
     ):
         self.memory = memory_service
-        self.current_round = int(current_round)
         self.command_timeout_seconds = command_timeout_seconds
         self.files = ResearchFiles(
             work=workspace,
@@ -502,10 +499,10 @@ class ResearchTools:
                     action["path"],
                     content=action["content"],
                 )
-            if name == "inspect_episode":
+            if name == "inspect_experiment":
                 return {
                     "ok": True,
-                    "result": self.memory.inspect_episode(action["ref"]),
+                    "result": self.memory.inspect_experiment(action["experiment_id"]),
                 }
             if name == "list_findings":
                 return {
@@ -513,7 +510,6 @@ class ResearchTools:
                     "result": self.memory.list_findings(
                         state=action.get("state", "active"),
                         limit=action.get("limit", 20),
-                        current_round=self.current_round,
                     ),
                 }
             if name == "search_findings":

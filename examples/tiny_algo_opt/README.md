@@ -22,10 +22,12 @@ SimpleEvolution task config schema (`simpleevo/config.py`).
 # 1. One-time init (git repo + Apptainer image; image build needs Apptainer).
 ./examples/tiny_algo_opt/setup.sh
 
-# 2. Point the proposer at a chat model. Any OpenAI-compatible provider
-#    supported by proposer/model.py works; edit `researcher` in task.yaml
-#    (api: hepai | openai | zhipu | anthropic, model, base_url) and export its key:
-export OPENAI_API_KEY='<your-key>'   # or HEPAI_API_KEY / ZHIPU_API_KEY / ANTHROPIC_API_KEY
+# 2. Configure the two roles in task.yaml. The proposer (`researcher`) speaks
+#    the OpenAI Chat Completions protocol (api: hepai | openai | zhipu |
+#    anthropic); the executor stays on the Anthropic protocol via the `claude`
+#    CLI (api: anthropic). Export the matching keys, never stored in the file:
+export OPENAI_API_KEY='<proposer-key>'    # researcher (openai, etc.)
+export ANTHROPIC_API_KEY='<executor-key>' # executor (claude CLI -> anthropic)
 
 # 3. Prepare the environment: git + image check + run-dir + root node.
 python -m simpleevo --run-dir runs/tiny-001 init --config examples/tiny_algo_opt/task.yaml

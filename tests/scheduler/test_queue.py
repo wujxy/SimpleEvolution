@@ -74,15 +74,26 @@ def test_overflow_becomes_dormant(store: ResearchStore):
     node_id = _seed(store)
     queue = ExecutorQueue(store, {node_id}, QueueConfig(max_size=1))
 
-    status = queue.enqueue("p2")  # already queued; re-enqueue triggers overflow check
-    # p2 is already queued, so enqueue re-checks size and marks overflow.
-    # Because size is 1 and p2 would be the second, it becomes overflowed_dormant.
-    assert status in {"queued", "overflowed_dormant"}
+    # Two proposals are queued; max_size=1 keeps the oldest, overflows the newest.
+    overflowed = queue.enforce_bound()
+    assert overflowed == 1
+    queued = queue.dequeue(10)
+    assert queued == ["p1"]
+    with store.transaction() as tx:
+        row = tx._conn.execute(
+            "SELECT status FROM proposals WHERE proposal_id = 'p2'"
+        ).fetchone()
+        assert row["status"] == "overflowed_dormant"
 
 
 def test_parent_not_in_frontier_becomes_dormant(store: ResearchStore):
     node_id = _seed(store)
     queue = ExecutorQueue(store, set(), QueueConfig(max_size=10))
 
-    status = queue.enqueue("p1")
-    assert status == "dormant"
+    cleaned = queue.cleanup()
+    assert cleaned == 2
+    with store.transaction() as tx:
+        row = tx._conn.execute(
+            "SELECT status FROM proposals WHERE proposal_id = 'p1'"
+        ).fetchone()
+        assert row["status"] == "dormant"

@@ -6,14 +6,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import dataclasses
 import json
-import shutil
 import sys
 import tarfile
-import tempfile
-import uuid
 from pathlib import Path
+
+from experiment.git_worktree import GitWorkspaceProvider, WorkspaceSpec
 
 from .l2_memory import L2MemoryService
 from .model import build_chat_model
@@ -48,6 +46,31 @@ def _atomic_write(path: Path, payload: dict) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     tmp.replace(path)
+
+
+def _write_l1_trace(
+    run_dir: Path,
+    invocation_id: str,
+    *,
+    role: str,
+    identity: dict[str, str | None],
+    trace: dict | None,
+    error: str | None,
+) -> None:
+    """Write the proposer's deliberation trace into the L1 store."""
+    try:
+        from simpleevo.trace.store import TraceStore
+
+        store = TraceStore(run_dir)
+        store.start_invocation(invocation_id, role=role, identity=identity)
+        store.append_event(
+            invocation_id,
+            "proposer_result",
+            {"trace": trace or {}, "error": error},
+            identity=identity,
+        )
+    except Exception as exc:
+        print(f"[trace] proposer L1 write failed: {exc}", flush=True)
 
 
 def _result_to_dict(result, proposals_with_meta) -> dict:
@@ -94,13 +117,24 @@ def _pack_proposal_snapshots(
     proposals: tuple,
     thread_id: str,
     run_dir: Path,
+    proposal_ids: list[str],
 ) -> list[dict]:
-    """Create one immutable snapshot per proposal and return enriched proposal dicts."""
+    """Create one immutable snapshot per proposal and return enriched proposal dicts.
+
+    ``proposal_ids`` are issued by the Scheduler (single writer) when the
+    proposer allocation was created.  The snapshot filename IS the proposal
+    identity (§2.4): snapshot name == L2 proposal_id, so lineage audit and
+    resume stay identity-first.
+    """
     snapshot_dir = run_dir / "threads" / thread_id / "snapshots"
     snapshot_dir.mkdir(parents=True, exist_ok=True)
+    if len(proposal_ids) < len(proposals):
+        raise ValueError(
+            f"reserved {len(proposal_ids)} proposal ids but produced "
+            f"{len(proposals)} proposals"
+        )
     enriched: list[dict] = []
-    for proposal in proposals:
-        proposal_id = uuid.uuid4().hex
+    for proposal, proposal_id in zip(proposals, proposal_ids):
         snapshot_path = snapshot_dir / f"{proposal_id}.tgz"
         _pack_snapshot(session_dir, snapshot_path)
         enriched.append(_proposal_to_dict(proposal, proposal_id, snapshot_path))
@@ -119,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
     thread_id = payload["thread_id"]
     node_id = payload["node_id"]
     node_sha = payload["node_sha"]
-    workspace_path = Path(payload["workspace_path"])
+    proposal_ids = list(payload.get("proposal_ids", []))
     snapshot_ref_raw = payload.get("snapshot_ref") or ""
     snapshot_ref = Path(snapshot_ref_raw) if snapshot_ref_raw else None
     world_transition = payload.get("world_transition") or {}
@@ -130,6 +164,16 @@ def main(argv: list[str] | None = None) -> int:
     scientist_steps = int(payload.get("scientist_steps", 200))
     runtime_image = Path(payload["runtime_image"])
     repo_path = Path(payload["repo_path"])
+
+    # Materialize the Node World at the exact node SHA (§9).  The Scientist
+    # must study its own world, not the repo's current checkout.  This mirrors
+    # the Executor's GitWorkspaceProvider but for read-only investigation.
+    provider = GitWorkspaceProvider(run_dir, repo_path)
+    provider.initialize()
+    workspace = provider.create(WorkspaceSpec(
+        f"proposer-{thread_id}-{node_id[:8]}",
+        node_sha,
+    ))
 
     # Session handling: unpack snapshot into a temp session dir, run, repack.
     session_dir = run_dir / "threads" / thread_id / "session"
@@ -160,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
             thread_id=thread_id,
             node_id=node_id,
             node_sha=node_sha,
-            workspace=workspace_path,
+            workspace=workspace.path,
             goal=goal,
             editable=editable,
             frozen=[],
@@ -178,7 +222,7 @@ def main(argv: list[str] | None = None) -> int:
             scientist_steps=scientist_steps,
         )
         proposals_with_meta = _pack_proposal_snapshots(
-            session_dir, result.proposals, thread_id, run_dir
+            session_dir, result.proposals, thread_id, run_dir, proposal_ids
         )
     except Exception as exc:
         status = "failed"
@@ -192,6 +236,17 @@ def main(argv: list[str] | None = None) -> int:
             "deliberation_telemetry": {},
             "trace": {},
         })()
+    finally:
+        provider.remove(workspace)
+
+    _write_l1_trace(
+        run_dir,
+        f"proposer-{thread_id}",
+        role="proposer",
+        identity={"thread_id": thread_id, "node_id": node_id},
+        trace=result.trace,
+        error=error,
+    )
 
     result_path = Path(manifest.get("result_path", "result.json"))
     _atomic_write(

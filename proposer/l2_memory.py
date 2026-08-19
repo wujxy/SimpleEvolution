@@ -11,6 +11,11 @@ from pathlib import Path
 from simpleevo.db.queries import ResearchQueries
 
 
+def _query_terms(query: str) -> list[str]:
+    """Split a free-text query into lowercased, non-empty substring terms."""
+    return [term for term in (query or "").lower().split() if term]
+
+
 class L2MemoryService:
     """Minimal memory façade backed by L2 for experiments and local files for findings."""
 
@@ -66,9 +71,6 @@ class L2MemoryService:
             "status": experiment.status,
             "parent_metrics": parent.metrics if parent else {},
         }
-
-    # Backward-compatible alias used by the SimpleLoop research_tools scaffold.
-    inspect_episode = inspect_experiment
 
     def inspect_node(self, node_id: str) -> dict:
         """Return one node and its direct children."""
@@ -138,8 +140,12 @@ class L2MemoryService:
         limit: int = 10,
         buckets: bool = True,
     ) -> dict:
-        """Coverage query over experiments.  ``query`` is currently ignored;
-        filters are applied mechanically."""
+        """Coverage query over experiments.
+
+        ``query`` matches against a proposal's instruction / rationale text and
+        the changed paths (case-insensitive substring).  Filters stack as AND.
+        """
+        query_terms = _query_terms(query)
         experiments = self.queries.list_experiments()
         rows = []
         for exp in experiments:
@@ -148,6 +154,16 @@ class L2MemoryService:
                     continue
                 if "status" in filters and exp.status != filters["status"]:
                     continue
+                if "changed_path" in filters:
+                    prefix = filters["changed_path"]
+                    if not any(p.startswith(prefix) for p in exp.changed_paths):
+                        continue
+            proposal = self.queries.get_proposal(exp.proposal_id)
+            haystack = " ".join(
+                [proposal.instruction if proposal else "", *list(exp.changed_paths)]
+            ).lower()
+            if not all(term in haystack for term in query_terms):
+                continue
             node = self.queries.get_node(exp.child_node_id or exp.parent_node_id)
             rows.append({
                 "experiment_id": exp.experiment_id,
@@ -156,6 +172,7 @@ class L2MemoryService:
                 "status": exp.status,
                 "gate_passed": exp.gate_result.passed,
                 "metrics": dict(exp.metrics),
+                "changed_paths": list(exp.changed_paths),
                 "sha": node.sha if node else None,
             })
         rows = rows[:limit]

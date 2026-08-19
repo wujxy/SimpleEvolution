@@ -20,17 +20,26 @@ def build_world_transition_pack(transition: dict[str, Any]) -> str:
     experiment_id = transition.get("experiment_id")
     if experiment_id:
         lines.append(f"Experiment: {experiment_id}")
+    parent_metrics = transition.get("parent_metrics", {})
     metrics = transition.get("metrics", {})
-    if metrics:
+    if metrics or parent_metrics:
         lines.append("Measured metrics:")
+        for key, value in parent_metrics.items():
+            lines.append(f"  {key} = {value}  (before)")
         for key, value in metrics.items():
-            lines.append(f"  {key} = {value}")
+            lines.append(f"  {key} = {value}  (after)")
     gate = transition.get("gate", {})
     passed = gate.get("passed")
     if passed is not None:
         lines.append(f"Gate passed: {passed}")
-    diff = transition.get("diff", "")
+    gate_results = gate.get("results", {})
+    for name, result in gate_results.items():
+        detail = result.get("detail", "") if isinstance(result, dict) else ""
+        if detail:
+            lines.append(f"  {name}: {detail}")
+    diff = transition.get("diff", [])
     if diff:
-        lines.append("Diff summary:")
-        lines.append(diff)
+        lines.append("Changed paths:")
+        for path in diff:
+            lines.append(f"  {path}")
     return "\n".join(lines)

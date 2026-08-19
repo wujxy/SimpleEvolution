@@ -177,11 +177,13 @@ def test_publish_proposals(store: ResearchStore):
         thread_id=thread.thread_id,
         proposals=[
             {
+                "proposal_id": "prop-a",
                 "instruction": "inline A",
                 "rationale": {"why": "reason A"},
                 "snapshot_ref": "snap-a.tgz",
             },
             {
+                "proposal_id": "prop-b",
                 "instruction": "inline B",
                 "rationale": {"why": "reason B"},
                 "snapshot_ref": "snap-b.tgz",
@@ -192,9 +194,43 @@ def test_publish_proposals(store: ResearchStore):
     assert len(proposals) == 2
     assert proposals[0].status == "queued"
     assert proposals[0].node_id == root.node_id
+    assert proposals[0].proposal_id == "prop-a"
 
     q = ResearchQueries(store.path)
     assert len(q.queued_proposals()) == 2
+
+
+def test_publish_proposals_rejects_id_outside_reserved_pool(store: ResearchStore):
+    with store.transaction() as tx:
+        root = tx.create_node(
+            parent_node_id=None,
+            experiment_id=None,
+            sha="parent",
+            metrics={},
+            gate_result=_gate(True),
+            depth=0,
+            status="active",
+        )
+        thread = tx.create_thread(
+            parent_thread_id=None,
+            node_id=root.node_id,
+            snapshot_ref="",
+        )
+
+    with pytest.raises(ValueError, match="not in reserved pool"):
+        store.publish_proposals(
+            node_id=root.node_id,
+            thread_id=thread.thread_id,
+            proposals=[
+                {
+                    "proposal_id": "forged-id",
+                    "instruction": "inline A",
+                    "rationale": {},
+                    "snapshot_ref": "snap-a.tgz",
+                },
+            ],
+            reserved_proposal_ids=("prop-a", "prop-b"),
+        )
 
 
 def test_tree_lineage(store: ResearchStore):

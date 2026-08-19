@@ -25,18 +25,30 @@ class AgentResult:
     usage: object = None
 
 
-def _decode_output(stdout: str) -> AgentResult:
-    """Decode Claude's JSON envelope without interpreting usage semantics."""
+def _decode_stream(stdout: str) -> AgentResult:
+    """Decode a Claude ``--output-format stream-json`` line stream.
+
+    Each line is a JSON event.  The final ``result`` event carries the
+    finished text and usage; tool-call events are present in the stream for
+    full-fidelity L1 trace but do not affect the decoded text.
+    """
     text = stdout
     usage: object = None
-    try:
-        outer = json.loads(stdout)
-        if isinstance(outer, dict):
-            if isinstance(outer.get("result"), str):
-                text = outer["result"]
-            usage = outer.get("usage")
-    except json.JSONDecodeError:
-        pass
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "result":
+            result = event.get("result")
+            if isinstance(result, str):
+                text = result
+            usage = event.get("usage")
     return AgentResult(text=text, usage=usage)
 
 
@@ -51,6 +63,10 @@ class Agent:
         model: str | None = None,
         allowed_tools: str = "Read,Edit,Write,Bash",
         usage_observer: Callable[[object], None] | None = None,
+        trace_store=None,
+        invocation_id: str | None = None,
+        role: str = "executor",
+        identity: dict[str, str | None] | None = None,
     ):
         self.world = world
         self.command = command
@@ -59,6 +75,10 @@ class Agent:
         self.model = model
         self.allowed_tools = allowed_tools
         self.usage_observer = usage_observer
+        self.trace_store = trace_store
+        self.invocation_id = invocation_id
+        self.role = role
+        self.identity = identity or {}
 
     def _notify_usage(self, usage: object, label: str) -> None:
         if self.usage_observer is None:
@@ -75,11 +95,36 @@ class Agent:
         """Run the agent, return its raw text."""
         return self._run(prompt, cwd=cwd, label=label).text
 
+    def _start_trace(self) -> None:
+        if self.trace_store is None or self.invocation_id is None:
+            return
+        try:
+            self.trace_store.start_invocation(
+                self.invocation_id,
+                role=self.role,
+                identity=self.identity,
+            )
+        except Exception as exc:
+            print(f"[trace] start_invocation failed: {exc}", flush=True)
+
+    def _append_trace_lines(self, stdout: str) -> None:
+        if self.trace_store is None or self.invocation_id is None:
+            return
+        for line in stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                self.trace_store.append_raw_line(self.invocation_id, line)
+            except Exception as exc:
+                print(f"[trace] append failed: {exc}", flush=True)
+
     def _run(self, prompt: str, *, cwd: Path, label: str) -> AgentResult:
         payload = [
             self.command, "-p",
             "--input-format", "text",
-            "--output-format", "json",
+            "--output-format", "stream-json",
+            "--verbose",
             "--allowedTools", self.allowed_tools,
         ]
         if self.model:
@@ -90,11 +135,13 @@ class Agent:
             f"(timeout={self.timeout_seconds}s, world=/work)",
             flush=True,
         )
+        self._start_trace()
         completed = self.world.run(ProcessRequest(
             tuple(payload), PurePosixPath("/work"), self.timeout_seconds,
             stdin=prompt, label=label,
         ))
-        result = _decode_output(completed.stdout)
+        self._append_trace_lines(completed.stdout)
+        result = _decode_stream(completed.stdout)
         self._notify_usage(result.usage, label)
         if completed.timed_out:
             raise AgentError(

@@ -85,6 +85,7 @@ class Experiment:
     metrics: dict[str, Any]
     gate_result: GateDecision
     status: str
+    changed_paths: tuple[str, ...]
     child_node_id: str | None
     created_at: float
 
@@ -118,6 +119,7 @@ class ProposerAllocation:
     allocation_id: str
     node_id: str
     thread_id: str
+    reserved_proposal_ids: tuple[str, ...]
     started_at: float
     finished_at: float | None
     proposals_produced: int
@@ -165,6 +167,7 @@ class ResearchStore:
         metrics: dict[str, Any],
         gate_result: GateDecision,
         status: str,
+        changed_paths: Iterable[str] = (),
         frontier_config: "FrontierConfig | None" = None,
     ) -> Node | None:
         """Atomically mark experiment complete and, if gate passed, create child node.
@@ -190,6 +193,7 @@ class ResearchStore:
                 metrics=metrics,
                 gate_result=gate_result,
                 status=status,
+                changed_paths=changed_paths,
             )
 
             child: Node | None = None
@@ -265,8 +269,16 @@ class ResearchStore:
         node_id: str,
         thread_id: str,
         proposals: Iterable[dict[str, Any]],
+        reserved_proposal_ids: Iterable[str] | None = None,
     ) -> list[Proposal]:
-        """Atomically publish a batch of fully-formed proposals."""
+        """Atomically publish a batch of fully-formed proposals.
+
+        Each proposal must carry its own ``proposal_id`` (issued by the
+        Scheduler when the proposer allocation was created, §2.4
+        identity-first).  When ``reserved_proposal_ids`` is given, every
+        incoming id is validated against it so a worker cannot mint ids.
+        """
+        reserved = set(reserved_proposal_ids) if reserved_proposal_ids is not None else None
         created: list[Proposal] = []
         now = time.time()
         with self.transaction() as tx:
@@ -277,7 +289,13 @@ class ResearchStore:
             if thread is None:
                 raise ValueError(f"unknown thread: {thread_id}")
             for raw in proposals:
-                proposal_id = _new_id()
+                proposal_id = raw.get("proposal_id")
+                if not proposal_id:
+                    raise ValueError("proposal missing proposal_id")
+                if reserved is not None and proposal_id not in reserved:
+                    raise ValueError(
+                        f"proposal_id {proposal_id} not in reserved pool"
+                    )
                 tx.create_proposal(
                     Proposal(
                         proposal_id=proposal_id,
@@ -299,14 +317,22 @@ class ResearchStore:
         *,
         node_id: str,
         thread_id: str,
+        proposal_slots: int = 1,
     ) -> ProposerAllocation:
-        """Record that a proposer slot was allocated to a node/thread."""
+        """Record that a proposer slot was allocated to a node/thread.
+
+        Pre-reserves ``proposal_slots`` proposal ids (§2.4 identity-first):
+        the ids are issued here by the single writer, handed to the worker,
+        and become both the snapshot filename and the L2 proposal_id.
+        """
         now = time.time()
         allocation_id = _new_id()
+        reserved = tuple(_new_id() for _ in range(max(1, proposal_slots)))
         allocation = ProposerAllocation(
             allocation_id=allocation_id,
             node_id=node_id,
             thread_id=thread_id,
+            reserved_proposal_ids=reserved,
             started_at=now,
             finished_at=None,
             proposals_produced=0,
@@ -325,6 +351,119 @@ class ResearchStore:
         now = time.time()
         with self.transaction() as tx:
             tx.finish_allocation(allocation_id, proposals_produced, now)
+
+    def get_allocation(self, allocation_id: str) -> ProposerAllocation | None:
+        with self.transaction() as tx:
+            return tx.get_allocation(allocation_id)
+
+    def open_allocations(self) -> list[ProposerAllocation]:
+        """Return proposer allocations that are still in flight."""
+        with self.transaction() as tx:
+            rows = tx._conn.execute(
+                "SELECT * FROM proposer_allocations WHERE finished_at IS NULL"
+            ).fetchall()
+            return [_proposer_allocation_from_row(row) for row in rows]
+
+    def attempts_for_work(
+        self,
+        logical_work_id: str,
+        kind: str,
+    ) -> list[Attempt]:
+        """Return attempts (oldest first) for a logical work id."""
+        with self.transaction() as tx:
+            rows = tx._conn.execute(
+                "SELECT * FROM attempts WHERE logical_work_id = ? AND kind = ? "
+                "ORDER BY created_at",
+                (logical_work_id, kind),
+            ).fetchall()
+            return [_attempt_from_row(row) for row in rows]
+
+    def mark_experiment_infra_failed(
+        self,
+        *,
+        experiment_id: str,
+        attempt_id: str,
+    ) -> None:
+        """An infra failure reopens the experiment for a fresh attempt.
+
+        Scientific status is untouched (still pending/running); the failed
+        Attempt is recorded and the experiment returns to ``pending`` so the
+        Scheduler can allocate a new Attempt (§16/§17).
+        """
+        with self.transaction() as tx:
+            tx.update_attempt_status(attempt_id=attempt_id, status="failed", finished_at=time.time())
+            tx._conn.execute(
+                "UPDATE experiments SET status = 'pending' WHERE experiment_id = ?",
+                (experiment_id,),
+            )
+
+    def mark_proposer_infra_failed(
+        self,
+        *,
+        allocation_id: str,
+        attempt_id: str,
+    ) -> None:
+        """An infra failure on a proposer job keeps the allocation open for retry."""
+        with self.transaction() as tx:
+            tx.update_attempt_status(attempt_id=attempt_id, status="failed", finished_at=time.time())
+
+    def mark_attempt_succeeded(self, attempt_id: str) -> None:
+        with self.transaction() as tx:
+            tx.update_attempt_status(attempt_id=attempt_id, status="succeeded", finished_at=time.time())
+
+    def mark_attempt_lost(self, attempt_id: str) -> None:
+        with self.transaction() as tx:
+            tx.update_attempt_status(attempt_id=attempt_id, status="lost", finished_at=time.time())
+
+    def open_experiments(self) -> list[Experiment]:
+        """Return experiments that still need a scientific terminal result."""
+        with self.transaction() as tx:
+            rows = tx._conn.execute(
+                "SELECT * FROM experiments WHERE status IN ('pending','running')"
+            ).fetchall()
+            return [_experiment_from_row(row) for row in rows]
+
+    def mark_experiment_running(self, experiment_id: str) -> None:
+        with self.transaction() as tx:
+            tx._conn.execute(
+                "UPDATE experiments SET status = 'running' WHERE experiment_id = ?",
+                (experiment_id,),
+            )
+
+    def count_running_attempts(self, kind: str) -> int:
+        """Count attempts currently marked running for a work kind."""
+        with self.transaction() as tx:
+            row = tx._conn.execute(
+                "SELECT COUNT(*) AS n FROM attempts WHERE kind = ? AND status = 'running'",
+                (kind,),
+            ).fetchone()
+            return int(row["n"])
+
+    def running_attempts(self, kind: str) -> list[Attempt]:
+        """Return attempts currently marked running for a work kind."""
+        with self.transaction() as tx:
+            rows = tx._conn.execute(
+                "SELECT * FROM attempts WHERE kind = ? AND status = 'running'",
+                (kind,),
+            ).fetchall()
+            return [_attempt_from_row(row) for row in rows]
+
+    def mark_running_attempts_lost(self) -> int:
+        """Mark every running attempt lost (local-subprocess semantics).
+
+        A local subprocess does not survive its parent scheduler, so on startup
+        any attempt that was ``running`` is presumed dead and becomes
+        re-submittable.  An HTCondor adapter replaces this by querying the
+        external scheduler (§18).
+        """
+        now = time.time()
+        with self.transaction() as tx:
+            cur = tx._conn.execute(
+                "UPDATE attempts SET status = 'lost', finished_at = ? "
+                "WHERE status = 'running'",
+                (now,),
+            )
+            return cur.rowcount
 
     def record_attempt(
         self,
@@ -577,6 +716,7 @@ class _Transaction:
         metrics: dict[str, Any],
         gate_result: GateDecision,
         status: str,
+        changed_paths: Iterable[str] = (),
     ) -> None:
         self._conn.execute(
             """
@@ -584,7 +724,8 @@ class _Transaction:
             SET result_sha = ?,
                 metrics = ?,
                 gate_result = ?,
-                status = ?
+                status = ?,
+                changed_paths = ?
             WHERE experiment_id = ?
             """,
             (
@@ -592,6 +733,7 @@ class _Transaction:
                 _json(metrics),
                 _json(_gate_to_dict(gate_result)),
                 status,
+                _json(list(changed_paths)),
                 experiment_id,
             ),
         )
@@ -713,14 +855,15 @@ class _Transaction:
         self._conn.execute(
             """
             INSERT INTO proposer_allocations
-            (allocation_id, node_id, thread_id, started_at,
-             finished_at, proposals_produced)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (allocation_id, node_id, thread_id, reserved_proposal_ids,
+             started_at, finished_at, proposals_produced)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 allocation.allocation_id,
                 allocation.node_id,
                 allocation.thread_id,
+                _json(list(allocation.reserved_proposal_ids)),
                 allocation.started_at,
                 allocation.finished_at,
                 allocation.proposals_produced,
@@ -741,6 +884,13 @@ class _Transaction:
             """,
             (when, proposals_produced, allocation_id),
         )
+
+    def get_allocation(self, allocation_id: str) -> ProposerAllocation | None:
+        row = self._conn.execute(
+            "SELECT * FROM proposer_allocations WHERE allocation_id = ?",
+            (allocation_id,),
+        ).fetchone()
+        return None if row is None else _proposer_allocation_from_row(row)
 
 
 # ---------------------------------------------------------------------------
@@ -814,8 +964,21 @@ def _experiment_from_row(row: sqlite3.Row) -> Experiment:
         metrics=_unjson(row["metrics"]),
         gate_result=_gate_from_dict(_unjson(row["gate_result"])),
         status=row["status"],
+        changed_paths=tuple(_unjson(row["changed_paths"])),
         child_node_id=row["child_node_id"],
         created_at=row["created_at"],
+    )
+
+
+def _proposer_allocation_from_row(row: sqlite3.Row) -> ProposerAllocation:
+    return ProposerAllocation(
+        allocation_id=row["allocation_id"],
+        node_id=row["node_id"],
+        thread_id=row["thread_id"],
+        reserved_proposal_ids=tuple(_unjson(row["reserved_proposal_ids"])),
+        started_at=row["started_at"],
+        finished_at=row["finished_at"],
+        proposals_produced=row["proposals_produced"],
     )
 
 

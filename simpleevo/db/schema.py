@@ -73,6 +73,13 @@ CREATE INDEX IF NOT EXISTS idx_proposals_thread ON proposals(thread_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
 
 -- Experiments: one logical scientific verification.
+--
+-- status holds only SCIENTIFIC terminal states.  Infrastructure failures
+-- (worker crash / network / API) never land here; they are recorded on the
+-- ``attempts`` table (see §16/§17) and the experiment stays pending/running
+-- until a fresh attempt succeeds.  ``executor_failed``/``eval_failed`` are
+-- deliberately absent: executor crash = infra → attempt; eval-command
+-- non-zero exit is captured by the EVAL_COMMANDS gate → ``gate_rejected``.
 CREATE TABLE IF NOT EXISTS experiments (
     experiment_id TEXT PRIMARY KEY,
     proposal_id TEXT NOT NULL REFERENCES proposals(proposal_id),
@@ -83,8 +90,9 @@ CREATE TABLE IF NOT EXISTS experiments (
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN (
             'pending', 'running', 'completed',
-            'executor_failed', 'eval_failed', 'gate_rejected'
+            'gate_rejected', 'no_change'
         )),
+    changed_paths TEXT NOT NULL DEFAULT '[]',
     child_node_id TEXT REFERENCES nodes(node_id),
     created_at REAL NOT NULL
 );
@@ -133,6 +141,7 @@ CREATE TABLE IF NOT EXISTS proposer_allocations (
     allocation_id TEXT PRIMARY KEY,
     node_id TEXT NOT NULL REFERENCES nodes(node_id),
     thread_id TEXT NOT NULL REFERENCES threads(thread_id),
+    reserved_proposal_ids TEXT NOT NULL DEFAULT '[]',
     started_at REAL NOT NULL,
     finished_at REAL,
     proposals_produced INTEGER NOT NULL DEFAULT 0

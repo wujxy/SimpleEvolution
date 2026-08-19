@@ -35,7 +35,12 @@ def _resolve_root_sha(config: EvolutionConfig) -> str:
 
 
 def _ensure_root_node(store: ResearchStore, config: EvolutionConfig) -> None:
-    """Seed a root node and thread if the research tree is empty."""
+    """Seed a root node and its fresh Scientist threads if the tree is empty.
+
+    The root is spread with ``root_fresh_scientists`` independent fresh
+    Scientists (§7.1): diversity comes from several independent cognitions,
+    not one Scientist forcing many superficially-different proposals.
+    """
     queries = ResearchQueries(store.path)
     if queries.list_nodes():
         return
@@ -43,6 +48,7 @@ def _ensure_root_node(store: ResearchStore, config: EvolutionConfig) -> None:
     root_sha = _resolve_root_sha(config)
     gate = GateDecision({}, True)
     metrics: dict = {}
+    n_threads = max(1, config.root_fresh_scientists)
     with store.transaction() as tx:
         root = tx.create_node(
             parent_node_id=None,
@@ -53,11 +59,12 @@ def _ensure_root_node(store: ResearchStore, config: EvolutionConfig) -> None:
             depth=0,
             status="active",
         )
-        tx.create_thread(
-            parent_thread_id=None,
-            node_id=root.node_id,
-            snapshot_ref="",
-        )
+        for _ in range(n_threads):
+            tx.create_thread(
+                parent_thread_id=None,
+                node_id=root.node_id,
+                snapshot_ref="",
+            )
 
 
 def _prepare_git(config: EvolutionConfig) -> str:
@@ -143,6 +150,7 @@ def _build_scheduler_config(config: EvolutionConfig) -> SchedulerConfig:
     return SchedulerConfig(
         max_proposer_inflight=config.max_proposer_inflight,
         max_experiment_inflight=config.max_experiment_inflight,
+        proposal_slots=config.proposal_slots,
         queue=QueueConfig(max_size=config.queue_max_size),
         poll_seconds=config.poll_seconds,
         quiescence_window_proposals=config.quiescence_window_proposals,

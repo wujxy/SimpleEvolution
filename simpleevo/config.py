@@ -30,6 +30,7 @@ class EvolutionConfig:
     runtime_binds: tuple[str, ...] = ()
     read_only_binds: tuple[str, ...] = ()
     researcher: Mapping[str, Any] = field(default_factory=dict)
+    executor: Mapping[str, Any] = field(default_factory=dict)
     context: Mapping[str, Any] = field(default_factory=dict)
     prompt_dir: Path | None = None
     proposal_slots: int = 3
@@ -43,14 +44,7 @@ class EvolutionConfig:
     poll_seconds: float = 5.0
     queue_max_size: int = 10
     quiescence_window_proposals: int = 2
-
-    @property
-    def workspace_path(self) -> Path:
-        """Default workspace for proposer investigation is the repo itself.
-
-        Workers may create a git worktree for a specific Node SHA if needed.
-        """
-        return self.repo_path
+    root_fresh_scientists: int = 3
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict (safe for YAML/JSON)."""
@@ -68,6 +62,7 @@ class EvolutionConfig:
             "runtime_binds": list(self.runtime_binds),
             "read_only_binds": list(self.read_only_binds),
             "researcher": dict(self.researcher),
+            "executor": dict(self.executor),
             "context": dict(self.context),
             "prompt_dir": str(self.prompt_dir) if self.prompt_dir else None,
             "proposal_slots": self.proposal_slots,
@@ -81,6 +76,7 @@ class EvolutionConfig:
             "poll_seconds": self.poll_seconds,
             "queue_max_size": self.queue_max_size,
             "quiescence_window_proposals": self.quiescence_window_proposals,
+            "root_fresh_scientists": self.root_fresh_scientists,
         }
 
     @classmethod
@@ -103,6 +99,7 @@ class EvolutionConfig:
             runtime_binds=tuple(raw.get("runtime_binds", [])),
             read_only_binds=tuple(raw.get("read_only_binds", [])),
             researcher=dict(raw.get("researcher", {})),
+            executor=dict(raw.get("executor", {})),
             context=dict(raw.get("context", {})),
             prompt_dir=Path(prompt_dir) if prompt_dir else None,
             proposal_slots=int(raw.get("proposal_slots", 3)),
@@ -116,6 +113,7 @@ class EvolutionConfig:
             poll_seconds=float(raw.get("poll_seconds", 5.0)),
             queue_max_size=int(raw.get("queue_max_size", 10)),
             quiescence_window_proposals=int(raw.get("quiescence_window_proposals", 2)),
+            root_fresh_scientists=int(raw.get("root_fresh_scientists", 3)),
         )
 
 

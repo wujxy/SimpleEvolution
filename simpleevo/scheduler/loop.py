@@ -5,7 +5,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable
 
 from simpleevo.config import EvolutionConfig
 from simpleevo.db.store import FrontierAxis, GateDecision, GateResult, ResearchStore
@@ -21,14 +21,32 @@ from .telemetry import TelemetryRecorder
 class SchedulerConfig:
     max_proposer_inflight: int = 2
     max_experiment_inflight: int = 2
+    proposal_slots: int = 3
     queue: QueueConfig | None = None
     frontier: FrontierConfig | None = None
     poll_seconds: float = 5.0
     quiescence_window_proposals: int = 2
 
 
+# Scientific terminal outcomes produced by the experiment worker.  These are
+# the only values that may reach ``experiments.status`` (§16/§17): anything
+# else (executor crash, worker crash, network/API failure) is infrastructure
+# and lands on the Attempt table instead.
+_EXPERIMENT_SCI_STATUS = {
+    "COMPLETED": "completed",
+    "GATE_REJECTED": "gate_rejected",
+    "NO_CHANGE": "no_change",
+}
+
+
 class Scheduler:
-    """Event-driven scheduler for the Research Tree."""
+    """Event-driven scheduler for the Research Tree.
+
+    In-flight work is derived from L2, never from process memory: proposer
+    allocations (``finished_at IS NULL``) and experiments (``pending``/
+    ``running``) plus their ``attempts`` rows are the single source of truth.
+    Restart = reconciliation, not recovery of the old process (§18).
+    """
 
     def __init__(
         self,
@@ -48,19 +66,21 @@ class Scheduler:
         self.submit_proposer = submit_proposer or (lambda _aid, _p: "")
         self.submit_experiment = submit_experiment or (lambda _eid, _p: "")
         self.clock = clock
-        self._proposer_inflight: set[str] = set()
-        self._experiment_inflight: set[str] = set()
         self._allocations_counter: dict[str, int] = {}
         self._queries = ResearchQueries(store.path)
         self._telemetry = TelemetryRecorder(self.run_dir)
         self._step_count = 0
         self._last_proposal_step = 0
 
+        # Local subprocesses do not survive their parent; anything left
+        # ``running`` by a previous process is dead and re-submittable (§18).
+        self.store.mark_running_attempts_lost()
+
     def step(self) -> dict[str, Any]:
         """Run one scheduler iteration.  Returns telemetry for the step."""
         self._step_count += 1
 
-        # 1. Reconcile offline results.
+        # 1. Reconcile offline results + re-submit dead work.
         reconciler = Reconciler(self.store, self.run_dir)
         reconcile_actions = reconciler.reconcile()
         self._execute_reconcile_actions(reconcile_actions)
@@ -111,6 +131,10 @@ class Scheduler:
             time.sleep(self.config.poll_seconds)
         return {"steps": self._step_count, "telemetry": telemetry}
 
+    # ------------------------------------------------------------------
+    # Frontier
+    # ------------------------------------------------------------------
+
     def _frontier_config(self) -> FrontierConfig:
         if self.config.frontier is not None:
             return self.config.frontier
@@ -142,9 +166,16 @@ class Scheduler:
                 for row in rows
             ]
 
+    # ------------------------------------------------------------------
+    # Proposer allocation
+    # ------------------------------------------------------------------
+
+    def _proposer_capacity(self) -> int:
+        return self.config.max_proposer_inflight - self.store.count_running_attempts("proposer")
+
     def _allocate_proposers(self, frontier):
         """Create proposer allocations and submit jobs for frontier nodes."""
-        capacity = self.config.max_proposer_inflight - len(self._proposer_inflight)
+        capacity = self._proposer_capacity()
         if capacity <= 0 or not frontier.node_ids:
             return []
 
@@ -154,44 +185,91 @@ class Scheduler:
             self._allocations_counter,
             capacity,
         ):
-            # Pick or create a thread for this node.
-            thread_info = self._thread_for_node(node_id)
-            if thread_info is None:
+            thread = self._idle_thread_for_node(node_id)
+            if thread is None:
                 continue
-            thread_id, snapshot_ref = thread_info
             node = self._queries.get_node(node_id)
             if node is None:
                 continue
             allocation = self.store.allocate_proposer(
-                node_id=node_id, thread_id=thread_id
+                node_id=node_id,
+                thread_id=thread.thread_id,
+                proposal_slots=self.config.proposal_slots,
             )
-            self._proposer_inflight.add(allocation.allocation_id)
-            payload = {
-                "allocation_id": allocation.allocation_id,
-                "node_id": node_id,
-                "node_sha": node.sha,
-                "thread_id": thread_id,
-                "snapshot_ref": snapshot_ref,
-                "world_transition": {},
-            }
-            self.submit_proposer(allocation.allocation_id, payload)
+            self.store.record_attempt(
+                logical_work_id=allocation.allocation_id,
+                kind="proposer",
+                status="running",
+                started_at=self.clock(),
+            )
+            self.submit_proposer(
+                allocation.allocation_id,
+                self._proposer_payload(allocation, node, thread),
+            )
             jobs.append(allocation.allocation_id)
         return jobs
 
-    def _thread_for_node(self, node_id: str) -> tuple[str, str] | None:
-        """Return (thread_id, snapshot_ref) for the node, creating a fresh thread if needed."""
-        threads = self._queries.threads_for_node(node_id, limit=1)
-        if threads:
-            thread = threads[0]
-            return thread.thread_id, thread.snapshot_ref
-        # Fresh thread.
-        with self.store.transaction() as tx:
-            thread = tx.create_thread(
-                parent_thread_id=None,
-                node_id=node_id,
-                snapshot_ref="",
-            )
-        return thread.thread_id, thread.snapshot_ref
+    def _idle_thread_for_node(self, node_id: str):
+        """Return a thread for ``node_id`` that has no in-flight allocation.
+
+        A Node may hold several Threads (root's fresh scientists, forked
+        children).  Each allocation binds (node, thread); the same thread is
+        never allocated twice concurrently, so a fresh root spreads across its
+        threads and no session race occurs (§3.4 / §7.1).
+        """
+        busy = {a.thread_id for a in self.store.open_allocations()}
+        threads = self._queries.threads_for_node(node_id, limit=1000)
+        for thread in threads:
+            if thread.thread_id not in busy:
+                return thread
+        return None
+
+    def _proposer_payload(self, allocation, node, thread) -> dict[str, Any]:
+        """Assemble the proposer job payload from L2 (also used on re-submit)."""
+        return {
+            "allocation_id": allocation.allocation_id,
+            "node_id": node.node_id,
+            "node_sha": node.sha,
+            "thread_id": thread.thread_id,
+            "snapshot_ref": thread.snapshot_ref,
+            "proposal_ids": list(allocation.reserved_proposal_ids),
+            "world_transition": self._world_transition_for(node),
+        }
+
+    def _world_transition_for(self, node) -> dict[str, Any]:
+        """Assemble the reality record a child Scientist sees on resume (§8).
+
+        ``node.experiment_id`` is the Experiment that produced this Node; its
+        facts (metrics / gate / diff) are the world transition from the parent
+        the forked Scientist last saw.
+        """
+        if node.experiment_id is None:
+            return {}
+        experiment = self._queries.get_experiment(node.experiment_id)
+        if experiment is None:
+            return {}
+        parent = self._queries.get_node(experiment.parent_node_id)
+        return {
+            "parent_node_id": experiment.parent_node_id,
+            "experiment_id": experiment.experiment_id,
+            "metrics": dict(experiment.metrics),
+            "gate": {
+                "passed": experiment.gate_result.passed,
+                "results": {
+                    name: {"passed": gr.passed, "detail": gr.detail}
+                    for name, gr in experiment.gate_result.results.items()
+                },
+            },
+            "diff": list(experiment.changed_paths),
+            "parent_metrics": dict(parent.metrics) if parent else {},
+        }
+
+    # ------------------------------------------------------------------
+    # Executor queue
+    # ------------------------------------------------------------------
+
+    def _experiment_capacity(self) -> int:
+        return self.config.max_experiment_inflight - self.store.count_running_attempts("experiment")
 
     def _drain_executor_queue(self, frontier):
         """Submit queued proposals as experiment jobs up to capacity."""
@@ -201,7 +279,8 @@ class Scheduler:
             self.config.queue or QueueConfig(),
         )
         queue.cleanup()
-        capacity = self.config.max_experiment_inflight - len(self._experiment_inflight)
+        queue.enforce_bound()
+        capacity = self._experiment_capacity()
         if capacity <= 0:
             return []
 
@@ -220,160 +299,290 @@ class Scheduler:
                     status="pending",
                 )
                 tx.transition_proposal_status(proposal_id, "running")
-            self._experiment_inflight.add(experiment.experiment_id)
-            payload = {
-                "experiment_id": experiment.experiment_id,
-                "proposal_id": proposal_id,
-                "parent_node_id": proposal.node_id,
-                "parent_sha": node.sha,
-                "proposal": proposal.instruction,
-            }
-            self.submit_experiment(experiment.experiment_id, payload)
+            self.store.record_attempt(
+                logical_work_id=experiment.experiment_id,
+                kind="experiment",
+                status="running",
+                started_at=self.clock(),
+            )
+            self.store.mark_experiment_running(experiment.experiment_id)
+            self.submit_experiment(
+                experiment.experiment_id,
+                {
+                    "experiment_id": experiment.experiment_id,
+                    "proposal_id": proposal_id,
+                    "parent_node_id": proposal.node_id,
+                    "parent_sha": node.sha,
+                    "proposal": proposal.instruction,
+                },
+            )
             jobs.append(experiment.experiment_id)
         return jobs
 
+    # ------------------------------------------------------------------
+    # Polling + ingest
+    # ------------------------------------------------------------------
+
     def _poll_proposers(self) -> list[str]:
-        """Poll result files for running proposer allocations and publish proposals."""
+        """Poll result files for running proposer attempts and publish proposals."""
         published: list[str] = []
-        still_running: set[str] = set()
-        for allocation_id in list(self._proposer_inflight):
+        for attempt in self.store.running_attempts("proposer"):
+            allocation_id = attempt.logical_work_id
             result_path = self.run_dir / "proposer_allocations" / allocation_id / "result.json"
             if not result_path.exists():
-                still_running.add(allocation_id)
                 continue
             if self._ingest_proposer_result(allocation_id, result_path):
                 published.append(allocation_id)
-            else:
-                still_running.add(allocation_id)
-        self._proposer_inflight = still_running
         return published
 
     def _poll_experiments(self) -> list[str]:
         """Poll result files for running experiments and ingest them."""
         ingested: list[str] = []
-        still_running: set[str] = set()
-        for eid in list(self._experiment_inflight):
-            result_path = self.run_dir / "experiments" / eid / "result.json"
+        for attempt in self.store.running_attempts("experiment"):
+            experiment_id = attempt.logical_work_id
+            result_path = self.run_dir / "experiments" / experiment_id / "result.json"
             if not result_path.exists():
-                still_running.add(eid)
                 continue
-            if self._ingest_experiment_result(eid, result_path):
-                ingested.append(eid)
-            else:
-                still_running.add(eid)
-        self._experiment_inflight = still_running
+            if self._ingest_experiment_result(experiment_id, result_path):
+                ingested.append(experiment_id)
         return ingested
-
-    def _quiescent(self) -> bool:
-        """True when there is nothing left to do."""
-        if self._proposer_inflight or self._experiment_inflight:
-            return False
-        if self.store.queued_proposals():
-            return False
-        # Wait a few steps after the last published proposal before declaring
-        # quiescence, so late-arriving results have a chance to be ingested.
-        window = max(1, self.config.quiescence_window_proposals)
-        if self._step_count - self._last_proposal_step < window:
-            return False
-        return True
-
-    def _execute_reconcile_actions(
-        self,
-        actions: list,
-    ) -> tuple[list[str], list[str]]:
-        """Ingest results discovered by the reconciler."""
-        published: list[str] = []
-        ingested: list[str] = []
-        for action in actions:
-            if action.kind != "ingest_result":
-                continue
-            if action.work_kind == "proposer":
-                result_path = (
-                    self.run_dir
-                    / "proposer_allocations"
-                    / action.logical_work_id
-                    / "result.json"
-                )
-                if self._ingest_proposer_result(
-                    action.logical_work_id, result_path
-                ):
-                    published.append(action.logical_work_id)
-                    # Remove from inflight if it was tracked there.
-                    self._proposer_inflight.discard(action.logical_work_id)
-            elif action.work_kind == "experiment":
-                result_path = (
-                    self.run_dir
-                    / "experiments"
-                    / action.logical_work_id
-                    / "result.json"
-                )
-                if self._ingest_experiment_result(
-                    action.logical_work_id, result_path
-                ):
-                    ingested.append(action.logical_work_id)
-                    self._experiment_inflight.discard(action.logical_work_id)
-        return published, ingested
 
     def _ingest_proposer_result(
         self,
         allocation_id: str,
         result_path: Path,
     ) -> bool:
-        """Publish proposals from a completed proposer result file."""
+        """Publish proposals from a completed proposer result file.
+
+        Returns True when the result was a scientific completion (proposals
+        published or an abstention); an infra failure keeps the allocation
+        open for retry and returns False.
+        """
         try:
             raw = json.loads(result_path.read_text(encoding="utf-8"))
-            result = raw.get("result", {})
-            node_id = result.get("node_id")
-            thread_id = result.get("thread_id")
-            proposals = result.get("proposals", [])
-            if node_id and thread_id and proposals:
-                self.store.publish_proposals(
-                    node_id=node_id,
-                    thread_id=thread_id,
-                    proposals=proposals,
-                )
-            self.store.deallocate_proposer(
-                allocation_id=allocation_id,
-                proposals_produced=len(proposals),
-            )
-            return True
         except Exception as exc:
-            print(
-                f"[scheduler] failed to ingest proposer {allocation_id}: {exc}",
-                flush=True,
-            )
+            print(f"[scheduler] failed to read proposer {allocation_id}: {exc}", flush=True)
             return False
+
+        attempt = self._latest_attempt(allocation_id, "proposer")
+        if raw.get("status") == "failed":
+            if attempt is not None:
+                self.store.mark_proposer_infra_failed(
+                    allocation_id=allocation_id,
+                    attempt_id=attempt.attempt_id,
+                )
+            return False
+
+        result = raw.get("result", {})
+        node_id = result.get("node_id")
+        thread_id = result.get("thread_id")
+        proposals = result.get("proposals", [])
+        allocation = self.store.get_allocation(allocation_id)
+        reserved = allocation.reserved_proposal_ids if allocation else ()
+        if node_id and thread_id and proposals:
+            self.store.publish_proposals(
+                node_id=node_id,
+                thread_id=thread_id,
+                proposals=proposals,
+                reserved_proposal_ids=reserved,
+            )
+        self.store.deallocate_proposer(
+            allocation_id=allocation_id,
+            proposals_produced=len(proposals),
+        )
+        if attempt is not None:
+            self.store.mark_attempt_succeeded(attempt.attempt_id)
+        return True
 
     def _ingest_experiment_result(
         self,
         experiment_id: str,
         result_path: Path,
     ) -> bool:
-        """Ingest a completed experiment result file."""
+        """Ingest an experiment result, splitting infra from scientific."""
         try:
             raw = json.loads(result_path.read_text(encoding="utf-8"))
-            result = raw.get("result", {})
-            gate_raw = result.get("gate", {})
-            gate = GateDecision(
-                results={
-                    name: GateResult(g.get("passed"), g.get("detail", ""))
-                    for name, g in gate_raw.get("results", {}).items()
-                },
-                passed=gate_raw.get("passed", False),
-            )
-            status = str(result.get("status", "completed")).lower()
-            self.store.ingest_experiment_result(
-                experiment_id=experiment_id,
-                result_sha=result.get("sha"),
-                metrics=result.get("metrics", {}),
-                gate_result=gate,
-                status=status,
-                frontier_config=self._frontier_config(),
-            )
-            return True
         except Exception as exc:
+            print(f"[scheduler] failed to read experiment {experiment_id}: {exc}", flush=True)
+            return False
+
+        attempt = self._latest_attempt(experiment_id, "experiment")
+        if raw.get("status") == "failed":
+            # Infrastructure failure: reopen the experiment, keep its
+            # scientific status untouched (§16/§17).
+            if attempt is not None:
+                self.store.mark_experiment_infra_failed(
+                    experiment_id=experiment_id,
+                    attempt_id=attempt.attempt_id,
+                )
+            return True
+
+        result = raw.get("result", {})
+        outcome = result.get("outcome", "COMPLETED")
+        status = _EXPERIMENT_SCI_STATUS.get(outcome)
+        if status is None:
             print(
-                f"[scheduler] failed to ingest experiment {experiment_id}: {exc}",
+                f"[scheduler] unknown experiment outcome {outcome!r} for "
+                f"{experiment_id}; treating as infra",
                 flush=True,
             )
+            if attempt is not None:
+                self.store.mark_experiment_infra_failed(
+                    experiment_id=experiment_id,
+                    attempt_id=attempt.attempt_id,
+                )
+            return True
+
+        gate_raw = result.get("gate", {})
+        gate = GateDecision(
+            results={
+                name: GateResult(g.get("passed"), g.get("detail", ""))
+                for name, g in gate_raw.get("results", {}).items()
+            },
+            passed=gate_raw.get("passed", False),
+        )
+        self.store.ingest_experiment_result(
+            experiment_id=experiment_id,
+            result_sha=result.get("sha"),
+            metrics=result.get("metrics", {}),
+            gate_result=gate,
+            status=status,
+            changed_paths=result.get("changed_paths", []),
+            frontier_config=self._frontier_config(),
+        )
+        if attempt is not None:
+            self.store.mark_attempt_succeeded(attempt.attempt_id)
+        return True
+
+    def _latest_attempt(self, logical_work_id: str, kind: str):
+        attempts = self.store.attempts_for_work(logical_work_id, kind)
+        return attempts[-1] if attempts else None
+
+    # ------------------------------------------------------------------
+    # Reconciliation / resume
+    # ------------------------------------------------------------------
+
+    def _execute_reconcile_actions(
+        self,
+        actions: list,
+    ) -> tuple[list[str], list[str]]:
+        """Apply reconcile actions: ingest completed results, re-submit dead work."""
+        published: list[str] = []
+        ingested: list[str] = []
+        for action in actions:
+            if action.kind == "ingest_result":
+                if action.work_kind == "proposer":
+                    result_path = (
+                        self.run_dir
+                        / "proposer_allocations"
+                        / action.logical_work_id
+                        / "result.json"
+                    )
+                    if self._ingest_proposer_result(action.logical_work_id, result_path):
+                        published.append(action.logical_work_id)
+                elif action.work_kind == "experiment":
+                    result_path = (
+                        self.run_dir
+                        / "experiments"
+                        / action.logical_work_id
+                        / "result.json"
+                    )
+                    if self._ingest_experiment_result(action.logical_work_id, result_path):
+                        ingested.append(action.logical_work_id)
+            elif action.kind == "reattach_or_wait":
+                self._resubmit_if_dead(action)
+        return published, ingested
+
+    def _resubmit_if_dead(self, action) -> None:
+        """Re-submit open logical work that has no running attempt.
+
+        After ``mark_running_attempts_lost`` on startup, an open allocation or
+        experiment with no running attempt is dead work from a previous process
+        and gets a fresh attempt (§18).  Work that still has a running attempt
+        is left alone — that is the ``wait`` branch.
+        """
+        if action.work_kind == "proposer":
+            self._resubmit_proposer(action.logical_work_id)
+        elif action.work_kind == "experiment":
+            self._resubmit_experiment(action.logical_work_id)
+
+    def _resubmit_proposer(self, allocation_id: str) -> None:
+        allocation = self.store.get_allocation(allocation_id)
+        if allocation is None:
+            return
+        if any(
+            a.status == "running"
+            for a in self.store.attempts_for_work(allocation_id, "proposer")
+        ):
+            return
+        node = self._queries.get_node(allocation.node_id)
+        thread = self._queries.get_thread(allocation.thread_id)
+        if node is None or thread is None:
+            return
+        self.store.record_attempt(
+            logical_work_id=allocation_id,
+            kind="proposer",
+            status="running",
+            started_at=self.clock(),
+        )
+        self.submit_proposer(
+            allocation_id,
+            self._proposer_payload(allocation, node, thread),
+        )
+
+    def _resubmit_experiment(self, experiment_id: str) -> None:
+        experiment = self._queries.get_experiment(experiment_id)
+        if experiment is None or experiment.status not in {"pending", "running"}:
+            return
+        if any(
+            a.status == "running"
+            for a in self.store.attempts_for_work(experiment_id, "experiment")
+        ):
+            return
+        node = self._queries.get_node(experiment.parent_node_id)
+        if node is None:
+            return
+        self.store.record_attempt(
+            logical_work_id=experiment_id,
+            kind="experiment",
+            status="running",
+            started_at=self.clock(),
+        )
+        self.store.mark_experiment_running(experiment_id)
+        self.submit_experiment(
+            experiment_id,
+            {
+                "experiment_id": experiment_id,
+                "proposal_id": experiment.proposal_id,
+                "parent_node_id": experiment.parent_node_id,
+                "parent_sha": node.sha,
+                "proposal": self._proposal_instruction(experiment.proposal_id),
+            },
+        )
+
+    def _proposal_instruction(self, proposal_id: str) -> str:
+        proposal = self._queries.get_proposal(proposal_id)
+        return proposal.instruction if proposal else ""
+
+    # ------------------------------------------------------------------
+    # Quiescence
+    # ------------------------------------------------------------------
+
+    def _quiescent(self) -> bool:
+        """True when there is nothing left to do."""
+        if self.store.running_attempts("proposer"):
             return False
+        if self.store.running_attempts("experiment"):
+            return False
+        if self.store.queued_proposals():
+            return False
+        # Open allocations / experiments still awaiting a retry or an offline
+        # result mean work remains (the reconciler will re-submit them).
+        if self.store.open_allocations():
+            return False
+        if self.store.open_experiments():
+            return False
+        window = max(1, self.config.quiescence_window_proposals)
+        if self._step_count - self._last_proposal_step < window:
+            return False
+        return True

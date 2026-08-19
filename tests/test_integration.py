@@ -66,6 +66,7 @@ def test_scheduler_closes_proposer_experiment_loop(env):
                     "outcome": "submit",
                     "proposals": [
                         {
+                            "proposal_id": payload["proposal_ids"][0],
                             "instruction": "inline a small helper to reduce total_ms",
                             "rationale": {"why": "expected faster"},
                             "snapshot_ref": "",
@@ -95,7 +96,7 @@ def test_scheduler_closes_proposer_experiment_loop(env):
                         "passed": True,
                         "results": {"PATHS": {"passed": True, "detail": ""}},
                     },
-                    "status": "COMPLETED",
+                    "outcome": "COMPLETED",
                     "eval_block": "TOTAL_MS=90.0\nPATHS=pass",
                     "changed_paths": [],
                 },
