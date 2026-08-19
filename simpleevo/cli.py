@@ -35,11 +35,15 @@ def _resolve_root_sha(config: EvolutionConfig) -> str:
 
 
 def _ensure_root_node(store: ResearchStore, config: EvolutionConfig) -> None:
-    """Seed a root node and its fresh Scientist threads if the tree is empty.
+    """Seed a root node and its fresh Scientist episode if the tree is empty.
 
-    The root is spread with ``root_fresh_scientists`` independent fresh
-    Scientists (§7.1): diversity comes from several independent cognitions,
-    not one Scientist forcing many superficially-different proposals.
+    One Node = one Scientist episode (§3.4): by default the root gets exactly
+    one fresh episode, which submits up to ``proposal_slots`` proposals in its
+    single batch.  Diversity comes from that batch spanning distinct
+    directions and from forked children — NOT from seeding several independent
+    root Scientists, which would each re-derive the same hotspot and collapse
+    the tree.  ``root_fresh_scientists`` is kept (default 1) for backward
+    compatibility only.
     """
     queries = ResearchQueries(store.path)
     if queries.list_nodes():
@@ -48,7 +52,7 @@ def _ensure_root_node(store: ResearchStore, config: EvolutionConfig) -> None:
     root_sha = _resolve_root_sha(config)
     gate = GateDecision({}, True)
     metrics: dict = {}
-    n_threads = max(1, config.root_fresh_scientists)
+    n_episodes = max(1, config.root_fresh_scientists)
     with store.transaction() as tx:
         root = tx.create_node(
             parent_node_id=None,
@@ -59,11 +63,9 @@ def _ensure_root_node(store: ResearchStore, config: EvolutionConfig) -> None:
             depth=0,
             status="active",
         )
-        for _ in range(n_threads):
-            tx.create_thread(
-                parent_thread_id=None,
+        for _ in range(n_episodes):
+            tx.create_episode(
                 node_id=root.node_id,
-                snapshot_ref="",
             )
 
 
@@ -260,12 +262,10 @@ def _cmd_reseed(args: argparse.Namespace) -> int:
         print(f"node not found: {args.node}", file=sys.stderr)
         return 1
     with store.transaction() as tx:
-        tx.create_thread(
-            parent_thread_id=None,
+        tx.create_episode(
             node_id=node.node_id,
-            snapshot_ref="",
         )
-    print(f"reseeded node {node.node_id} with fresh thread")
+    print(f"reseeded node {node.node_id} with fresh episode")
     return 0
 
 
@@ -339,7 +339,7 @@ def main(argv: list[str] | None = None) -> int:
     inspect_p.set_defaults(func=_cmd_inspect)
 
     reseed_p = sub.add_parser(
-        "reseed", parents=[common], help="attach a fresh thread to a node"
+        "reseed", parents=[common], help="attach a fresh episode to a node"
     )
     reseed_p.add_argument("--node", required=True)
     reseed_p.set_defaults(func=_cmd_reseed)

@@ -23,12 +23,12 @@ def test_ingest_persists_frontier_axes():
                 depth=0,
                 status="active",
             )
-            thread = tx.create_thread(parent_thread_id=None, node_id=root.node_id, snapshot_ref="")
+            episode = tx.create_episode(inherited_from_episode_id=None, node_id=root.node_id)
             proposal = tx.create_proposal(
                 Proposal(
                     proposal_id="p1",
                     node_id=root.node_id,
-                    thread_id=thread.thread_id,
+                    episode_id=episode.episode_id,
                     instruction="go faster",
                     rationale={},
                     status="queued",
@@ -66,13 +66,13 @@ def test_ingest_persists_frontier_axes():
             assert rows[0]["axis"] == "total_ms"
             assert rows[0]["value"] == 90.0
 
-            # Child thread should have been forked from the proposal snapshot.
+            # Child episode should have been forked from the proposal snapshot.
             child = tx._conn.execute(
                 "SELECT * FROM nodes WHERE parent_node_id = ?", (root.node_id,)
             ).fetchone()
             assert child is not None
-            threads = tx._conn.execute(
-                "SELECT * FROM threads WHERE node_id = ?", (child["node_id"],)
+            episodes = tx._conn.execute(
+                "SELECT * FROM episodes WHERE node_id = ?", (child["node_id"],)
             ).fetchall()
-            assert len(threads) == 1
-            assert threads[0]["parent_thread_id"] == thread.thread_id
+            assert len(episodes) == 1
+            assert episodes[0]["inherited_from_episode_id"] == episode.episode_id

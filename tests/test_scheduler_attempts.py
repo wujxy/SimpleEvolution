@@ -16,7 +16,7 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 def _seed(store: ResearchStore):
-    """Create root node + thread + queued proposal + running experiment."""
+    """Create root node + episode + queued proposal + running experiment."""
     with store.transaction() as tx:
         root = tx.create_node(
             parent_node_id=None,
@@ -27,14 +27,14 @@ def _seed(store: ResearchStore):
             depth=0,
             status="active",
         )
-        thread = tx.create_thread(
-            parent_thread_id=None, node_id=root.node_id, snapshot_ref=""
+        episode = tx.create_episode(
+            inherited_from_episode_id=None, node_id=root.node_id
         )
         proposal = tx.create_proposal(
             Proposal(
                 proposal_id="p1",
                 node_id=root.node_id,
-                thread_id=thread.thread_id,
+                episode_id=episode.episode_id,
                 instruction="go faster",
                 rationale={},
                 status="running",
@@ -47,14 +47,14 @@ def _seed(store: ResearchStore):
             parent_node_id=root.node_id,
             status="running",
         )
-        return root, thread, experiment
+        return root, episode, experiment
 
 
 def test_infra_failed_reopens_experiment_without_scientific_terminal():
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp)
         store = ResearchStore(run_dir / "simpleevo.db")
-        root, thread, experiment = _seed(store)
+        root, episode, experiment = _seed(store)
 
         # Record a running attempt for the experiment, then infra-fail it.
         attempt = store.record_attempt(
@@ -84,7 +84,7 @@ def test_infra_result_keeps_experiment_open():
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp)
         store = ResearchStore(run_dir / "simpleevo.db")
-        root, thread, experiment = _seed(store)
+        root, episode, experiment = _seed(store)
 
         store.record_attempt(
             logical_work_id=experiment.experiment_id,
@@ -127,7 +127,7 @@ def test_scientific_result_marks_attempt_succeeded_and_creates_child():
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp)
         store = ResearchStore(run_dir / "simpleevo.db")
-        root, thread, experiment = _seed(store)
+        root, episode, experiment = _seed(store)
 
         store.record_attempt(
             logical_work_id=experiment.experiment_id,
@@ -180,7 +180,7 @@ def test_startup_marks_running_attempts_lost():
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp)
         store = ResearchStore(run_dir / "simpleevo.db")
-        root, thread, experiment = _seed(store)
+        root, episode, experiment = _seed(store)
 
         attempt = store.record_attempt(
             logical_work_id=experiment.experiment_id,
@@ -206,7 +206,7 @@ def test_infra_failed_result_does_not_block_next_attempt():
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp)
         store = ResearchStore(run_dir / "simpleevo.db")
-        root, thread, experiment = _seed(store)
+        root, episode, experiment = _seed(store)
 
         store.record_attempt(
             logical_work_id=experiment.experiment_id,
@@ -267,13 +267,13 @@ def test_proposer_infra_failed_result_does_not_block_next_attempt():
                 depth=0,
                 status="active",
             )
-            thread = tx.create_thread(
-                parent_thread_id=None, node_id=root.node_id, snapshot_ref=""
+            episode = tx.create_episode(
+                inherited_from_episode_id=None, node_id=root.node_id
             )
 
         allocation = store.allocate_proposer(
             node_id=root.node_id,
-            thread_id=thread.thread_id,
+            episode_id=episode.episode_id,
             proposal_slots=2,
         )
         store.record_attempt(
@@ -293,7 +293,7 @@ def test_proposer_infra_failed_result_does_not_block_next_attempt():
                 "request_id": allocation.allocation_id,
                 "status": "failed",
                 "result": {
-                    "thread_id": thread.thread_id,
+                    "episode_id": episode.episode_id,
                     "node_id": root.node_id,
                     "outcome": "error",
                     "proposals": [],
@@ -322,3 +322,46 @@ def test_proposer_infra_failed_result_does_not_block_next_attempt():
         assert len(attempts) == 2
         assert attempts[0].status == "failed"
         assert attempts[1].status == "running"
+
+
+def test_episode_is_single_use():
+    """A completed episode must not be re-scheduled; a root spreads across its
+    fresh episodes, and no fresh episode remains once they are all terminal."""
+    with tempfile.TemporaryDirectory() as tmp:
+        run_dir = Path(tmp)
+        store = ResearchStore(run_dir / "simpleevo.db")
+        with store.transaction() as tx:
+            root = tx.create_node(
+                parent_node_id=None,
+                experiment_id=None,
+                sha="sha-root",
+                metrics={"total_ms": 100.0},
+                gate_result=GateDecision({}, True),
+                depth=0,
+                status="active",
+            )
+            t1 = tx.create_episode(inherited_from_episode_id=None, node_id=root.node_id)
+            t2 = tx.create_episode(inherited_from_episode_id=None, node_id=root.node_id)
+            t3 = tx.create_episode(inherited_from_episode_id=None, node_id=root.node_id)
+
+        scheduler = Scheduler(
+            store,
+            run_dir,
+            SchedulerConfig(max_proposer_inflight=0, max_experiment_inflight=0),
+        )
+
+        # Each call returns a distinct fresh episode; after deallocating it
+        # (episode complete), it is terminal and never returned again.
+        picked = []
+        for _ in range(3):
+            episode = scheduler._idle_episode_for_node(root.node_id)
+            assert episode is not None
+            assert episode.episode_id not in picked
+            picked.append(episode.episode_id)
+            alloc = store.allocate_proposer(
+                node_id=root.node_id, episode_id=episode.episode_id, proposal_slots=1)
+            store.deallocate_proposer(
+                allocation_id=alloc.allocation_id, proposals_produced=1)
+
+        # All three episodes are terminal → no fresh episode remains.
+        assert scheduler._idle_episode_for_node(root.node_id) is None

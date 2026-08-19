@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .store import (
-    Experiment, Node, Proposal, Thread,
-    _experiment_from_row, _node_from_row, _proposal_from_row, _thread_from_row,
+    Episode, Experiment, Node, Proposal,
+    _episode_from_row, _experiment_from_row, _node_from_row, _proposal_from_row,
 )
 
 
@@ -41,21 +41,21 @@ class ResearchQueries:
             ).fetchone()
             return None if row is None else _node_from_row(row)
 
-    def get_thread(self, thread_id: str) -> Thread | None:
+    def get_episode(self, episode_id: str) -> Episode | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM threads WHERE thread_id = ?", (thread_id,)
+                "SELECT * FROM episodes WHERE episode_id = ?", (episode_id,)
             ).fetchone()
-            return None if row is None else _thread_from_row(row)
+            return None if row is None else _episode_from_row(row)
 
-    def threads_for_node(self, node_id: str, limit: int = 1) -> list[Thread]:
+    def episodes_for_node(self, node_id: str, limit: int = 1) -> list[Episode]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM threads WHERE node_id = ? "
+                "SELECT * FROM episodes WHERE node_id = ? "
                 "ORDER BY last_active_at DESC LIMIT ?",
                 (node_id, limit),
             ).fetchall()
-            return [_thread_from_row(row) for row in rows]
+            return [_episode_from_row(row) for row in rows]
 
     def get_experiment(self, experiment_id: str) -> Experiment | None:
         with self._connect() as conn:
@@ -173,7 +173,7 @@ class ResearchQueries:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT allocation_id, node_id, thread_id, started_at,
+                SELECT allocation_id, node_id, episode_id, started_at,
                        finished_at, proposals_produced
                 FROM proposer_allocations
                 WHERE node_id = ?

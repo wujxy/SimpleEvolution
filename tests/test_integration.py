@@ -28,7 +28,7 @@ def _write_json(path: Path, payload: dict) -> None:
 def test_scheduler_closes_proposer_experiment_loop(env):
     run_dir, store = env
 
-    # Seed a root node and thread.
+    # Seed a root node and episode.
     with store.transaction() as tx:
         root = tx.create_node(
             parent_node_id=None,
@@ -39,10 +39,9 @@ def test_scheduler_closes_proposer_experiment_loop(env):
             depth=0,
             status="active",
         )
-        thread = tx.create_thread(
-            parent_thread_id=None,
+        episode = tx.create_episode(
+            inherited_from_episode_id=None,
             node_id=root.node_id,
-            snapshot_ref="",
         )
 
     config = SchedulerConfig(
@@ -61,7 +60,7 @@ def test_scheduler_closes_proposer_experiment_loop(env):
                 "request_id": allocation_id,
                 "status": "completed",
                 "result": {
-                    "thread_id": thread.thread_id,
+                    "episode_id": episode.episode_id,
                     "node_id": root.node_id,
                     "outcome": "submit",
                     "proposals": [

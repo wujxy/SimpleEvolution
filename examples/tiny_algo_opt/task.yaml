@@ -69,8 +69,16 @@ executor:
   model: deepseek-v4-flash
   base_url: https://api.deepseek.com/anthropic
 
+# LLM token pricing for budget accounting (USD per 1M tokens). Edit to match
+# the models configured above; these are placeholder defaults.
+pricing:
+  input_usd_per_1m: 4.5
+  output_usd_per_1m: 13.5
+  cache_read_usd_per_1m: 0.15
+  cache_creation_usd_per_1m: 0.0
+
 # Scheduling / episode budgets (local smoke defaults; raise for real runs).
-proposal_slots: 2
+proposal_slots: 3
 scientist_steps: 200
 agent_timeout_seconds: 3600
 eval_timeout_seconds: 600
@@ -79,4 +87,3 @@ max_experiment_inflight: 1
 poll_seconds: 2.0
 queue_max_size: 10
 quiescence_window_proposals: 2
-root_fresh_scientists: 3

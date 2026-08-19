@@ -21,8 +21,12 @@ class GitWorkspaceProvider:
         run_dir: str | Path,
         repo_path: str | Path,
     ):
-        self.run_dir = Path(run_dir)
-        self.source_repo = Path(repo_path)
+        # Resolve to absolute paths up front: ``git -C <repo> worktree add
+        # <path>`` interprets a relative ``path`` against the ``-C`` directory,
+        # not the caller's cwd, so a relative run_dir would create worktrees
+        # inside the repo clone (and then fail to find them on read-back).
+        self.run_dir = Path(run_dir).resolve()
+        self.source_repo = Path(repo_path).resolve()
         self.repo = self.run_dir / "repo"
         self.wt_root = self.run_dir / "worktrees"
 

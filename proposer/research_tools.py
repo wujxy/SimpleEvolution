@@ -243,16 +243,24 @@ class ResearchCommandRunner:
         if not isinstance(command, str) or not command.strip():
             raise ValueError("research command must be non-empty")
         container_cwd = self._resolve_cwd(cwd, workdir)
-        git_dir = self._worktree_git_dir()
-        payload = [
-            "env",
-            f"GIT_DIR={git_dir}",
-            "GIT_COMMON_DIR=/repo/.git",
-            "GIT_WORK_TREE=/work",
-            "bash",
-            "-lc",
-            command,
-        ]
+        payload = ["bash", "-lc", command]
+        # Git history is an OPTIONAL aid (read-only /repo), never a
+        # precondition: if the worktree gitdir can't be translated, run the
+        # command bare so a broken pointer never blocks plain shell work.
+        # (SimpleLoop gates this behind ``if self.history_dir is not None``;
+        # here history is always on, so the gate is best-effort instead.)
+        try:
+            git_dir = self._worktree_git_dir()
+        except ValueError:
+            git_dir = None
+        if git_dir is not None:
+            payload = [
+                "env",
+                f"GIT_DIR={git_dir}",
+                "GIT_COMMON_DIR=/repo/.git",
+                "GIT_WORK_TREE=/work",
+                *payload,
+            ]
         extra_binds = [
             f"{self.repo.resolve()}:/repo:ro",
             f"{self.scratch.resolve()}:/scratch:rw",

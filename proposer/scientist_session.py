@@ -52,9 +52,9 @@ def _resolve_session_dir(run_dir: Path, lane_id: int) -> Path:
     return new
 
 
-def _resolve_thread_session_dir(run_dir: Path, thread_id: str) -> Path:
-    """Thread-based session directory for SimpleEvolution."""
-    return Path(run_dir) / "threads" / thread_id / "session"
+def _resolve_episode_session_dir(run_dir: Path, episode_id: str) -> Path:
+    """Episode-based session directory for SimpleEvolution."""
+    return Path(run_dir) / "episodes" / episode_id / "session"
 
 
 def read_expectations(run_dir: Path) -> dict[int, dict]:
@@ -115,17 +115,17 @@ class ScientistSession:
         return self.session_dir / "expectations.jsonl"
 
     @classmethod
-    def load_or_create_for_thread(
+    def load_or_create_for_episode(
         cls,
         run_dir: Path,
-        thread_id: str,
+        episode_id: str,
         *,
         prompt_version: str,
     ) -> "ScientistSession":
-        """Load or create a ScientistSession keyed by thread identity."""
-        session_dir = _resolve_thread_session_dir(run_dir, thread_id)
+        """Load or create a ScientistSession keyed by episode identity."""
+        session_dir = _resolve_episode_session_dir(run_dir, episode_id)
         session_dir.mkdir(parents=True, exist_ok=True)
-        return cls._load_from_dir(session_dir, prompt_version, thread_id=thread_id)
+        return cls._load_from_dir(session_dir, prompt_version, episode_id=episode_id)
 
     @classmethod
     def load_or_create(
@@ -147,9 +147,9 @@ class ScientistSession:
         session_dir: Path,
         prompt_version: str,
         *,
-        thread_id: str | None = None,
+        episode_id: str | None = None,
     ) -> "ScientistSession":
-        """Shared loader used by lane and thread entry points."""
+        """Shared loader used by lane and episode entry points."""
         meta: dict = {}
         if session_dir.joinpath("meta.json").exists():
             try:
@@ -170,14 +170,14 @@ class ScientistSession:
                 "created_round": None,
                 "last_round": None,
                 "last_base_sha": None,
-                "thread_id": thread_id,
+                "episode_id": episode_id,
             }
             session_dir.joinpath("meta.json").write_text(
                 json.dumps(meta, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-        elif thread_id is not None:
-            meta["thread_id"] = thread_id
+        elif episode_id is not None:
+            meta["episode_id"] = episode_id
             session_dir.joinpath("meta.json").write_text(
                 json.dumps(meta, ensure_ascii=False, indent=2),
                 encoding="utf-8",

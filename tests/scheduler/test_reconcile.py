@@ -29,7 +29,7 @@ def test_reconcile_ingests_offline_experiment_result():
                 depth=0,
                 status="active",
             )
-            thread = tx.create_thread(parent_thread_id=None, node_id=root.node_id, snapshot_ref="")
+            episode = tx.create_episode(inherited_from_episode_id=None, node_id=root.node_id)
 
         config = SchedulerConfig(
             max_proposer_inflight=0,
@@ -71,7 +71,7 @@ def test_reconcile_ingests_offline_experiment_result():
                 Proposal(
                     proposal_id="p1",
                     node_id=root.node_id,
-                    thread_id=thread.thread_id,
+                    episode_id=episode.episode_id,
                     instruction="x",
                     rationale={},
                     status="running",

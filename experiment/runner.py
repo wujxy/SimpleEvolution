@@ -126,6 +126,13 @@ class ExperimentRunner:
 
         return TraceStore(self.request.run_dir)
 
+    def _usage_observer(self):
+        """Bound executor token-usage recorder (import cycle safe)."""
+        from simpleevo.trace.usage import UsageRecorder
+
+        recorder = UsageRecorder(self.request.run_dir)
+        return lambda usage: recorder.record("executor", usage)
+
     def _run_executor(self, workspace: SourceWorkspace) -> ExecutionResult:
         sandbox = ApptainerSandbox(userns=True)
         executor_cfg = dict(self.request.executor)
@@ -147,6 +154,7 @@ class ExperimentRunner:
             allowed_tools="Read,Edit,Write,Bash",
             model=executor_cfg.get("model") or None,
             trace_store=self._trace_store(),
+            usage_observer=self._usage_observer(),
             invocation_id=(
                 f"experiment-{self.request.attempt_id}"
                 if self.request.attempt_id

@@ -39,7 +39,7 @@ Scheduler 唯一带"演化算法味道"的职责是 Frontier Selection（§7.2�
 | Proposal | Scientist 在某 Node 上的待验证判断，属于 Thread × Node | 认知，尚未成为事实 |
 | Experiment | 一次逻辑科学验证（Proposal → result SHA、metrics、gate、Child Node） | 完成即事实，哪怕结果不好 |
 | Attempt | Experiment 的一次实际执行 | 基础设施层概念，挂在 Experiment identity 下 |
-| Scientist Thread | 一条认知 lineage，可快照、可 fork、可被任意空闲 Proposer Job 恢复 | 认知 identity，≠ 进程 / 机器 / Node |
+| Scientist Thread | 一次 Scientist research episode 的 identity：在某个 Node 上研究、一次性提交 proposal batch、冻结一个 final cognition 后终结；fork 产生的是继承父 final cognition 的新 Thread | 认知 identity，≠ 进程 / 机器 / Node；single-use |
 
 评价 Node 的两个维度分离：**Gate = world validity**（是否仍属于允许研究的问题空间），**Objective = world quality**（表现如何；变差不剥夺合法性）。
 
@@ -269,7 +269,17 @@ Experiment 保存：
 
 ### 3.4 Scientist Thread
 
-Scientist Thread 表示一条持续的认知 lineage。
+Scientist Thread 是一次 Scientist research episode 的 identity，**不是一条长期存活的认知 lineage**。
+
+一个 Thread 的生命周期是 single-use：
+
+```text
+T7 @ N8
+↓ 完整研究
+final cognition S7
+↓ 一次性提交 proposal batch
+↓ T7 终结
+```
 
 它不是：
 
@@ -277,20 +287,17 @@ Scientist Thread 表示一条持续的认知 lineage。
 - 一台机器
 - 一个 HTCondor Job
 - 一个 Node
+- 一条可反复 schedule 的长期 identity
 
-它表示某个 Scientist 持续发展的研究认识。
+连续性体现在 **cognition lineage**，不是同一个长期存活的 Thread：Child Node 产生后 fork 出**新的** Thread（如 T21），它继承 Parent Thread（T7）的 final cognition S7，再由各自不同的 Experiment 反馈和 Node World 分叉。完成一次 episode 的 Thread 不再被重新 schedule——若某 Node 仍需更多研究，用 reseed 显式挂一个 fresh Thread。
 
-Scientist Thread 可以：
-
-- 从 Parent Node 延续到 Child Node；
-- 在多个 Child Node 出现时 fork；
-- 被任意空闲 Proposer Job 恢复。
+Resume ≠ Evolution：Resume 是同一 Thread 在 episode 未完成（crash/API 失败）时重载其已持久化 session 重试；Evolution 是 episode 完成后 fork 出新 Thread 继承 final cognition。两者不能混淆。
 
 因此：
 
 `Proposer Worker = 计算资源`
 
-`Scientist Thread = 认知 identity`
+`Scientist Thread = 一次 episode 的认知 identity（single-use）`
 
 `Node = 客观 Research World`
 
@@ -588,18 +595,18 @@ T7 continues @ N8
 
 `Judgment → Experiment → Reality → Belief Revision`
 
-如果一个 Scientist 的多个 Proposal 都产生 Child：
+如果一个 Scientist episode 的多个 Proposal 都产生 Child：
 
 ```text
           T7 @ N3
          /       \
        N8         N9
-      T7a         T7b
+       T8         T9
 ```
 
-Scientist cognition 从 Proposal 提交时的 snapshot 分叉。
+Scientist cognition 从 **completed episode 的 final cognition**（S7）分叉：T7 在 N3 完成研究、冻结一个 final cognition S7、一次性提交整个 batch；P(N8) 与 P(N9) 共享同一个 S7，各自的 Child 继承 S7 再由不同的 Experiment 反馈与 Node World 分叉。
 
-因此每个 Proposal 都应对应明确的 Scientist cognitive snapshot，确保 Child Scientist lineage 在异步完成和 Resume 后仍然确定。
+因此每个 **completed Scientist episode 只产生一个 final cognitive snapshot**，整个 proposal batch 共享它；Child Thread 继承产生这批 Proposal 的 Parent Thread 的 final cognition，确保 Child Scientist lineage 在异步完成和 Resume 后仍然确定。
 
 Snapshot 与实验结果的拼接点是固定的：**snapshot 冻结在 Proposal 提交时刻，事后不被修改**；Experiment 结果不写入 snapshot，而是由 Scheduler 在下一次 Proposer Job 启动时，从 L2 事实组装 world transition 记录（parent → child 的 metrics / gate / diff），与冻结的 L3 快照一起作为 Job 输入。认知保持"提交时的我"，现实由 Harness 在启动时呈现，两者在 prompt 层相遇。
 

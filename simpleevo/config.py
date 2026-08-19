@@ -32,6 +32,7 @@ class EvolutionConfig:
     researcher: Mapping[str, Any] = field(default_factory=dict)
     executor: Mapping[str, Any] = field(default_factory=dict)
     context: Mapping[str, Any] = field(default_factory=dict)
+    pricing: Mapping[str, Any] = field(default_factory=dict)
     prompt_dir: Path | None = None
     proposal_slots: int = 3
     scientist_steps: int = 200
@@ -44,7 +45,7 @@ class EvolutionConfig:
     poll_seconds: float = 5.0
     queue_max_size: int = 10
     quiescence_window_proposals: int = 2
-    root_fresh_scientists: int = 3
+    root_fresh_scientists: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict (safe for YAML/JSON)."""
@@ -64,6 +65,7 @@ class EvolutionConfig:
             "researcher": dict(self.researcher),
             "executor": dict(self.executor),
             "context": dict(self.context),
+            "pricing": dict(self.pricing),
             "prompt_dir": str(self.prompt_dir) if self.prompt_dir else None,
             "proposal_slots": self.proposal_slots,
             "scientist_steps": self.scientist_steps,
@@ -101,6 +103,7 @@ class EvolutionConfig:
             researcher=dict(raw.get("researcher", {})),
             executor=dict(raw.get("executor", {})),
             context=dict(raw.get("context", {})),
+            pricing=dict(raw.get("pricing", {})),
             prompt_dir=Path(prompt_dir) if prompt_dir else None,
             proposal_slots=int(raw.get("proposal_slots", 3)),
             scientist_steps=int(raw.get("scientist_steps", 200)),
@@ -113,7 +116,7 @@ class EvolutionConfig:
             poll_seconds=float(raw.get("poll_seconds", 5.0)),
             queue_max_size=int(raw.get("queue_max_size", 10)),
             quiescence_window_proposals=int(raw.get("quiescence_window_proposals", 2)),
-            root_fresh_scientists=int(raw.get("root_fresh_scientists", 3)),
+            root_fresh_scientists=int(raw.get("root_fresh_scientists", 1)),
         )
 
 

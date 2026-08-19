@@ -14,7 +14,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .data import TreeView, best_so_far, load_tree_view, winner_history
+from .data import (
+    TreeView, best_so_far, budget_series, load_tree_view, winner_history,
+)
 
 
 def _num(value) -> float | None:
@@ -125,8 +127,40 @@ def _pareto_axis(view: TreeView, plt, ax):
     return ax
 
 
-def write_plots(view: TreeView, out_dir: str | Path) -> list[Path]:
-    """Write progress.png (best-so-far + winner) and pareto.png (≥2 axes)."""
+def _budget_axis(view: TreeView, plt, ax, run_dir) -> None:
+    series = budget_series(view, run_dir)
+    styles = {
+        "total": ("tab:blue", "-"),
+        "proposer": ("tab:orange", "--"),
+        "executor": ("tab:green", "--"),
+    }
+    drawn = False
+    for name, (color, linestyle) in styles.items():
+        points = series.get(name, [])
+        if not points:
+            continue
+        ax.step(
+            [p[0] for p in points], [p[1] for p in points],
+            where="post", color=color, linestyle=linestyle,
+            label=f"{name} spend",
+        )
+        drawn = True
+    if not drawn:
+        ax.text(
+            0.5, 0.5, "no usage recorded yet",
+            ha="center", va="center", transform=ax.transAxes,
+        )
+    ax.set_xlabel("cumulative cost (USD)")
+    ax.set_ylabel(view.objective_key)
+    ax.set_title(f"performance vs budget ({view.objective_key})")
+    ax.grid(alpha=0.3)
+    ax.legend()
+
+
+def write_plots(
+    view: TreeView, out_dir: str | Path, run_dir: str | Path,
+) -> list[Path]:
+    """Write progress.png, budget.png, and (≥2 axes) pareto.png."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     plt = _prepare()
@@ -140,6 +174,15 @@ def write_plots(view: TreeView, out_dir: str | Path) -> list[Path]:
     plt.close(fig)
 
     written = [progress]
+
+    fig, ax = plt.subplots(figsize=(8, 4))
+    _budget_axis(view, plt, ax, run_dir)
+    fig.tight_layout()
+    budget = out_dir / "budget.png"
+    fig.savefig(budget, dpi=120)
+    plt.close(fig)
+    written.append(budget)
+
     if len(view.axes) >= 2:
         fig, ax = plt.subplots(figsize=(6, 5))
         if _pareto_axis(view, plt, ax) is not None:
@@ -152,4 +195,4 @@ def write_plots(view: TreeView, out_dir: str | Path) -> list[Path]:
 
 
 def render(run_dir: str | Path, out_dir: str | Path) -> list[Path]:
-    return write_plots(load_tree_view(run_dir), out_dir)
+    return write_plots(load_tree_view(run_dir), out_dir, run_dir)

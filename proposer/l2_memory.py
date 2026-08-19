@@ -2,7 +2,7 @@
 
 Replaces the SimpleLoop MemoryService's experiment ledger (history.jsonl keyed by
 round) with queries against the SimpleEvolution SQLite L2 store.  Findings remain
-a proposer-local concept stored under the thread's session directory.
+a proposer-local concept stored under the episode's session directory.
 """
 from __future__ import annotations
 

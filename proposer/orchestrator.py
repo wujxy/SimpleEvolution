@@ -49,10 +49,10 @@ class LaneResult:
 
 
 @dataclass(frozen=True)
-class ThreadResult:
-    """One thread episode's outcome (SimpleEvolution anchor)."""
+class EpisodeResult:
+    """One Scientist episode's outcome (SimpleEvolution anchor)."""
 
-    thread_id: str
+    episode_id: str
     node_id: str
     proposals: tuple = ()  # tuple[ResearchProposal, ...]
     outcome: str = "submit"
@@ -230,10 +230,10 @@ class ProposerOrchestrator:
             proposal_slots=proposal_slots, scientist_steps=scientist_steps,
         )
 
-    def run_thread_episode(
+    def run_episode(
         self,
         *,
-        thread_id: str,
+        episode_id: str,
         node_id: str,
         node_sha: str,
         workspace: Path,
@@ -250,14 +250,14 @@ class ProposerOrchestrator:
         hints: list[str] | None = None,
         proposal_slots: int = 1,
         scientist_steps: int = 200,
-    ) -> "ThreadResult":
-        """Run one Scientist episode keyed by (thread_id, node_id).
+    ) -> "EpisodeResult":
+        """Run one Scientist episode keyed by (episode_id, node_id).
 
         This is the SimpleEvolution entry point: no lane_id, no round_id.
         """
         started = time.monotonic()
-        session = ScientistSession.load_or_create_for_thread(
-            run_dir, thread_id, prompt_version=SCIENTIST_PROMPT_VERSION,
+        session = ScientistSession.load_or_create_for_episode(
+            run_dir, episode_id, prompt_version=SCIENTIST_PROMPT_VERSION,
         )
         transition_text = build_world_transition_pack(world_transition or {}) or None
         try:
@@ -271,10 +271,10 @@ class ProposerOrchestrator:
                 world_transition=transition_text,
             )
         except (ProposerError, Exception) as exc:
-            print(f"[orchestrator] thread {thread_id} research failed: {exc}", flush=True)
+            print(f"[orchestrator] episode {episode_id} research failed: {exc}", flush=True)
             _safe_save_meta(session, node_id=node_id, node_sha=node_sha)
-            return ThreadResult(
-                thread_id=thread_id,
+            return EpisodeResult(
+                episode_id=episode_id,
                 node_id=node_id,
                 outcome="error",
                 abstain_reason=str(exc),
@@ -285,12 +285,12 @@ class ProposerOrchestrator:
         outcome = "abstain" if result.abstained else "submit"
         elapsed = time.monotonic() - started
         print(
-            f"[orchestrator] thread {thread_id} → {len(result.proposals)} "
+            f"[orchestrator] episode {episode_id} → {len(result.proposals)} "
             f"proposal(s) in {elapsed:.1f}s",
             flush=True,
         )
-        return ThreadResult(
-            thread_id=thread_id,
+        return EpisodeResult(
+            episode_id=episode_id,
             node_id=node_id,
             proposals=tuple(result.proposals),
             outcome=outcome,

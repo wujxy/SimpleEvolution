@@ -39,24 +39,28 @@ CREATE INDEX IF NOT EXISTS idx_nodes_parent ON nodes(parent_node_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_experiment ON nodes(experiment_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);
 
--- Scientist cognitive lineages.
-CREATE TABLE IF NOT EXISTS threads (
-    thread_id TEXT PRIMARY KEY,
-    parent_thread_id TEXT REFERENCES threads(thread_id),
+-- Scientist episodes: one Scientist's one complete research act on one Node.
+-- Default 1 Node -> 1 Episode; the 1:N relationship is retained so a future
+-- variation operator (re-framing / mutation) can add further episodes to a
+-- Node without a migration.  ``variation_operator`` names the research
+-- condition that produced this episode (nullable in the MVP).
+CREATE TABLE IF NOT EXISTS episodes (
+    episode_id TEXT PRIMARY KEY,
+    inherited_from_episode_id TEXT REFERENCES episodes(episode_id),
     node_id TEXT NOT NULL REFERENCES nodes(node_id),
-    snapshot_ref TEXT,
+    variation_operator TEXT,
     created_at REAL NOT NULL,
     last_active_at REAL NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_threads_parent ON threads(parent_thread_id);
-CREATE INDEX IF NOT EXISTS idx_threads_node ON threads(node_id);
+CREATE INDEX IF NOT EXISTS idx_episodes_inherited ON episodes(inherited_from_episode_id);
+CREATE INDEX IF NOT EXISTS idx_episodes_node ON episodes(node_id);
 
 -- Proposals: Scientist judgment waiting to be tested.
 CREATE TABLE IF NOT EXISTS proposals (
     proposal_id TEXT PRIMARY KEY,
     node_id TEXT NOT NULL REFERENCES nodes(node_id),
-    thread_id TEXT NOT NULL REFERENCES threads(thread_id),
+    episode_id TEXT NOT NULL REFERENCES episodes(episode_id),
     instruction TEXT NOT NULL,
     rationale TEXT NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'queued'
@@ -68,7 +72,7 @@ CREATE TABLE IF NOT EXISTS proposals (
 );
 
 CREATE INDEX IF NOT EXISTS idx_proposals_node ON proposals(node_id);
-CREATE INDEX IF NOT EXISTS idx_proposals_thread ON proposals(thread_id);
+CREATE INDEX IF NOT EXISTS idx_proposals_episode ON proposals(episode_id);
 CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
 
 -- Experiments: one logical scientific verification.
@@ -139,7 +143,7 @@ CREATE INDEX IF NOT EXISTS idx_frontier_axes_node ON frontier_axes(node_id);
 CREATE TABLE IF NOT EXISTS proposer_allocations (
     allocation_id TEXT PRIMARY KEY,
     node_id TEXT NOT NULL REFERENCES nodes(node_id),
-    thread_id TEXT NOT NULL REFERENCES threads(thread_id),
+    episode_id TEXT NOT NULL REFERENCES episodes(episode_id),
     reserved_proposal_ids TEXT NOT NULL DEFAULT '[]',
     started_at REAL NOT NULL,
     finished_at REAL,
@@ -147,7 +151,7 @@ CREATE TABLE IF NOT EXISTS proposer_allocations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_allocations_node ON proposer_allocations(node_id);
-CREATE INDEX IF NOT EXISTS idx_allocations_thread ON proposer_allocations(thread_id);
+CREATE INDEX IF NOT EXISTS idx_allocations_episode ON proposer_allocations(episode_id);
 
 -- Scheduler audit events.
 CREATE TABLE IF NOT EXISTS scheduler_events (

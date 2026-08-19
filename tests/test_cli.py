@@ -39,7 +39,7 @@ def _config_for_repo(repo: Path) -> EvolutionConfig:
     )
 
 
-def test_run_seeds_root_node_and_thread():
+def test_run_seeds_root_node_and_episode():
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp) / "run"
         repo = Path(tmp) / "repo"
@@ -70,8 +70,8 @@ axes:
         nodes = queries.list_nodes()
         assert len(nodes) == 1
         assert nodes[0].depth == 0
-        threads = queries.threads_for_node(nodes[0].node_id)
-        assert len(threads) == 1
+        episodes = queries.episodes_for_node(nodes[0].node_id, limit=1000)
+        assert len(episodes) == 1
         assert (run_dir / "task.yaml").exists()
 
 
@@ -143,7 +143,7 @@ axes:
         assert rc == 0
 
 
-def test_reseed_creates_fresh_thread():
+def test_reseed_creates_fresh_episode():
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp) / "run"
         repo = Path(tmp) / "repo"
@@ -171,8 +171,8 @@ axes:
         main(["--run-dir", str(run_dir), "run", "--config", str(config_path), "--max-steps", "1"])
         queries = ResearchQueries(run_dir / "simpleevo.db")
         node = queries.list_nodes()[0]
-        before = len(queries.threads_for_node(node.node_id, limit=100))
+        before = len(queries.episodes_for_node(node.node_id, limit=100))
         rc = main(["--run-dir", str(run_dir), "reseed", "--node", node.node_id])
         assert rc == 0
-        after = len(queries.threads_for_node(node.node_id, limit=100))
+        after = len(queries.episodes_for_node(node.node_id, limit=100))
         assert after == before + 1

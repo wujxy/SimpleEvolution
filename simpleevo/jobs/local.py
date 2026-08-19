@@ -123,9 +123,17 @@ class LocalSubmitter:
         argv: list[str],
     ) -> str:
         write_request(manifest_path, request)
-        subprocess.Popen(
-            [self.python, *argv, "--manifest", str(manifest_path)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        # Capture worker stdout/stderr to a log next to its manifest so a
+        # crash is diagnosable.  (The scheduler only polls ``result.json`` and
+        # never inspects process state, so a silent crash otherwise leaves the
+        # run hung forever.)
+        log_file = open(manifest_path.parent / "worker.log", "ab")
+        try:
+            subprocess.Popen(
+                [self.python, *argv, "--manifest", str(manifest_path)],
+                stdout=log_file,
+                stderr=log_file,
+            )
+        finally:
+            log_file.close()
         return str(result_path)

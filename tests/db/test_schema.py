@@ -21,7 +21,7 @@ def test_schema_creates_all_tables():
         tables = {row[0] for row in cur.fetchall()}
         expected = {
             "nodes",
-            "threads",
+            "episodes",
             "proposals",
             "experiments",
             "attempts",

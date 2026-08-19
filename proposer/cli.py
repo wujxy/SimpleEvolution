@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
-import tarfile
 from pathlib import Path
 
 from experiment.git_worktree import GitWorkspaceProvider, WorkspaceSpec
@@ -24,21 +24,25 @@ def _load_manifest(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _unpack_snapshot(snapshot_ref: Path | None, session_dir: Path) -> None:
-    """Unpack a snapshot tarball into the thread's session directory."""
-    session_dir.mkdir(parents=True, exist_ok=True)
-    if snapshot_ref is None or not snapshot_ref.exists():
+def _inherit_parent_session(
+    run_dir: Path,
+    inherited_from_episode_id: str | None,
+    session_dir: Path,
+) -> None:
+    """Copy the parent episode's final cognition into this episode's session.
+
+    One Node = one Episode; a child episode starts from the parent episode's
+    persisted session dir (its final cognition) rather than a repacked
+    snapshot tarball.  Only run on first entry — a crash-retry resumes the
+    already-persisted session instead of re-inheriting (Resume ≠ Evolution).
+    """
+    if not inherited_from_episode_id:
         return
-    with tarfile.open(snapshot_ref, "r:gz") as tar:
-        tar.extractall(session_dir)
-
-
-def _pack_snapshot(session_dir: Path, snapshot_ref: Path) -> None:
-    """Pack the session directory into a snapshot tarball."""
-    snapshot_ref.parent.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(snapshot_ref, "w:gz") as tar:
-        for item in session_dir.iterdir():
-            tar.add(item, arcname=item.name)
+    parent_session_dir = run_dir / "episodes" / inherited_from_episode_id / "session"
+    if not parent_session_dir.is_dir():
+        return
+    session_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(parent_session_dir, session_dir, dirs_exist_ok=True)
 
 
 def _atomic_write(path: Path, payload: dict) -> None:
@@ -73,13 +77,12 @@ def _write_l1_trace(
         print(f"[trace] proposer L1 write failed: {exc}", flush=True)
 
 
-def _result_to_dict(result, proposals_with_meta, final_snapshot_ref) -> dict:
+def _result_to_dict(result, proposals_with_meta) -> dict:
     return {
-        "thread_id": result.thread_id,
+        "episode_id": result.episode_id,
         "node_id": result.node_id,
         "outcome": result.outcome,
         "proposals": proposals_with_meta,
-        "final_snapshot_ref": final_snapshot_ref,
         "abstain_reason": result.abstain_reason,
         "telemetry": result.deliberation_telemetry,
         "trace": result.trace,
@@ -112,20 +115,6 @@ def _proposal_to_dict(proposal, proposal_id: str) -> dict:
     }
 
 
-def _pack_final_snapshot(
-    session_dir: Path, thread_id: str, run_dir: Path,
-) -> Path:
-    """Freeze one completed episode's final cognition into ONE snapshot.
-
-    One Node = one Scientist episode = one final cognitive state; the whole
-    proposal batch shares this single snapshot (§ snapshot semantics), not one
-    snapshot per proposal.
-    """
-    snapshot_path = run_dir / "threads" / thread_id / "final.tgz"
-    _pack_snapshot(session_dir, snapshot_path)
-    return snapshot_path
-
-
 def _enrich_proposals(proposals: tuple, proposal_ids: list[str]) -> list[dict]:
     """Attach the Scheduler-issued proposal_ids to the proposals."""
     if len(proposal_ids) < len(proposals):
@@ -148,14 +137,13 @@ def main(argv: list[str] | None = None) -> int:
     payload = manifest.get("payload", manifest)
 
     run_dir = Path(payload["run_dir"])
-    thread_id = payload["thread_id"]
+    episode_id = payload["episode_id"]
     node_id = payload["node_id"]
     node_sha = payload["node_sha"]
     proposal_ids = list(payload.get("proposal_ids", []))
     attempt_id = str(payload.get("attempt_id", ""))
     attempt = int(payload.get("attempt", 1))
-    snapshot_ref_raw = payload.get("snapshot_ref") or ""
-    snapshot_ref = Path(snapshot_ref_raw) if snapshot_ref_raw else None
+    inherited_from_episode_id = payload.get("inherited_from_episode_id") or None
     world_transition = payload.get("world_transition") or {}
     goal = payload["goal"]
     editable = list(payload.get("editable_paths", []))
@@ -171,19 +159,18 @@ def main(argv: list[str] | None = None) -> int:
     provider = GitWorkspaceProvider(run_dir, repo_path)
     provider.initialize()
     workspace = provider.create(WorkspaceSpec(
-        f"proposer-{thread_id}-{node_id[:8]}",
+        f"proposer-{episode_id}-{node_id[:8]}",
         node_sha,
     ))
 
-    # Session handling: unpack the inherited parent cognition only on FIRST
-    # entry (no lived trajectory yet).  A crash-retry of the same episode
-    # resumes the already-persisted session instead of overwriting it with the
-    # entry snapshot (Resume ≠ Evolution).
-    session_dir = run_dir / "threads" / thread_id / "session"
+    # Session handling: inherit the parent episode's final cognition only on
+    # FIRST entry (no lived trajectory yet).  A crash-retry of the same episode
+    # resumes the already-persisted session instead of re-inheriting (Resume ≠
+    # Evolution).
+    session_dir = run_dir / "episodes" / episode_id / "session"
     session_dir.mkdir(parents=True, exist_ok=True)
     if not (session_dir / "session.jsonl").exists():
-        if snapshot_ref is not None and snapshot_ref.exists():
-            _unpack_snapshot(snapshot_ref, session_dir)
+        _inherit_parent_session(run_dir, inherited_from_episode_id, session_dir)
 
     memory_service = L2MemoryService(run_dir)
     runtime = ApptainerRuntime(
@@ -192,22 +179,25 @@ def main(argv: list[str] | None = None) -> int:
         run_dir=run_dir,
     )
     researcher_cfg = payload.get("researcher", {})
+    from simpleevo.trace.usage import UsageRecorder
+
+    usage_recorder = UsageRecorder(run_dir)
     orchestrator = ProposerOrchestrator(
         model=build_chat_model(researcher_cfg),
         runtime=runtime,
         timeout_seconds=int(payload.get("agent_timeout_seconds", 3600)),
         command_timeout_seconds=int(researcher_cfg.get("command_timeout_seconds", 120)),
         command_output_cap_chars=int(researcher_cfg.get("command_output_cap_chars", 12000)),
+        usage_observer=lambda usage: usage_recorder.record("proposer", usage),
         context_policy=ContextPolicy.from_config(payload.get("context")),
     )
 
     status = "completed"
     error = None
     proposals_with_meta: list[dict] = []
-    final_snapshot_ref = ""
     try:
-        result = orchestrator.run_thread_episode(
-            thread_id=thread_id,
+        result = orchestrator.run_episode(
+            episode_id=episode_id,
             node_id=node_id,
             node_sha=node_sha,
             workspace=workspace.path,
@@ -219,7 +209,12 @@ def main(argv: list[str] | None = None) -> int:
                 "read_only_binds": payload.get("read_only_binds", []),
             }),
             memory_service=memory_service,
-            repo_path=repo_path,
+            # The Scientist's research commands validate the workspace's
+            # worktree gitdir against this repo's ``.git/worktrees``. That
+            # metadata lives in the CLONE GitWorkspaceProvider made
+            # (``run_dir/repo``), not the source repo — pass the clone, the
+            # way the experiment worker does via ``.repo``.
+            repo_path=provider.repo,
             run_dir=run_dir,
             gate_block=gate_block,
             prompt_dir=Path(payload["prompt_dir"]) if payload.get("prompt_dir") else None,
@@ -237,14 +232,11 @@ def main(argv: list[str] | None = None) -> int:
                 result.abstain_reason or "proposer episode errored")
         proposals_with_meta = _enrich_proposals(
             result.proposals, proposal_ids)
-        if result.proposals:
-            final_snapshot_ref = str(_pack_final_snapshot(
-                session_dir, thread_id, run_dir))
     except Exception as exc:
         status = "failed"
         error = str(exc)
         result = type("R", (), {
-            "thread_id": thread_id,
+            "episode_id": episode_id,
             "node_id": node_id,
             "outcome": "error",
             "proposals": (),
@@ -257,10 +249,10 @@ def main(argv: list[str] | None = None) -> int:
 
     _write_l1_trace(
         run_dir,
-        f"proposer-{attempt_id}" if attempt_id else f"proposer-{thread_id}",
+        f"proposer-{attempt_id}" if attempt_id else f"proposer-{episode_id}",
         role="proposer",
         identity={
-            "thread_id": thread_id,
+            "episode_id": episode_id,
             "node_id": node_id,
             "attempt_id": attempt_id or None,
             "attempt": str(attempt),
@@ -275,9 +267,9 @@ def main(argv: list[str] | None = None) -> int:
         {
             "protocol": manifest.get("protocol", "simpleevo.worker.v1"),
             "kind": "proposer",
-            "request_id": manifest.get("request_id", thread_id),
+            "request_id": manifest.get("request_id", episode_id),
             "status": status,
-            "result": _result_to_dict(result, proposals_with_meta, final_snapshot_ref),
+            "result": _result_to_dict(result, proposals_with_meta),
             "error": error,
             "execution": {
                 "scheduler": "local",

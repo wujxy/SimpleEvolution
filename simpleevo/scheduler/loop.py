@@ -185,15 +185,15 @@ class Scheduler:
             self._allocations_counter,
             capacity,
         ):
-            thread = self._idle_thread_for_node(node_id)
-            if thread is None:
+            episode = self._idle_episode_for_node(node_id)
+            if episode is None:
                 continue
             node = self._queries.get_node(node_id)
             if node is None:
                 continue
             allocation = self.store.allocate_proposer(
                 node_id=node_id,
-                thread_id=thread.thread_id,
+                episode_id=episode.episode_id,
                 proposal_slots=self.config.proposal_slots,
             )
             attempt = self.store.record_attempt(
@@ -207,36 +207,39 @@ class Scheduler:
             self.submit_proposer(
                 allocation.allocation_id,
                 self._proposer_payload(
-                    allocation, node, thread, attempt.attempt_id, ordinal),
+                    allocation, node, episode, attempt.attempt_id, ordinal),
             )
             jobs.append(allocation.allocation_id)
         return jobs
 
-    def _idle_thread_for_node(self, node_id: str):
-        """Return a thread for ``node_id`` that has no in-flight allocation.
+    def _idle_episode_for_node(self, node_id: str):
+        """Return a FRESH episode for ``node_id`` that has never run.
 
-        A Node may hold several Threads (root's fresh scientists, forked
-        children).  Each allocation binds (node, thread); the same thread is
-        never allocated twice concurrently, so a fresh root spreads across its
-        threads and no session race occurs (§3.4 / §7.1).
+        A Scientist Episode is single-use (§3.4): one episode = one research
+        act = one final cognition.  An episode that has ever had an allocation
+        (in-flight OR completed) is terminal and must never be re-scheduled;
+        children get their own fresh episode.  A node has one fresh episode by
+        default; single-use prevents that episode from being re-picked after
+        it ends (which would otherwise overwrite its session and corrupt child
+        inheritance).
         """
-        busy = {a.thread_id for a in self.store.open_allocations()}
-        threads = self._queries.threads_for_node(node_id, limit=1000)
-        for thread in threads:
-            if thread.thread_id not in busy:
-                return thread
+        allocated = self.store.allocated_episode_ids()
+        episodes = self._queries.episodes_for_node(node_id, limit=1000)
+        for episode in episodes:
+            if episode.episode_id not in allocated:
+                return episode
         return None
 
     def _proposer_payload(
-        self, allocation, node, thread, attempt_id: str, attempt: int,
+        self, allocation, node, episode, attempt_id: str, attempt: int,
     ) -> dict[str, Any]:
         """Assemble the proposer job payload from L2 (also used on re-submit)."""
         return {
             "allocation_id": allocation.allocation_id,
             "node_id": node.node_id,
             "node_sha": node.sha,
-            "thread_id": thread.thread_id,
-            "snapshot_ref": thread.snapshot_ref,
+            "episode_id": episode.episode_id,
+            "inherited_from_episode_id": episode.inherited_from_episode_id,
             "proposal_ids": list(allocation.reserved_proposal_ids),
             "world_transition": self._world_transition_for(node),
             "attempt_id": attempt_id,
@@ -388,18 +391,16 @@ class Scheduler:
 
         result = raw.get("result", {})
         node_id = result.get("node_id")
-        thread_id = result.get("thread_id")
+        episode_id = result.get("episode_id")
         proposals = result.get("proposals", [])
-        final_snapshot_ref = result.get("final_snapshot_ref")
         allocation = self.store.get_allocation(allocation_id)
         reserved = allocation.reserved_proposal_ids if allocation else ()
-        if node_id and thread_id and proposals:
+        if node_id and episode_id and proposals:
             self.store.publish_proposals(
                 node_id=node_id,
-                thread_id=thread_id,
+                episode_id=episode_id,
                 proposals=proposals,
                 reserved_proposal_ids=reserved,
-                final_snapshot_ref=final_snapshot_ref,
             )
         self.store.deallocate_proposer(
             allocation_id=allocation_id,
@@ -553,8 +554,8 @@ class Scheduler:
         ):
             return
         node = self._queries.get_node(allocation.node_id)
-        thread = self._queries.get_thread(allocation.thread_id)
-        if node is None or thread is None:
+        episode = self._queries.get_episode(allocation.episode_id)
+        if node is None or episode is None:
             return
         attempt = self.store.record_attempt(
             logical_work_id=allocation_id,
@@ -566,7 +567,7 @@ class Scheduler:
         self.submit_proposer(
             allocation_id,
             self._proposer_payload(
-                allocation, node, thread, attempt.attempt_id, ordinal),
+                allocation, node, episode, attempt.attempt_id, ordinal),
         )
 
     def _resubmit_experiment(self, experiment_id: str) -> None:

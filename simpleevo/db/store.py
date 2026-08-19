@@ -55,11 +55,11 @@ class Node:
 
 
 @dataclass(frozen=True)
-class Thread:
-    thread_id: str
-    parent_thread_id: str | None
+class Episode:
+    episode_id: str
+    inherited_from_episode_id: str | None
     node_id: str
-    snapshot_ref: str
+    variation_operator: str | None
     created_at: float
     last_active_at: float
 
@@ -68,7 +68,7 @@ class Thread:
 class Proposal:
     proposal_id: str
     node_id: str
-    thread_id: str
+    episode_id: str
     instruction: str
     rationale: dict[str, Any]
     status: str
@@ -117,7 +117,7 @@ class FrontierAxis:
 class ProposerAllocation:
     allocation_id: str
     node_id: str
-    thread_id: str
+    episode_id: str
     reserved_proposal_ids: tuple[str, ...]
     started_at: float
     finished_at: float | None
@@ -213,15 +213,14 @@ class ResearchStore:
                 )
                 tx.link_experiment_child(experiment_id, child.node_id)
 
-                # Fork the Scientist Thread, inheriting the parent thread's
-                # final cognitive state (not a per-proposal snapshot).
+                # Seed the child's Scientist Episode, inheriting the parent
+                # episode's final cognition (the child episode copies the
+                # parent's session dir at start, keyed by the inheritance link).
                 proposal = tx.get_proposal(exp.proposal_id)
                 if proposal is not None:
-                    parent_thread = tx.get_thread(proposal.thread_id)
-                    tx.create_thread(
-                        parent_thread_id=proposal.thread_id,
+                    tx.create_episode(
+                        inherited_from_episode_id=proposal.episode_id,
                         node_id=child.node_id,
-                        snapshot_ref=parent_thread.snapshot_ref if parent_thread else "",
                     )
 
             if frontier_config is not None:
@@ -268,10 +267,9 @@ class ResearchStore:
         self,
         *,
         node_id: str,
-        thread_id: str,
+        episode_id: str,
         proposals: Iterable[dict[str, Any]],
         reserved_proposal_ids: Iterable[str] | None = None,
-        final_snapshot_ref: str | None = None,
     ) -> list[Proposal]:
         """Atomically publish a batch of fully-formed proposals.
 
@@ -279,11 +277,6 @@ class ResearchStore:
         Scheduler when the proposer allocation was created, §2.4
         identity-first).  When ``reserved_proposal_ids`` is given, every
         incoming id is validated against it so a worker cannot mint ids.
-
-        ``final_snapshot_ref`` is the ONE final cognitive state of the
-        completed episode that produced this batch; it is recorded on the
-        thread (not per-proposal) so forked child threads inherit the parent
-        Scientist's final state.
         """
         reserved = set(reserved_proposal_ids) if reserved_proposal_ids is not None else None
         created: list[Proposal] = []
@@ -292,9 +285,9 @@ class ResearchStore:
             node = tx.get_node(node_id)
             if node is None:
                 raise ValueError(f"unknown node: {node_id}")
-            thread = tx.get_thread(thread_id)
-            if thread is None:
-                raise ValueError(f"unknown thread: {thread_id}")
+            episode = tx.get_episode(episode_id)
+            if episode is None:
+                raise ValueError(f"unknown episode: {episode_id}")
             for raw in proposals:
                 proposal_id = raw.get("proposal_id")
                 if not proposal_id:
@@ -307,7 +300,7 @@ class ResearchStore:
                     Proposal(
                         proposal_id=proposal_id,
                         node_id=node_id,
-                        thread_id=thread_id,
+                        episode_id=episode_id,
                         instruction=raw["instruction"],
                         rationale=raw.get("rationale", {}),
                         status="queued",
@@ -315,23 +308,20 @@ class ResearchStore:
                     )
                 )
                 created.append(tx.get_proposal(proposal_id))
-            tx.update_thread_last_active(thread_id, now)
-            if final_snapshot_ref:
-                tx.update_thread_snapshot_ref(thread_id, final_snapshot_ref)
+            tx.update_episode_last_active(episode_id, now)
         return created
 
     def allocate_proposer(
         self,
         *,
         node_id: str,
-        thread_id: str,
+        episode_id: str,
         proposal_slots: int = 1,
     ) -> ProposerAllocation:
-        """Record that a proposer slot was allocated to a node/thread.
+        """Record that a proposer slot was allocated to a node/episode.
 
         Pre-reserves ``proposal_slots`` proposal ids (§2.4 identity-first):
-        the ids are issued here by the single writer, handed to the worker,
-        and become both the snapshot filename and the L2 proposal_id.
+        the ids are issued here by the single writer and handed to the worker.
         """
         now = time.time()
         allocation_id = _new_id()
@@ -339,7 +329,7 @@ class ResearchStore:
         allocation = ProposerAllocation(
             allocation_id=allocation_id,
             node_id=node_id,
-            thread_id=thread_id,
+            episode_id=episode_id,
             reserved_proposal_ids=reserved,
             started_at=now,
             finished_at=None,
@@ -371,6 +361,20 @@ class ResearchStore:
                 "SELECT * FROM proposer_allocations WHERE finished_at IS NULL"
             ).fetchall()
             return [_proposer_allocation_from_row(row) for row in rows]
+
+    def allocated_episode_ids(self) -> set[str]:
+        """Return every episode id that has ever been allocated (single-use).
+
+        A Scientist Episode is ONE research act (§3.4): once it has any
+        allocation row — open (in-flight) or closed (terminal) — it must never
+        be scheduled again.  Only episodes with no allocation row are fresh
+        and eligible for a first run.
+        """
+        with self.transaction() as tx:
+            rows = tx._conn.execute(
+                "SELECT DISTINCT episode_id FROM proposer_allocations"
+            ).fetchall()
+            return {row["episode_id"] for row in rows}
 
     def attempts_for_work(
         self,
@@ -654,44 +658,38 @@ class _Transaction:
                 ),
             )
 
-    def create_thread(
+    def create_episode(
         self,
         *,
-        thread_id: str | None = None,
-        parent_thread_id: str | None,
+        episode_id: str | None = None,
+        inherited_from_episode_id: str | None = None,
         node_id: str,
-        snapshot_ref: str,
+        variation_operator: str | None = None,
         created_at: float | None = None,
-    ) -> Thread:
+    ) -> Episode:
         now = created_at or time.time()
-        tid = thread_id or _new_id()
+        eid = episode_id or _new_id()
         self._conn.execute(
             """
-            INSERT INTO threads
-            (thread_id, parent_thread_id, node_id, snapshot_ref,
-             created_at, last_active_at)
+            INSERT INTO episodes
+            (episode_id, inherited_from_episode_id, node_id,
+             variation_operator, created_at, last_active_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (tid, parent_thread_id, node_id, snapshot_ref, now, now),
+            (eid, inherited_from_episode_id, node_id, variation_operator, now, now),
         )
-        return self.get_thread(tid)
+        return self.get_episode(eid)
 
-    def get_thread(self, thread_id: str) -> Thread | None:
+    def get_episode(self, episode_id: str) -> Episode | None:
         row = self._conn.execute(
-            "SELECT * FROM threads WHERE thread_id = ?", (thread_id,)
+            "SELECT * FROM episodes WHERE episode_id = ?", (episode_id,)
         ).fetchone()
-        return None if row is None else _thread_from_row(row)
+        return None if row is None else _episode_from_row(row)
 
-    def update_thread_last_active(self, thread_id: str, when: float) -> None:
+    def update_episode_last_active(self, episode_id: str, when: float) -> None:
         self._conn.execute(
-            "UPDATE threads SET last_active_at = ? WHERE thread_id = ?",
-            (when, thread_id),
-        )
-
-    def update_thread_snapshot_ref(self, thread_id: str, snapshot_ref: str) -> None:
-        self._conn.execute(
-            "UPDATE threads SET snapshot_ref = ? WHERE thread_id = ?",
-            (snapshot_ref, thread_id),
+            "UPDATE episodes SET last_active_at = ? WHERE episode_id = ?",
+            (when, episode_id),
         )
 
     def create_experiment(
@@ -776,14 +774,14 @@ class _Transaction:
         self._conn.execute(
             """
             INSERT INTO proposals
-            (proposal_id, node_id, thread_id, instruction, rationale,
+            (proposal_id, node_id, episode_id, instruction, rationale,
              status, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 proposal.proposal_id,
                 proposal.node_id,
-                proposal.thread_id,
+                proposal.episode_id,
                 proposal.instruction,
                 _json(proposal.rationale),
                 proposal.status,
@@ -868,14 +866,14 @@ class _Transaction:
         self._conn.execute(
             """
             INSERT INTO proposer_allocations
-            (allocation_id, node_id, thread_id, reserved_proposal_ids,
+            (allocation_id, node_id, episode_id, reserved_proposal_ids,
              started_at, finished_at, proposals_produced)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 allocation.allocation_id,
                 allocation.node_id,
-                allocation.thread_id,
+                allocation.episode_id,
                 _json(list(allocation.reserved_proposal_ids)),
                 allocation.started_at,
                 allocation.finished_at,
@@ -944,12 +942,12 @@ def _node_from_row(row: sqlite3.Row) -> Node:
     )
 
 
-def _thread_from_row(row: sqlite3.Row) -> Thread:
-    return Thread(
-        thread_id=row["thread_id"],
-        parent_thread_id=row["parent_thread_id"],
+def _episode_from_row(row: sqlite3.Row) -> Episode:
+    return Episode(
+        episode_id=row["episode_id"],
+        inherited_from_episode_id=row["inherited_from_episode_id"],
         node_id=row["node_id"],
-        snapshot_ref=row["snapshot_ref"],
+        variation_operator=row["variation_operator"],
         created_at=row["created_at"],
         last_active_at=row["last_active_at"],
     )
@@ -959,7 +957,7 @@ def _proposal_from_row(row: sqlite3.Row) -> Proposal:
     return Proposal(
         proposal_id=row["proposal_id"],
         node_id=row["node_id"],
-        thread_id=row["thread_id"],
+        episode_id=row["episode_id"],
         instruction=row["instruction"],
         rationale=_unjson(row["rationale"]),
         status=row["status"],
@@ -986,7 +984,7 @@ def _proposer_allocation_from_row(row: sqlite3.Row) -> ProposerAllocation:
     return ProposerAllocation(
         allocation_id=row["allocation_id"],
         node_id=row["node_id"],
-        thread_id=row["thread_id"],
+        episode_id=row["episode_id"],
         reserved_proposal_ids=tuple(_unjson(row["reserved_proposal_ids"])),
         started_at=row["started_at"],
         finished_at=row["finished_at"],

@@ -23,7 +23,7 @@ def store():
         yield ResearchStore(Path(tmp) / "simpleevo.db")
 
 
-def test_create_root_node_and_thread(store: ResearchStore):
+def test_create_root_node_and_episode(store: ResearchStore):
     with store.transaction() as tx:
         root = tx.create_node(
             parent_node_id=None,
@@ -34,10 +34,9 @@ def test_create_root_node_and_thread(store: ResearchStore):
             depth=0,
             status="active",
         )
-        thread = tx.create_thread(
-            parent_thread_id=None,
+        episode = tx.create_episode(
+            inherited_from_episode_id=None,
             node_id=root.node_id,
-            snapshot_ref="",
         )
 
     assert root.depth == 0
@@ -45,7 +44,7 @@ def test_create_root_node_and_thread(store: ResearchStore):
 
     q = ResearchQueries(store.path)
     assert q.get_node(root.node_id) == root
-    assert q.get_thread(thread.thread_id) == thread
+    assert q.get_episode(episode.episode_id) == episode
 
 
 def test_ingest_experiment_result_creates_child_node(store: ResearchStore):
@@ -59,16 +58,15 @@ def test_ingest_experiment_result_creates_child_node(store: ResearchStore):
             depth=0,
             status="active",
         )
-        thread = tx.create_thread(
-            parent_thread_id=None,
+        episode = tx.create_episode(
+            inherited_from_episode_id=None,
             node_id=root.node_id,
-            snapshot_ref="snap.tgz",
         )
         proposal = tx.create_proposal(
             type("P", (), {
                 "proposal_id": "prop-1",
                 "node_id": root.node_id,
-                "thread_id": thread.thread_id,
+                "episode_id": episode.episode_id,
                 "instruction": "try X",
                 "rationale": {},
                 "status": "queued",
@@ -102,11 +100,11 @@ def test_ingest_experiment_result_creates_child_node(store: ResearchStore):
     assert exp.child_node_id == child.node_id
     assert exp.status == "completed"
 
-    # The forked child thread inherits the PARENT thread's final state, not a
-    # per-proposal snapshot.
-    child_thread = q.get_thread(
-        q.threads_for_node(child.node_id)[0].thread_id)
-    assert child_thread.snapshot_ref == "snap.tgz"
+    # The forked child episode inherits the PARENT episode's final cognition via
+    # the inheritance link, not a per-proposal snapshot.
+    child_episode = q.get_episode(
+        q.episodes_for_node(child.node_id)[0].episode_id)
+    assert child_episode.inherited_from_episode_id == episode.episode_id
 
 
 def test_ingest_gate_failed_does_not_create_node(store: ResearchStore):
@@ -120,16 +118,15 @@ def test_ingest_gate_failed_does_not_create_node(store: ResearchStore):
             depth=0,
             status="active",
         )
-        thread = tx.create_thread(
-            parent_thread_id=None,
+        episode = tx.create_episode(
+            inherited_from_episode_id=None,
             node_id=root.node_id,
-            snapshot_ref="",
         )
         proposal = tx.create_proposal(
             type("P", (), {
                 "proposal_id": "prop-1",
                 "node_id": root.node_id,
-                "thread_id": thread.thread_id,
+                "episode_id": episode.episode_id,
                 "instruction": "try X",
                 "rationale": {},
                 "status": "queued",
@@ -170,15 +167,14 @@ def test_publish_proposals(store: ResearchStore):
             depth=0,
             status="active",
         )
-        thread = tx.create_thread(
-            parent_thread_id=None,
+        episode = tx.create_episode(
+            inherited_from_episode_id=None,
             node_id=root.node_id,
-            snapshot_ref="",
         )
 
     proposals = store.publish_proposals(
         node_id=root.node_id,
-        thread_id=thread.thread_id,
+        episode_id=episode.episode_id,
         proposals=[
             {
                 "proposal_id": "prop-a",
@@ -191,7 +187,6 @@ def test_publish_proposals(store: ResearchStore):
                 "rationale": {"why": "reason B"},
             },
         ],
-        final_snapshot_ref="final.tgz",
     )
 
     assert len(proposals) == 2
@@ -201,7 +196,6 @@ def test_publish_proposals(store: ResearchStore):
 
     q = ResearchQueries(store.path)
     assert len(q.queued_proposals()) == 2
-    assert q.get_thread(thread.thread_id).snapshot_ref == "final.tgz"
 
 
 def test_publish_proposals_rejects_id_outside_reserved_pool(store: ResearchStore):
@@ -215,16 +209,15 @@ def test_publish_proposals_rejects_id_outside_reserved_pool(store: ResearchStore
             depth=0,
             status="active",
         )
-        thread = tx.create_thread(
-            parent_thread_id=None,
+        episode = tx.create_episode(
+            inherited_from_episode_id=None,
             node_id=root.node_id,
-            snapshot_ref="",
         )
 
     with pytest.raises(ValueError, match="not in reserved pool"):
         store.publish_proposals(
             node_id=root.node_id,
-            thread_id=thread.thread_id,
+            episode_id=episode.episode_id,
             proposals=[
                 {
                     "proposal_id": "forged-id",
@@ -287,16 +280,15 @@ def test_ingest_idempotency_rejects_double_terminal(store: ResearchStore):
             depth=0,
             status="active",
         )
-        thread = tx.create_thread(
-            parent_thread_id=None,
+        episode = tx.create_episode(
+            inherited_from_episode_id=None,
             node_id=root.node_id,
-            snapshot_ref="",
         )
         proposal = tx.create_proposal(
             type("P", (), {
                 "proposal_id": "prop-1",
                 "node_id": root.node_id,
-                "thread_id": thread.thread_id,
+                "episode_id": episode.episode_id,
                 "instruction": "try X",
                 "rationale": {},
                 "status": "queued",

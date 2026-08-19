@@ -44,6 +44,7 @@ class TreeView:
     lower_is_better: bool
     axes: tuple[str, ...]
     metrics_schema: Mapping[str, Any]
+    pricing: Mapping[str, Any]
     nodes: tuple[NodeView, ...]  # sorted by created_at
     by_id: Mapping[str, NodeView]
     children: Mapping[str, tuple[str, ...]]  # parent -> child ids (created_at order)
@@ -134,6 +135,7 @@ def load_tree_view(run_dir: str | Path) -> TreeView:
         lower_is_better=lower_is_better,
         axes=axes,
         metrics_schema=schema,
+        pricing=dict(cfg.pricing),
         nodes=views,
         by_id=by_id,
         children={k: tuple(v) for k, v in children.items()},
@@ -205,3 +207,89 @@ def winner_history(view: TreeView) -> dict[str, list[tuple[int, str, float]]]:
                     since=node.created_at,
                 ))
     return history
+
+
+def _load_usage(run_dir: Path) -> list[dict[str, Any]]:
+    """Read the append-only usage.jsonl into a list of records."""
+    import json
+
+    path = run_dir / "telemetry" / "usage.jsonl"
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+    return records
+
+
+_DEFAULT_PRICING = {
+    "input_usd_per_1m": 1.0,
+    "output_usd_per_1m": 3.0,
+    "cache_read_usd_per_1m": 0.1,
+}
+
+
+def _cost_usd(tokens: Mapping[str, Any], pricing: Mapping[str, Any]) -> float:
+    """Convert a flat token dict to USD using the configured per-1M prices."""
+    input_p = float(pricing.get("input_usd_per_1m", _DEFAULT_PRICING["input_usd_per_1m"]))
+    output_p = float(pricing.get("output_usd_per_1m", _DEFAULT_PRICING["output_usd_per_1m"]))
+    cache_read_p = float(pricing.get("cache_read_usd_per_1m", _DEFAULT_PRICING["cache_read_usd_per_1m"]))
+    cache_creation_p = float(pricing.get("cache_creation_usd_per_1m", input_p))
+    return (
+        int(tokens.get("input_tokens", 0)) * input_p
+        + int(tokens.get("output_tokens", 0)) * output_p
+        + int(tokens.get("cache_read_input_tokens", 0)) * cache_read_p
+        + int(tokens.get("cache_creation_input_tokens", 0)) * cache_creation_p
+    ) / 1_000_000.0
+
+
+def budget_series(
+    view: TreeView,
+    run_dir: str | Path,
+) -> dict[str, list[tuple[float, float]]]:
+    """Cumulative spend (USD) vs best-so-far, per role and total.
+
+    Returns three series keyed by "proposer" / "executor" / "total"; each is a
+    list of (cumulative_cost_usd, best_so_far_objective) aligned to completed
+    experiments in creation order.
+    """
+    usage = sorted(
+        _load_usage(Path(run_dir)),
+        key=lambda u: float(u.get("timestamp", 0.0)),
+    )
+    idx_created = {
+        v.experiment_idx: v.created_at
+        for v in view.nodes if v.experiment_idx is not None
+    }
+    best = dict(best_so_far(view))
+
+    series: dict[str, list[tuple[float, float]]] = {
+        "proposer": [], "executor": [], "total": [],
+    }
+    proposer_cost = 0.0
+    executor_cost = 0.0
+    ui = 0
+    for idx in sorted(idx_created):
+        created = idx_created[idx]
+        while ui < len(usage) and usage[ui]["timestamp"] <= created:
+            record = usage[ui]
+            cost = _cost_usd(record, view.pricing)
+            if record.get("role") == "proposer":
+                proposer_cost += cost
+            else:
+                executor_cost += cost
+            ui += 1
+        b = best.get(idx)
+        if b is not None:
+            series["proposer"].append((proposer_cost, b))
+            series["executor"].append((executor_cost, b))
+            series["total"].append((proposer_cost + executor_cost, b))
+    return series

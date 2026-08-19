@@ -27,16 +27,15 @@ def test_inspect_experiment(store: ResearchStore):
             depth=0,
             status="active",
         )
-        thread = tx.create_thread(
-            parent_thread_id=None,
+        episode = tx.create_episode(
+            inherited_from_episode_id=None,
             node_id=root.node_id,
-            snapshot_ref="",
         )
         proposal = tx.create_proposal(
             type("P", (), {
                 "proposal_id": "p1",
                 "node_id": root.node_id,
-                "thread_id": thread.thread_id,
+                "episode_id": episode.episode_id,
                 "instruction": "try X",
                 "rationale": {},
                 "status": "queued",
@@ -79,16 +78,15 @@ def test_search_experiments(store: ResearchStore):
             depth=0,
             status="active",
         )
-        thread = tx.create_thread(
-            parent_thread_id=None,
+        episode = tx.create_episode(
+            inherited_from_episode_id=None,
             node_id=root.node_id,
-            snapshot_ref="",
         )
         proposal = tx.create_proposal(
             type("P", (), {
                 "proposal_id": "p1",
                 "node_id": root.node_id,
-                "thread_id": thread.thread_id,
+                "episode_id": episode.episode_id,
                 "instruction": "try X",
                 "rationale": {},
                 "status": "queued",
