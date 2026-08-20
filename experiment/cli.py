@@ -31,6 +31,7 @@ def _build_request(payload: dict) -> ExperimentRequest:
         eval_commands=tuple(payload.get("eval_commands", [])),
         metrics_schema=dict(payload.get("metrics_schema", {})),
         runtime_image=Path(payload["runtime_image"]),
+        read_only_binds=tuple(payload.get("read_only_binds", [])),
         agent_timeout_seconds=int(payload.get("agent_timeout_seconds", 3600)),
         eval_timeout_seconds=int(payload.get("eval_timeout_seconds", 600)),
         attempt=int(payload.get("attempt", 1)),

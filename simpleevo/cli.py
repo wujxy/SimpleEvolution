@@ -181,6 +181,14 @@ def _measure_baseline(
                     target=PurePosixPath("/repo"),
                     mode=MountMode.READ_ONLY,
                 ),
+            )
+            + tuple(
+                MountSpec(
+                    source=Path(src),
+                    target=PurePosixPath(src),
+                    mode=MountMode.READ_ONLY,
+                )
+                for src in config.read_only_binds
             ),
         )
         result = run_eval(

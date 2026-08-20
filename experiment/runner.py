@@ -229,6 +229,16 @@ class ExperimentRunner:
                     target=PurePosixPath("/work") / rel,
                     mode=MountMode.READ_WRITE,
                 ))
+        # External read-only host paths (e.g. /cvmfs, shared data dirs) mounted
+        # as-is so the eval can reach JUNO toolchains / benchmark inputs that
+        # live outside the worktree. Same semantics as the proposer lane's
+        # ``read_only_binds``.
+        for src in self.request.read_only_binds:
+            mounts.append(MountSpec(
+                source=Path(src),
+                target=PurePosixPath(src),
+                mode=MountMode.READ_ONLY,
+            ))
         return tuple(mounts)
 
     def _result(

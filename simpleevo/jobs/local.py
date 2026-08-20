@@ -93,6 +93,7 @@ class LocalSubmitter:
         full_payload.setdefault("frozen_paths", list(self.config.frozen_paths))
         full_payload.setdefault("eval_commands", list(self.config.eval_commands))
         full_payload.setdefault("metrics_schema", dict(self.config.metrics_schema))
+        full_payload.setdefault("read_only_binds", list(self.config.read_only_binds))
         full_payload.setdefault("agent_timeout_seconds", self.config.agent_timeout_seconds)
         full_payload.setdefault("eval_timeout_seconds", self.config.eval_timeout_seconds)
         full_payload.setdefault("executor", dict(self.config.executor))

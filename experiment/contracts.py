@@ -87,6 +87,7 @@ class ExperimentRequest:
     eval_commands: tuple[str, ...]
     metrics_schema: Mapping[str, Any]
     runtime_image: Path
+    read_only_binds: tuple[str, ...] = ()
     agent_timeout_seconds: int = 3600
     eval_timeout_seconds: int = 600
     attempt: int = 1
