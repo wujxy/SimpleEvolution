@@ -129,12 +129,27 @@ init → baseline（1.28M lps）→ trivial proposer → executor agent
 
 均为 VERIFY PASS，绘图管线产出 [ablation.png](../../ablation.png)（x=累计 USD，y=×speedup vs 各 run 自身 baseline）。**单 seed 只验证链路 + 校准成本/延迟，不做三臂结论**（loop 单点 7.37× 领先、topk 点数最多，但样本量 1 无统计意义）。
 
-## 7. 待定决策
+## 7. 待定决策与正式实验配置
 
-1. **测试轮规模（已定）**：3 臂 × 1 seed × $2 链测已跑（见 §6b），验证三臂链路 + 校准低 effort 延迟/成本。**正式消融实验待 API 余额充足后跑**：3 臂 × ≥3 seed × $4，低 effort 配置。
-2. **`scientist_steps`**：loop researcher 200 步默认太大（§6b）——正式实验 sweep 或调小，属研究成本旋钮。
-3. **baseline 测量条件**：统一空闲/并发，消除 380k vs 1.28M 的测量方差（§6b）。
-4. **GEPA 是否作第四臂**：暂不纳入，保持 loop vs topk 的干净对照。
+**测试轮规模（已定）**：3 臂 × 1 seed × $2 链测已跑（见 §6b）。**正式消融实验待 API 余额充足后跑**，配置如下（已落地到 `ablation/driver.py` `_COMMON_ARM_KNOBS` 与 README）：
+
+| 配置项 | 值 | 依据 |
+| --- | --- | --- |
+| 规模 | 3 臂 × **3 seed** × $4/臂（9 run，~$36） | 设计 §4 ≥3 seed，median ± band |
+| `--max-evals` | **20** | 链测显示 10-cap 让 loop(~$2.3)/topk(~$1.7) 提前停，未用完 $4——20 使预算成为唯一约束 |
+| `scientist_steps` | **80** | 链测 researcher 69 步出好方向；200 的最坏研究成本 ~$1.8 会饿死 loop 的 eval |
+| `executor.effort` / `researcher.reasoning_effort` | **low** | 链测：首响应砍半、成本 $0.78→$0.41/轮 |
+| baseline 测量 | **同并发条件** | 消除 380k vs 1.28M 方差；三臂 baseline 已一致（都在并发下测） |
+| API keys | per-seed 循环（`--openai-keys`/`--anthropic-keys`）；单 key 则全 seed 共享 | 限流公平性，可选 |
+
+**待定**：GEPA 是否作第四臂——暂不纳入，保持 loop vs topk 的干净对照。
+
+**正式实验启动命令**（见 [ablation/README.md](../ablation/README.md)）：
+
+```bash
+python -m ablation.driver all --config examples/xsbench_opt/task.yaml \
+  --runs-root runs/ablation --seeds 3 --max-evals 20 --budget-usd 4.0
+```
 
 ## 8. 结果解读方法
 

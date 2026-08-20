@@ -27,11 +27,16 @@ python -m ablation.driver run \
   --arm topk --run-dir runs/ablation/topk/seed-1 \
   --seed 1 --max-evals 10 --budget-usd 4.0
 
-# All arms x seeds in parallel (each run gets its own subprocess + run-dir).
+# Formal experiment: all arms x 3 seeds, $4/arm budget, low-effort config.
+# --max-evals 20 so the BUDGET is the binding cap (chain test showed a 10-eval
+# cap stops loop ~$2.3 / topk ~$1.7, well before $4).  Each run is its own
+# subprocess + run-dir; per-seed keys cycle when --openai-keys / --anthropic-keys
+# are given (comma list), otherwise every seed shares the ambient key.
 python -m ablation.driver all \
   --config examples/xsbench_opt/task.yaml \
   --runs-root runs/ablation --seeds 3 \
-  --max-evals 10 --budget-usd 4.0
+  --max-evals 20 --budget-usd 4.0 \
+  --openai-keys k1,k2,k3 --anthropic-keys k1,k2,k3
 
 # The figure: budget (cumulative USD) on x, lookups/s vs baseline on y,
 # median +/- min/max band per arm.

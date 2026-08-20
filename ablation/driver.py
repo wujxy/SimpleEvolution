@@ -72,6 +72,12 @@ _COMMON_ARM_KNOBS = dict(
     # improve (with the default 3, a chain whose children gate-reject would
     # quiesce before the eval cap).
     max_research_per_node=100,
+    # Bound the researcher's per-study step budget.  The chain-test round
+    # showed the loop researcher submitting a strong direction at step 69 of
+    # the default 200; capping at 80 bounds worst-case research cost
+    # (~$0.7/study vs ~$1.8 at 200) so the loop arm isn't starved of evals
+    # inside its $4 budget.
+    scientist_steps=80,
 )
 
 _ARM_TOP_K = {"coding-agent": 1, "loop": 1, "topk": 3}
