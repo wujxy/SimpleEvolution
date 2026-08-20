@@ -147,12 +147,15 @@ class ExperimentRunner:
             ),
             mounts=self._mounts(workspace, writable=False),
         )
+        effort = executor_cfg.get("effort")
+        extra_args = ["--effort", str(effort)] if effort else []
         agent = Agent(
             world=builder,
             command="claude",
             timeout_seconds=self.request.agent_timeout_seconds,
             allowed_tools="Read,Edit,Write,Bash",
             model=executor_cfg.get("model") or None,
+            extra_args=extra_args,
             trace_store=self._trace_store(),
             usage_observer=self._usage_observer(),
             invocation_id=(

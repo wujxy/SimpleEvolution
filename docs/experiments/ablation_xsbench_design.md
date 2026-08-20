@@ -110,10 +110,31 @@ init → baseline（1.28M lps）→ trivial proposer → executor agent
 | **proposer 缓存记账缺失** | OpenAI SDK 丢 `prompt_cache_hit_tokens`，`extract_usage` 未读标准 `prompt_tokens_details.cached_tokens` → proposer cache 全记 0，成本虚高 ~30× | **已修复** `simpleevo/trace/usage.py`（读缓存字段并从 `prompt_tokens` 扣减，避免双重计费）；否则 loop/topk 臂 researcher 成本被系统性高估，压低其等预算表现 |
 | 遗留 omilrec-001 run | 上一会话遗留，已自行停止 | 无残留进程 |
 
+### 6b. 低 effort 链测轮发现（3 臂 × 1 seed × $2，已落地）
+
+测试轮目的：验证三臂链路 + 校准低 effort 下的延迟/成本。三个发现均进入框架或本文档：
+
+| 发现 | 数值/事实 | 影响/落地 |
+|---|---|---|
+| **executor 首响应慢主因是 thinking** | `executor.effort: low`（claude `--effort`）把 executor 首条工具调用 36 → 18 min（砍半），executor 整轮成本 $0.78 → $0.41 | **已落地** task.yaml `executor.effort: low` + `researcher.reasoning_effort: low`；DeepSeek anthropic 端点尊重请求 `thinking` 字段、openai 端点接受 `reasoning_effort`，均已实测 |
+| **cap bug：树永不 quiesce，cap 停不住** | topk(k=3) 触达 10-eval cap 后仍继续分配到 13 evals/$1.68——eval/budget cap 要求 `_quiescent()`，但 frontier 节点研究预算没耗尽就永远有 open allocation | **已修复（两层）**：① Scheduler `stop_allocating` 同时门住 `_allocate_proposers` 与 `_drain_executor_queue`（cap 后不产新研究/新实验）；② driver cap 后不再等 `_quiescent()`，改等 `not scheduler._in_flight()`（在途 proposer/experiment 排空即停，queued proposals 放弃）。实测 loop 在 $2 cap 后只 +1 在途 eval 即停（10 evals/$2.31）；35 测试过 |
+| **baseline 测量方差大** | 本轮三臂 baseline 一致 ~380k lps，冒烟轮 1.28M；但改进节点稳定落在 1.4–2.1M → baseline 是异常点（疑似并发负载压低计时） | y 轴用 per-run 自身 baseline 归一，对比不受影响；**正式实验需统一 baseline 测量条件**（空闲/平均/全并发一致），否则 ×值被污染 |
+| **loop researcher 是成本/延迟大头** | 研究到 step 69/200 才交 proposal（34 min，$0.62，~2.2 步/分，~$0.01/步）；`scientist_steps: 200` 默认太大 | 正式实验要 sweep `scientist_steps`（这是 loop 臂研究成本的旋钮，属消融变量或 confound 控制项） |
+
+链测轮最终结果（低 effort，单 seed，$2/臂 cap）：
+
+- **loop**：10 evals / $2.31，best **2.79M（7.37×）**
+- **coding-agent**：5 evals / $2.07，best **2.29M（6.05×）**
+- **topk**：13 evals / $1.69，best **1.57M（4.14×）**
+
+均为 VERIFY PASS，绘图管线产出 [ablation.png](../../ablation.png)（x=累计 USD，y=×speedup vs 各 run 自身 baseline）。**单 seed 只验证链路 + 校准成本/延迟，不做三臂结论**（loop 单点 7.37× 领先、topk 点数最多，但样本量 1 无统计意义）。
+
 ## 7. 待定决策
 
-1. **测试轮规模**：3 臂 × 1 seed × $4（~4–6h，每臂 5–8 点）vs × $2（~2–3h，2–4 点）。倾向 $4。
-2. **GEPA 是否作第四臂**：暂不纳入，保持 loop vs topk 的干净对照。
+1. **测试轮规模（已定）**：3 臂 × 1 seed × $2 链测已跑（见 §6b），验证三臂链路 + 校准低 effort 延迟/成本。**正式消融实验待 API 余额充足后跑**：3 臂 × ≥3 seed × $4，低 effort 配置。
+2. **`scientist_steps`**：loop researcher 200 步默认太大（§6b）——正式实验 sweep 或调小，属研究成本旋钮。
+3. **baseline 测量条件**：统一空闲/并发，消除 380k vs 1.28M 的测量方差（§6b）。
+4. **GEPA 是否作第四臂**：暂不纳入，保持 loop vs topk 的干净对照。
 
 ## 8. 结果解读方法
 

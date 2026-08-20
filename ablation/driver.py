@@ -268,11 +268,19 @@ def run_one(
             f"spend=${spend:.4f} frontier={telemetry.get('frontier_size')}"
         )
         capped = n_term >= max_evals or (budget_usd and spend >= budget_usd)
-        if capped and scheduler._quiescent():
+        if capped:
+            # Stop allocating NEW research AND stop turning queued proposals
+            # into experiments: a tree (k=3) never quiesces on its own while
+            # frontier nodes keep research budget, so without this the cap
+            # would never actually stop the run (topk ran to 13 evals past a
+            # 10-eval cap).  In-flight workers still drain to completion; we
+            # stop once none are left, abandoning queued proposals.
+            scheduler.stop_allocating = True
+        if capped and not scheduler._in_flight():
             log(
                 f"[{arm}/seed-{seed}] cap reached "
                 f"(evals={n_term}/{max_evals}, spend=${spend:.2f}/{budget_usd}); "
-                f"drained, stopping"
+                f"in-flight drained, stopping"
             )
             break
         if telemetry.get("published"):
