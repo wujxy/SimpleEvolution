@@ -24,29 +24,32 @@ checksums removed. Everything in here is what "a human expert already knew":
    compiler/flags.
 2. Run the identical frozen benchmark config the harness uses:
    `-m event -s small -G unionized -t 1 -l 2000000`.
-3. Measure:
+3. Measure with the same jitter control now in `scripts/bench.sh`: pin to one
+   logical core (`taskset -c 9`), one untimed warmup per kernel, then median of
+   5. This collapses the DVFS-driven jitter from ±20-50% to ~±1.5% and makes
+   the same-session ratio reliable.
    - `-k 0` — upstream baseline kernel (controls: should match the agent's
      baseline FOM).
    - `-k 1` — the author's optimized kernel = the **human-expert bar**.
 
-## Human-expert bar (measured 2026-08-19 on user-Super-Server, gcc 11.5.0, in apptainer.sif)
+## Human-expert bar (measured 2026-08-20 on user-Super-Server, gcc 11.5.0, in apptainer.sif)
 
-Frozen config: `-m event -s small -G unionized -t 1 -l 2000000`. Median of 5
-runs in a single session (the host is shared and noisy — absolute numbers vary
-±20-50% across sessions; the *ratio* within one session is the reliable
-comparison).
+Frozen config: `-m event -s small -G unionized -t 1 -l 2000000`. Pinned to one
+core, one warmup per kernel, median of 5, both kernels in the same session.
 
 | kernel | verification checksum | median runtime (s) | lookups_per_sec |
 | ------ | --------------------- | ------------------ | --------------- |
-| upstream baseline (`-k 0`) | 998920 | 2.133 | 937,647 |
-| **author optimized (`-k 1`)** | 998920 | 1.094 | 1,828,154 |
+| upstream baseline (`-k 0`) | 998920 | 1.358 | 1,472,754 |
+| **author optimized (`-k 1`)** | 998920 | 0.780 | 2,564,103 |
 
 Speedup of the author optimized kernel over the upstream baseline (same
-session): **1.95×**. In a second, quieter session the same pair measured
-1.360 s vs 0.779 s (1.75×). The agent's baseline (`repo/`) is the same code as
-`-k 0` and measured 1.273M lookups/s (median 1.571 s) in the reference session;
-treat the exact absolute FOM as machine-load-dependent and the ~1.8-2× expert
-gain as the robust signal.
+session, pin+warmup methodology): **1.74×** (1.358 s vs 0.780 s). Measured
+under the earlier no-pin methodology the same pair was 1.95× / 1.75× in
+separate sessions, so the robust expert gain is **~1.7-2×**. The agent's
+baseline (`repo/`) is the same code as `-k 0` and measured 1.364 s /
+1.47M lookups/s under the same methodology — consistent with the 1.358 s row.
+A SimpleEvolution frontier node that beats the `-k 1` row on this machine has
+surpassed the published reference implementation.
 
 The agent baseline (repo/) should reproduce the same upstream-baseline
 checksum and a comparable `lookups_per_sec`; a SimpleEvolution frontier node
