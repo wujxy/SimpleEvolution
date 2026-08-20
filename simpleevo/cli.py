@@ -7,7 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .config import EvolutionConfig, load_config, save_config
 from .db.queries import ResearchQueries
@@ -136,6 +136,95 @@ def _preflight_image(config: EvolutionConfig) -> str:
         return f"preflight failed: {exc}"
 
 
+def _measure_baseline(
+    config: EvolutionConfig, run_dir: Path, root_sha: str,
+) -> dict:
+    """Evaluate the pristine source once — the run-start baseline.
+
+    Mirrors SimpleLoop's run-start baseline (app.py:_starting_state): a fresh
+    worktree at the root SHA, the same eval_commands in the same Apptainer
+    runtime the harness uses, gates and objective validated. Returns the parsed
+    metrics; raises on infra failure so a run that cannot measure its own
+    baseline aborts loudly instead of optimizing blind.
+    """
+    from experiment.apptainer import (
+        ApptainerSandbox,
+        SandboxSpec,
+        forwarded_payload_env,
+    )
+    from experiment.contracts import MountMode, MountSpec, WorkspaceSpec
+    from experiment.evaluator import run_eval, validate_baseline
+    from experiment.git_worktree import GitWorkspaceProvider
+
+    provider = GitWorkspaceProvider(run_dir, config.repo_path)
+    provider.initialize()
+    workspace = provider.create(WorkspaceSpec("baseline", root_sha))
+    try:
+        sandbox = ApptainerSandbox(userns=True)
+        builder = sandbox.bind(
+            SandboxSpec(
+                image=config.runtime_image,
+                environment={
+                    k: v for k, v in forwarded_payload_env().items()
+                    if not k.startswith("ANTHROPIC_")
+                },
+                network=True,
+            ),
+            mounts=(
+                MountSpec(
+                    source=workspace.path,
+                    target=PurePosixPath("/work"),
+                    mode=MountMode.READ_WRITE,
+                ),
+                MountSpec(
+                    source=provider.repo,
+                    target=PurePosixPath("/repo"),
+                    mode=MountMode.READ_ONLY,
+                ),
+            ),
+        )
+        result = run_eval(
+            list(config.eval_commands),
+            world=builder,
+            metrics_schema=dict(config.metrics_schema),
+            timeout_seconds=config.eval_timeout_seconds,
+        )
+        objective = (config.metrics_schema or {}).get("objective") or {}
+        gate_keys = tuple(
+            g["key"] for g in (config.metrics_schema or {}).get("gates") or []
+            if g.get("key")
+        )
+        validate_baseline(
+            result,
+            str(objective.get("key", "OBJECTIVE")),
+            gate_keys,
+        )
+        return dict(result.metrics)
+    finally:
+        provider.remove(workspace)
+
+
+def _ensure_baseline_measured(
+    config: EvolutionConfig, run_dir: Path, store: ResearchStore,
+) -> None:
+    """Measure the unmodified baseline once, at run start.
+
+    ``init`` seeds the root node with empty metrics; the evolution loop needs
+    the pristine source's objective as the relative anchor for every
+    improvement plot and for the frontier's first comparison. This evaluates
+    the root SHA before the first proposer allocation and stores the metrics on
+    the root node. Resume skips it: once measured, the baseline is fixed.
+    """
+    queries = ResearchQueries(store.path)
+    root = queries.root_node()
+    if root is None or root.metrics:
+        return
+    print(f"[scheduler] evaluating baseline on {root.sha[:10]}...", flush=True)
+    metrics = _measure_baseline(config, run_dir, root.sha)
+    store.set_node_metrics(root.node_id, metrics)
+    print(f"[scheduler] baseline eval done: {json.dumps(metrics)}", flush=True)
+
+
 def _init_run(config: EvolutionConfig, run_dir: Path) -> dict:
     """Prepare git + image + run-dir + root node for a task config."""
     repo_status = _prepare_git(config)
@@ -165,6 +254,7 @@ def _run_scheduler(
     max_steps: int | None,
 ) -> int:
     store = ResearchStore(run_dir / "simpleevo.db")
+    _ensure_baseline_measured(config, run_dir, store)
     scheduler_config = _build_scheduler_config(config)
     submitter = LocalSubmitter(run_dir, config)
     scheduler = Scheduler(

@@ -390,6 +390,19 @@ class ResearchStore:
             ).fetchone()
             return int(row["n"])
 
+    def set_node_metrics(self, node_id: str, metrics: dict[str, Any]) -> None:
+        """Record measured metrics on an existing node (run-start baseline).
+
+        The root node is seeded with empty metrics at ``init``; the run-start
+        baseline evaluation writes the pristine source's objective here so the
+        reporting projections have a real relative anchor.
+        """
+        with self.transaction() as tx:
+            tx._conn.execute(
+                "UPDATE nodes SET metrics = ? WHERE node_id = ?",
+                (_json(metrics), node_id),
+            )
+
     def episode_allocation_finished(self, episode_id: str) -> bool:
         """Whether an episode's most recent proposer allocation has finished.
 

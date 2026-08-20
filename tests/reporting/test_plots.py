@@ -10,6 +10,7 @@ def test_write_plots_emits_progress_and_budget(run_dir, tmp_path):
     written = write_plots(load_tree_view(run_dir), out, run_dir)
     paths = {p.name: p for p in written}
     assert "progress.png" in paths
+    assert "progress_log.png" in paths  # log-scale companion figure
     assert "budget.png" in paths
     assert "pareto.png" not in paths  # single-axis task
     for p in written:

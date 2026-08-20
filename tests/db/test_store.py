@@ -23,6 +23,25 @@ def store():
         yield ResearchStore(Path(tmp) / "simpleevo.db")
 
 
+def test_set_node_metrics_records_baseline(store: ResearchStore):
+    with store.transaction() as tx:
+        root = tx.create_node(
+            parent_node_id=None,
+            experiment_id=None,
+            sha="abc123",
+            metrics={},
+            gate_result=_gate(True),
+            depth=0,
+            status="active",
+        )
+    assert ResearchQueries(store.path).root_node().metrics == {}
+    store.set_node_metrics(root.node_id, {"total_ms": 42.0, "CORRECTNESS": True})
+    assert ResearchQueries(store.path).root_node().metrics == {
+        "total_ms": 42.0,
+        "CORRECTNESS": True,
+    }
+
+
 def test_create_root_node_and_episode(store: ResearchStore):
     with store.transaction() as tx:
         root = tx.create_node(

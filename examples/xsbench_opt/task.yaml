@@ -93,7 +93,7 @@ quiescence_window_proposals: 2
 # Frontier selection policy: "gepa" = per-axis best + dominated pruning of
 # strictly-dominated nodes (GEPA, arXiv:2507.19457); "topk" = keep the
 # frontier_top_k best nodes per axis and union them.
-frontier_policy: gepa
+frontier_policy: topk  # gepa or topk
 # Width for the "topk" policy.
 frontier_top_k: 3
 # Total proposer allocations a single frontier node may receive over its

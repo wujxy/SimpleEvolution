@@ -96,6 +96,14 @@ class ResearchQueries:
     def list_active_nodes(self) -> list[Node]:
         return self.list_nodes(status="active")
 
+    def root_node(self) -> Node | None:
+        """The tree root: the single node with no parent (the pristine SHA)."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM nodes WHERE parent_node_id IS NULL LIMIT 1"
+            ).fetchone()
+            return None if row is None else _node_from_row(row)
+
     def node_lineage(self, node_id: str) -> list[Node]:
         """Return root -> ... -> node path."""
         with self._connect() as conn:

@@ -4,6 +4,7 @@ from __future__ import annotations
 from simpleevo.reporting.data import (
     best_so_far,
     experiment_marks,
+    improvement_multiple_series,
     improvement_series,
     load_tree_view,
 )
@@ -56,6 +57,47 @@ def test_improvement_sign_higher_is_better(tmp_path):
     )
     view = load_tree_view(run_dir)
     assert improvement_series(view)["ms_per_call"] == [(1, 20.0), (4, 50.0)]
+
+
+def test_improvement_tracks_best_not_later_worse_node(tmp_path):
+    # exp4 (90) is worse than exp1 (80) but still passes — e.g. a dominated
+    # top-k frontier resident. The improvement curve must track best-so-far
+    # (+20%) and NOT be dragged down to +10% by the worse accepted node.
+    run_dir = build_run(
+        tmp_path,
+        root_metrics={"ms_per_call": 100.0},
+        completed_values=(80.0, 90.0),
+    )
+    view = load_tree_view(run_dir)
+    assert improvement_series(view)["ms_per_call"] == [(1, 20.0), (4, 20.0)]
+
+
+def test_improvement_multiple_lower_is_better(run_dir):
+    view = load_tree_view(run_dir)  # root 100; exp1 80, exp4 60 (lower better)
+    assert improvement_multiple_series(view)["ms_per_call"] == [
+        (1, 1.25), (4, 1.6666666666666667),
+    ]
+
+
+def test_improvement_multiple_higher_is_better(tmp_path):
+    run_dir = build_run(
+        tmp_path,
+        lower_is_better=False,
+        root_metrics={"ms_per_call": 10.0},
+        completed_values=(12.0, 15.0),
+    )
+    view = load_tree_view(run_dir)
+    assert improvement_multiple_series(view)["ms_per_call"] == [
+        (1, 1.2), (4, 1.5),
+    ]
+
+
+def test_improvement_multiple_absent_without_root(tmp_path):
+    # The × view only exists in comparison to a real baseline: with an
+    # unmeasured root there is nothing to divide by, so the axis is omitted.
+    run_dir = build_run(tmp_path, root_metrics={})
+    view = load_tree_view(run_dir)
+    assert improvement_multiple_series(view) == {}
 
 
 def test_improvement_fallback_when_root_missing(tmp_path):

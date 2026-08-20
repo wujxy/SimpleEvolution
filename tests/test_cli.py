@@ -7,9 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from simpleevo.cli import main
+from simpleevo.cli import _ensure_baseline_measured, main
 from simpleevo.config import EvolutionConfig
 from simpleevo.db.queries import ResearchQueries
+from simpleevo.db.store import GateDecision, ResearchStore
 
 
 def _write_repo(path: Path) -> None:
@@ -39,12 +40,18 @@ def _config_for_repo(repo: Path) -> EvolutionConfig:
     )
 
 
-def test_run_seeds_root_node_and_episode():
+def test_run_seeds_root_node_and_episode(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp) / "run"
         repo = Path(tmp) / "repo"
         _write_repo(repo)
         config = _config_for_repo(repo)
+        # The run-start baseline eval needs a real Apptainer runtime; stub it
+        # out so the CLI wiring is what's under test (see _measure_baseline).
+        monkeypatch.setattr(
+            "simpleevo.cli._measure_baseline",
+            lambda _cfg, _run_dir, _root_sha: {"TOTAL_MS": 100.0},
+        )
         config_path = Path(tmp) / "task.yaml"
         config_path.write_text(
             """
@@ -70,6 +77,8 @@ axes:
         nodes = queries.list_nodes()
         assert len(nodes) == 1
         assert nodes[0].depth == 0
+        # The run-start baseline populated the root's metrics (see stub above).
+        assert nodes[0].metrics == {"TOTAL_MS": 100.0}
         episodes = queries.episodes_for_node(nodes[0].node_id, limit=1000)
         assert len(episodes) == 1
         assert (run_dir / "task.yaml").exists()
@@ -113,11 +122,15 @@ def test_resume_without_init_fails():
         assert rc == 1
 
 
-def test_resume_continues_without_config():
+def test_resume_continues_without_config(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp) / "run"
         repo = Path(tmp) / "repo"
         _write_repo(repo)
+        monkeypatch.setattr(
+            "simpleevo.cli._measure_baseline",
+            lambda _cfg, _run_dir, _root_sha: {"TOTAL_MS": 100.0},
+        )
         config_path = Path(tmp) / "task.yaml"
         config_path.write_text(
             """
@@ -143,12 +156,16 @@ axes:
         assert rc == 0
 
 
-def test_reseed_creates_fresh_episode():
+def test_reseed_creates_fresh_episode(monkeypatch):
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp) / "run"
         repo = Path(tmp) / "repo"
         _write_repo(repo)
         config = _config_for_repo(repo)
+        monkeypatch.setattr(
+            "simpleevo.cli._measure_baseline",
+            lambda _cfg, _run_dir, _root_sha: {"TOTAL_MS": 100.0},
+        )
         config_path = Path(tmp) / "task.yaml"
         config_path.write_text(
             """
@@ -176,3 +193,32 @@ axes:
         assert rc == 0
         after = len(queries.episodes_for_node(node.node_id, limit=100))
         assert after == before + 1
+
+
+def test_ensure_baseline_skips_when_root_has_metrics(tmp_path, monkeypatch):
+    # A root that already carries metrics (previous run / measured baseline)
+    # must not re-trigger the Apptainer baseline eval on resume.
+    run_dir = tmp_path / "run"
+    repo = tmp_path / "repo"
+    _write_repo(repo)
+    config = _config_for_repo(repo)
+    run_dir.mkdir(parents=True)
+    store = ResearchStore(run_dir / "simpleevo.db")
+    with store.transaction() as tx:
+        tx.create_node(
+            parent_node_id=None,
+            experiment_id=None,
+            sha="rootsha",
+            metrics={"TOTAL_MS": 100.0},
+            gate_result=GateDecision({}, True),
+            depth=0,
+            status="active",
+        )
+    monkeypatch.setattr(
+        "simpleevo.cli._measure_baseline",
+        lambda *args: pytest.fail("baseline eval must not run"),
+    )
+    _ensure_baseline_measured(config, run_dir, store)
+    assert ResearchQueries(run_dir / "simpleevo.db").root_node().metrics == {
+        "TOTAL_MS": 100.0,
+    }

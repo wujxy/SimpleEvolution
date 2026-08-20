@@ -50,7 +50,7 @@ def test_frontier_fields_defaults():
 
 def test_example_config_new_fields():
     config = load_config(_EXAMPLE_DIR / "task.yaml")
-    assert config.frontier_policy == "gepa"
+    assert config.frontier_policy == "topk"
     assert config.frontier_top_k == 3
     assert config.max_research_per_node == 3
     assert config.generator_reseed is True

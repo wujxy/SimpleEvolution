@@ -7,8 +7,10 @@ renderer, and computes the quality series the plots need:
 - ``best_so_far`` — best objective vs the unified experiment ordinal (every
   submitted experiment consumes one x-slot, gate-rejected / no-change included).
 - ``experiment_marks`` — gate-rejected / no-change experiments for the × layer.
-- ``winner_history`` / ``improvement_series`` — per-axis frontier-winner
-  replay, as absolute value or % vs the root baseline when one is measured.
+- ``improvement_series`` / ``improvement_multiple_series`` — per-axis
+  best-so-far vs the measured root baseline, as % or × multiple (the % view
+  falls back to absolute value when the root was never measured; the × view is
+  omitted without a baseline).
 
 Read-only: never mutates the run directory or the database.
 """
@@ -22,12 +24,7 @@ from typing import Any, Mapping
 
 from simpleevo.config import load_config
 from simpleevo.db.queries import ResearchQueries
-from simpleevo.db.store import FrontierAxis, Node
-from simpleevo.scheduler.frontier import (
-    FrontierConfig,
-    build_policy,
-    compute_frontier,
-)
+from simpleevo.db.store import Node
 
 
 @dataclass(frozen=True)
@@ -249,62 +246,6 @@ def experiment_marks(view: TreeView) -> list[tuple[int, float | None, str]]:
     ]
 
 
-def winner_history(view: TreeView) -> dict[str, list[tuple[int, str, float]]]:
-    """Reconstruct per-axis winner history by replaying the frontier.
-
-    ``frontier_axes`` is a current snapshot (rewritten on every ingest), so the
-    historical winner sequence must be replayed from the nodes themselves. The
-    replay uses the same ``FrontierConfig`` shape as the scheduler (same
-    policy/top_k), so it matches the live frontier exactly.
-    """
-    config = FrontierConfig(
-        axes=view.axes,
-        schema=dict(view.metrics_schema),
-        policy=build_policy(view.frontier_policy, top_k=view.frontier_top_k),
-    )
-    # Replay prefixes in experiment-ordinal order (not created_at) so the
-    # reconstructed frontier at each x-slot reflects the nodes known at that
-    # point; identical to created_at order while max_experiment_inflight == 1.
-    active = sorted(
-        (n for n in view.raw_nodes if n.gate_result.passed),
-        key=lambda n: view.by_id[n.node_id].experiment_idx or 0,
-    )
-
-    history: dict[str, list[tuple[int, str, float]]] = {
-        ax: [] for ax in view.axes
-    }
-    seen: dict[str, set[str]] = {ax: set() for ax in view.axes}
-    current: list[FrontierAxis] = []
-
-    for i in range(1, len(active) + 1):
-        prefix = active[:i]
-        frontier = compute_frontier(prefix, current, config)
-        current = []
-        for ax in view.axes:
-            winners = frontier.axes.get(ax, set())
-            if winners != seen[ax]:
-                for nid in sorted(winners):
-                    node = next(n for n in prefix if n.node_id == nid)
-                    view_node = view.by_id.get(nid)
-                    idx = view_node.experiment_idx if view_node else None
-                    value = _as_float(node.metrics.get(ax))
-                    if idx is not None and value is not None:
-                        history[ax].append((idx, nid, value))
-                seen[ax] = set(winners)
-            for nid in winners:
-                node = next(n for n in prefix if n.node_id == nid)
-                value = _as_float(node.metrics.get(ax))
-                current.append(FrontierAxis(
-                    axis=ax,
-                    node_id=nid,
-                    value=value if value is not None else 0.0,
-                    margin=0.0,
-                    hysteresis_anchor=None,
-                    since=node.created_at,
-                ))
-    return history
-
-
 def _axis_lower(axis: str, schema: Mapping[str, Any]) -> bool:
     """Per-axis direction, mirroring ``frontier._axis_direction`` exactly so the
     %-sign matches the frontier replay's notion of "better"."""
@@ -326,23 +267,93 @@ def _pct_change(
     return delta / abs(root) * 100.0
 
 
-def improvement_series(view: TreeView) -> dict[str, list[tuple[int, float]]]:
-    """Per-axis frontier-winner series from ``winner_history``, y = % vs root.
+def axis_best_so_far(view: TreeView) -> dict[str, list[tuple[int, float]]]:
+    """Per-axis monotonic best value vs experiment ordinal (absolute units).
 
-    Falls back to the raw winner value when the axis has no valid root baseline
-    (every real run today: the root node is seeded with empty metrics), so the
-    panel stays meaningful; the title should annotate which mode it is in.
+    Best-so-far is used instead of the frontier winner set because a top-k
+    frontier keeps dominated candidates resident, and plotting those as a
+    "winner" step misreads as regression: best-so-far only ever improves.
     """
-    history = winner_history(view)
+    raw_by_id = {n.node_id: n for n in view.raw_nodes}
+    series: dict[str, list[tuple[int, float]]] = {ax: [] for ax in view.axes}
+    bests: dict[str, float] = {}
+    for v in sorted(
+        (v for v in view.nodes if v.experiment_idx is not None),
+        key=lambda v: v.experiment_idx,
+    ):
+        if not v.passed:
+            continue
+        raw = raw_by_id.get(v.node_id)
+        if raw is None:
+            continue
+        for ax in view.axes:
+            value = _as_float((raw.metrics or {}).get(ax))
+            if value is None:
+                continue
+            lower = _axis_lower(ax, view.metrics_schema)
+            if ax not in bests or (
+                value < bests[ax] if lower else value > bests[ax]
+            ):
+                bests[ax] = value
+            series[ax].append((v.experiment_idx, bests[ax]))
+    return series
+
+
+def improvement_series(view: TreeView) -> dict[str, list[tuple[int, float]]]:
+    """Per-axis best-so-far series, y = % vs the measured root baseline.
+
+    Converted to % improvement over the measured root baseline
+    (``_pct_change``); when the root was never measured (legacy runs) it falls
+    back to the raw value.
+    """
     series: dict[str, list[tuple[int, float]]] = {}
-    for ax in view.axes:
+    for ax, points in axis_best_so_far(view).items():
         lower = _axis_lower(ax, view.metrics_schema)
         root = view.root_objective.get(ax)
         out: list[tuple[int, float]] = []
-        for idx, _nid, value in history.get(ax, []):
-            pct = _pct_change(root, value, lower)
-            out.append((idx, pct if pct is not None else value))
+        for idx, best in points:
+            pct = _pct_change(root, best, lower)
+            out.append((idx, pct if pct is not None else best))
         series[ax] = out
+    return series
+
+
+def _multiple_change(
+    root: float | None, value: float, lower_is_better: bool,
+) -> float | None:
+    """× multiple vs baseline; >1 = better than baseline. None when the
+    baseline or value is missing/zero/non-finite (a ratio would be fabricated)."""
+    if (
+        root is None
+        or root == 0
+        or not math.isfinite(root)
+        or not math.isfinite(value)
+        or value == 0
+    ):
+        return None
+    return (root / value) if lower_is_better else (value / root)
+
+
+def improvement_multiple_series(
+    view: TreeView,
+) -> dict[str, list[tuple[int, float]]]:
+    """Per-axis best-so-far series, y = × multiple vs the measured root
+    baseline (readable when a % gain saturates, e.g. 100-1000× speedups).
+
+    Axes with no valid root baseline are omitted — the × view only exists in
+    comparison to a real baseline.
+    """
+    series: dict[str, list[tuple[int, float]]] = {}
+    for ax, points in axis_best_so_far(view).items():
+        lower = _axis_lower(ax, view.metrics_schema)
+        root = view.root_objective.get(ax)
+        out: list[tuple[int, float]] = []
+        for idx, best in points:
+            multiple = _multiple_change(root, best, lower)
+            if multiple is not None:
+                out.append((idx, multiple))
+        if out:
+            series[ax] = out
     return series
 
 
