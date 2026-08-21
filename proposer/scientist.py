@@ -39,7 +39,7 @@ from tempfile import TemporaryDirectory
 from .model import ChatModel
 from .cognitive_transformer import CognitiveTransformer
 from .context import build_research_state_seed_pack
-from simpleevo.generator import load_generator_basis
+from simpleevo.generator import Generator, load_generator_basis
 from simpleevo.research_state import CognitiveTransformation, ResearchState
 
 from .memory.reflection_views import (
@@ -2014,6 +2014,8 @@ class ScientistAgent(ResearchAgent):
         max_steps: int | None = None,
         world_transition: str | None = None,
         research_state_seed: dict | None = None,
+        generator_basis: list[dict] | None = None,
+        suggested_operator_id: str | None = None,
         node_id: str | None = None,
         episode_id: str | None = None,
     ) -> ScientistRound:
@@ -2033,7 +2035,19 @@ class ScientistAgent(ResearchAgent):
         inherited_model = originating_state.get("working_model")
         if inherited_id and inherited_model:
             inherited_research_states[inherited_id] = inherited_model
-        generators = {item.id: item for item in load_generator_basis()}
+        if generator_basis is None:
+            basis = load_generator_basis()
+        else:
+            basis = [
+                Generator(
+                    id=item["id"],
+                    name=item.get("name") or item["id"],
+                    description=item.get("description") or "",
+                )
+                for item in generator_basis
+                if isinstance(item, dict) and item.get("id")
+            ]
+        generators = {item.id: item for item in basis}
         episode_seed = world_context or (
             f"Goal: {goal}\nAccepted revision: {base_sha}"
         )
@@ -2159,6 +2173,7 @@ class ScientistAgent(ResearchAgent):
                     model=self.model,
                     generators=generators,
                     episode_seed=episode_seed,
+                    suggested_operator_id=suggested_operator_id,
                 ),
                 inherited_research_states=inherited_research_states,
             )

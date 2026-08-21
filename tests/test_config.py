@@ -26,17 +26,20 @@ def test_frontier_fields_round_trip():
         frontier_policy="topk",
         frontier_top_k=5,
         max_research_per_node=7,
+        max_proposals_per_node=11,
         generator_reseed=True,
     ))
     assert config.frontier_policy == "topk"
     assert config.frontier_top_k == 5
     assert config.max_research_per_node == 7
+    assert config.max_proposals_per_node == 11
     assert config.generator_reseed is True
 
     loaded = EvolutionConfig.from_dict(config.to_dict())
     assert loaded.frontier_policy == "topk"
     assert loaded.frontier_top_k == 5
     assert loaded.max_research_per_node == 7
+    assert loaded.max_proposals_per_node == 11
     assert loaded.generator_reseed is True
 
 
@@ -45,6 +48,7 @@ def test_frontier_fields_defaults():
     assert config.frontier_policy == "gepa"
     assert config.frontier_top_k == 3
     assert config.max_research_per_node == 3
+    assert config.max_proposals_per_node == 9
     assert config.generator_reseed is False
 
 
@@ -53,6 +57,7 @@ def test_example_config_new_fields():
     assert config.frontier_policy == "topk"
     assert config.frontier_top_k == 3
     assert config.max_research_per_node == 3
+    assert config.max_proposals_per_node == 9
     assert config.generator_reseed is True
 
 

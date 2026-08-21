@@ -112,6 +112,7 @@ frontier_top_k: 3
 # the pool, the frontier keeps the top 3, and the next generation starts. This
 # is the knob that makes the tree fractal instead of a deep chain.
 max_research_per_node: 1
+max_proposals_per_node: 3
 # Variation-factor directives on reseeded episodes. Inert here (max_research=1
 # means no reseed happens); kept at the shipped default.
 generator_reseed: true

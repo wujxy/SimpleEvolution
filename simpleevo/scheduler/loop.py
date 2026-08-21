@@ -10,7 +10,7 @@ from typing import Any, Callable
 from simpleevo.config import EvolutionConfig
 from simpleevo.db.store import FrontierAxis, GateDecision, GateResult, ResearchStore
 from simpleevo.db.queries import ResearchQueries
-from simpleevo.generator import Generator, load_generator_basis, sample_generators
+from simpleevo.generator import Generator, load_generator_basis, select_one_generator
 from simpleevo.jobs.base import BaseSubmitter
 from simpleevo.research_state import research_state_to_dict
 
@@ -249,7 +249,10 @@ class Scheduler:
                 node_id=node_id,
                 episode_id=episode.episode_id,
                 proposal_slots=self.config.proposal_slots,
+                max_proposals_per_node=self._max_proposals_per_node(),
             )
+            if allocation is None:
+                continue
             attempt = self.store.record_attempt(
                 logical_work_id=allocation.allocation_id,
                 kind="proposer",
@@ -291,9 +294,9 @@ class Scheduler:
         inheritance: the new episode's ``inherited_from_episode_id`` is the
         node's most recent episode, so the forked Scientist resumes the prior
         final cognition. When ``generator_reseed`` is on, the episode also
-        carries a sampled variation operator (``variation_operator``) drawn
-        from the generator basis — re-framing directives not yet tried on this
-        node, so each re-study is pointed at a fresh cognitive axis. Bounded by
+        carries one suggested variation operator (``variation_operator``)
+        not yet tried on this node, so each re-study offers the optional mentor
+        a fresh cognitive axis. Bounded by
         ``max_research_per_node`` (total lifetime proposer allocations).
         Returns the fresh Episode, or None when the node is at its research
         budget.
@@ -318,7 +321,7 @@ class Scheduler:
             )
 
     def _variation_for(self, node_id: str, episodes) -> str | None:
-        """Sample untried generators for a re-study, as ``"G5+G3"`` ids.
+        """Select one untried generator as a reseed suggestion.
 
         ``generator_reseed`` off, an empty basis, or no untried generators
         remaining all degrade to ``None`` (no variation factor — the reseed
@@ -332,11 +335,9 @@ class Scheduler:
         tried: set[str] = set()
         for episode in episodes:
             if episode.variation_operator:
-                tried.update(episode.variation_operator.split("+"))
-        chosen = sample_generators(basis, tried)
-        if not chosen:
-            return None
-        return "+".join(g.id for g in chosen)
+                tried.add(episode.variation_operator)
+        chosen = select_one_generator(basis, tried)
+        return chosen.id if chosen else None
 
     def _generator_basis_or_load(self) -> list[Generator]:
         if self._generator_basis is None:
@@ -347,6 +348,11 @@ class Scheduler:
         if self.evolution_config is not None:
             return self.evolution_config.max_research_per_node
         return 3
+
+    def _max_proposals_per_node(self) -> int:
+        if self.evolution_config is not None:
+            return self.evolution_config.max_proposals_per_node
+        return 9
 
     def _proposer_payload(
         self, allocation, node, episode, attempt_id: str, attempt: int,
@@ -359,7 +365,15 @@ class Scheduler:
             "node_sha": node.sha,
             "episode_id": episode.episode_id,
             "inherited_from_episode_id": episode.inherited_from_episode_id,
-            "variation_operators": self._variation_operators_payload(episode),
+            "generator_basis": [
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "description": item.description,
+                }
+                for item in self._generator_basis_or_load()
+            ],
+            "suggested_operator_id": episode.variation_operator,
             "proposal_ids": list(allocation.reserved_proposal_ids),
             "attempt_id": attempt_id,
             "attempt": attempt,
@@ -369,31 +383,6 @@ class Scheduler:
         else:
             payload["world_transition"] = self._world_transition_for(node)
         return payload
-
-    def _variation_operators_payload(self, episode) -> list[dict[str, str]]:
-        """Resolve the episode's stored generator ids to full directives.
-
-        The proposer worker may not have access to ``generator.json``, so the
-        resolved ``{id, name, description}`` triples travel in the payload; the
-        worker's cli formats them into prompt text (see proposer/cli.py).
-        """
-        if not episode.variation_operator:
-            return []
-        basis = self._generator_basis_or_load()
-        by_id = {g.id: g for g in basis}
-        directives: list[dict[str, str]] = []
-        for generator_id in episode.variation_operator.split("+"):
-            generator = by_id.get(generator_id)
-            if generator is None:
-                continue
-            directives.append(
-                {
-                    "id": generator.id,
-                    "name": generator.name,
-                    "description": generator.description,
-                }
-            )
-        return directives
 
     def _world_transition_for(self, node) -> dict[str, Any]:
         """Assemble the reality record a child Scientist sees on resume (§8).

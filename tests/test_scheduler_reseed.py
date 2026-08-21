@@ -1,7 +1,7 @@
 """Programmatic reseed: a frontier node whose episodes are all terminal is
 re-studied with a fresh episode (inheriting its most recent final cognition),
-bounded by ``max_research_per_node``.  With ``generator_reseed`` on, each
-re-study also carries a sampled variation operator (untried per node)."""
+bounded by ``max_research_per_node``. With ``generator_reseed`` on, each
+re-study also carries one suggested variation operator (untried per node)."""
 from __future__ import annotations
 
 import tempfile
@@ -127,9 +127,7 @@ def _drive_allocations(scheduler, store, n: int) -> list[dict]:
 
 
 def test_reseed_attaches_untried_variation_operators():
-    """generator_reseed=True: reseeded episodes carry a sampled variation
-    operator drawn from the untried-per-node set; the proposer payload carries
-    the resolved directives. The fresh (first) episode carries none."""
+    """Reseeded episodes suggest one generator from the untried Node set."""
     with tempfile.TemporaryDirectory() as tmp:
         run_dir = Path(tmp)
         store = ResearchStore(run_dir / "simpleevo.db")
@@ -154,17 +152,17 @@ def test_reseed_attaches_untried_variation_operators():
         assert e1.variation_operator is None  # first episode: no generator
         assert e2.variation_operator is not None
         assert e3.variation_operator is not None
-        # Untried-per-node sampling: the two reseeds draw from disjoint sets.
-        assert set(e2.variation_operator.split("+")).isdisjoint(
-            e3.variation_operator.split("+")
-        )
+        # One unused cognitive generator is suggested per reseed.
+        assert e2.variation_operator != e3.variation_operator
+        assert "+" not in e2.variation_operator
+        assert "+" not in e3.variation_operator
 
-        # Fresh allocation carries no directives; reseeds carry resolved ones.
-        assert captured[0]["variation_operators"] == []
-        assert captured[1]["variation_operators"]
+        # Every worker receives the basis; only reseeds carry a suggestion.
+        assert captured[0]["suggested_operator_id"] is None
+        assert captured[1]["suggested_operator_id"] == e2.variation_operator
         assert all(
             {"id", "name", "description"} <= set(d)
-            for d in captured[1]["variation_operators"]
+            for d in captured[1]["generator_basis"]
         )
 
 
@@ -194,5 +192,5 @@ def test_reseed_without_generator_keeps_variation_operator_none():
         e2, e1 = episodes
         assert e1.variation_operator is None
         assert e2.variation_operator is None
-        assert captured[0]["variation_operators"] == []
-        assert captured[1]["variation_operators"] == []
+        assert captured[0]["suggested_operator_id"] is None
+        assert captured[1]["suggested_operator_id"] is None

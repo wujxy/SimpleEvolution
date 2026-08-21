@@ -1,9 +1,9 @@
 """Variation-factor basis (生成元基).
 
-A generator is a re-framing / mutation directive injected into a re-studied
-Scientist episode (see ``episodes.variation_operator``).  The basis is a
-static ``generator.json`` at the repo root; the harness samples untried
-generators per node so each reseed is pointed at a fresh cognitive axis.
+A generator is a re-framing / mutation operation available to a re-studied
+Scientist episode (see ``episodes.variation_operator``). The basis is a static
+``generator.json`` at the repo root; the harness suggests one untried generator
+per reseed, and the optional mentor tool records whether the Scientist used it.
 """
 from __future__ import annotations
 

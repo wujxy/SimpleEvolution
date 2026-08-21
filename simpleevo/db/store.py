@@ -477,25 +477,50 @@ class ResearchStore:
         node_id: str,
         episode_id: str,
         proposal_slots: int = 1,
-    ) -> ProposerAllocation:
+        max_proposals_per_node: int = 9,
+    ) -> ProposerAllocation | None:
         """Record that a proposer slot was allocated to a node/episode.
 
         Pre-reserves ``proposal_slots`` proposal ids (§2.4 identity-first):
         the ids are issued here by the single writer and handed to the worker.
         """
-        now = time.time()
-        allocation_id = _new_id()
-        reserved = tuple(_new_id() for _ in range(max(1, proposal_slots)))
-        allocation = ProposerAllocation(
-            allocation_id=allocation_id,
-            node_id=node_id,
-            episode_id=episode_id,
-            reserved_proposal_ids=reserved,
-            started_at=now,
-            finished_at=None,
-            proposals_produced=0,
-        )
         with self.transaction() as tx:
+            node = tx.get_node(node_id)
+            episode = tx.get_episode(episode_id)
+            if node is None:
+                raise ValueError(f"unknown node: {node_id}")
+            if episode is None or episode.node_id != node_id:
+                raise ValueError("episode belongs to another node")
+            published = tx._conn.execute(
+                "SELECT COUNT(*) FROM proposals WHERE node_id = ?",
+                (node_id,),
+            ).fetchone()[0]
+            open_rows = tx._conn.execute(
+                "SELECT reserved_proposal_ids FROM proposer_allocations "
+                "WHERE node_id = ? AND finished_at IS NULL",
+                (node_id,),
+            ).fetchall()
+            open_reserved = sum(
+                len(_unjson(row["reserved_proposal_ids"])) for row in open_rows
+            )
+            remaining = max(
+                0, max_proposals_per_node - published - open_reserved,
+            )
+            reserved_count = min(max(0, proposal_slots), remaining)
+            if reserved_count == 0:
+                return None
+            now = time.time()
+            allocation = ProposerAllocation(
+                allocation_id=_new_id(),
+                node_id=node_id,
+                episode_id=episode_id,
+                reserved_proposal_ids=tuple(
+                    _new_id() for _ in range(reserved_count)
+                ),
+                started_at=now,
+                finished_at=None,
+                proposals_produced=0,
+            )
             tx.create_allocation(allocation)
         return allocation
 

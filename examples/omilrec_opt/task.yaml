@@ -125,8 +125,6 @@ frontier_top_k: 3
 # programmatically reseeded (fresh episode inheriting its most recent one)
 # until this budget is spent.
 max_research_per_node: 3
-# Inject variation-factor directives (G1..G10 from generator.json) into
-# reseeded episodes: each re-study is pointed at 1-2 generators not yet tried
-# on that node, sampled by the harness. Set false for the pure
-# cognition-fork-reseed control arm.
+max_proposals_per_node: 9
+# Suggest one untried generator to the optional mentor tool on each reseed.
 generator_reseed: true

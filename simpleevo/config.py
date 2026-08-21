@@ -168,6 +168,7 @@ class EvolutionConfig:
     frontier_policy: str = "gepa"
     frontier_top_k: int = 3
     max_research_per_node: int = 3
+    max_proposals_per_node: int = 9
     generator_reseed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -206,6 +207,7 @@ class EvolutionConfig:
             "frontier_policy": self.frontier_policy,
             "frontier_top_k": self.frontier_top_k,
             "max_research_per_node": self.max_research_per_node,
+            "max_proposals_per_node": self.max_proposals_per_node,
             "generator_reseed": self.generator_reseed,
         }
 
@@ -249,6 +251,7 @@ class EvolutionConfig:
             frontier_policy=str(raw.get("frontier_policy", "gepa")),
             frontier_top_k=int(raw.get("frontier_top_k", 3)),
             max_research_per_node=int(raw.get("max_research_per_node", 3)),
+            max_proposals_per_node=int(raw.get("max_proposals_per_node", 9)),
             generator_reseed=bool(raw.get("generator_reseed", False)),
         )
 

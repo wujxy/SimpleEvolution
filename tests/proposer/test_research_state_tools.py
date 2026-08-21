@@ -43,6 +43,7 @@ def _tools(
     episode_id: str = "ep-1",
     node_id: str = "node-1",
     inherited_research_states: dict[str, str] | None = None,
+    suggested_operator_id: str | None = None,
 ) -> ResearchTools:
     workspace = tmp_path / "work"
     repo = tmp_path / "repo"
@@ -72,6 +73,7 @@ def _tools(
             model=model,
             generators=generators,
             episode_seed="The current world has repeated FCN work.",
+            suggested_operator_id=suggested_operator_id,
         ),
         inherited_research_states=inherited_research_states,
     )
@@ -124,6 +126,17 @@ def test_transform_worldview_rejects_unknown_generator(tmp_path):
         working_state=WorkingState(),
     )
     assert result == {"ok": False, "error": "unknown generator: G99"}
+
+
+def test_transform_worldview_uses_scheduler_suggestion_when_omitted(tmp_path):
+    state = WorkingState()
+    result = _tools(tmp_path, suggested_operator_id="G2").execute(
+        {"action": "transform_worldview"},
+        deadline=time.monotonic() + 10,
+        working_state=state,
+    )
+    assert result["operator_id"] == "G2"
+    assert state.transformations[result["transformation_id"]].operator_id == "G2"
 
 
 def test_registration_rejects_unknown_local_references(tmp_path):
