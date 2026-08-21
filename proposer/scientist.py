@@ -435,9 +435,18 @@ action object, never inside a batch.
   NOT a substitute for acting; if you have nothing to add, omit it. It is
   communication that future-you will see, not a report you must file.
 
+A ResearchState is your revisable working model of the current world, not a
+Harness fact and not a form to complete. Register it when it is useful to make
+the understanding behind an experiment explicit. transform_worldview is an
+optional, stateless mentor consultation: it challenges a framing but cannot
+register a state or submit a Proposal for you. Prefer breadth across viable
+ResearchStates before spending multiple Proposals under one state, but submit
+every materially distinct experiment worth its cost and never pad a quota.
+
 Control action (the only non-tool action):
 - {"action":"submit_proposals","proposals":[
-    {"instruction":"...",
+    {"research_state_id":"rs-...","instruction":"...",
+     "expectation":"observable outcome expected from the experiment",
      "research_target":{"mode":"existing","finding_id":"F-NNN"}
                       | {"mode":"new","question":"...",
                          "mechanisms":[...],"code_regions":[...]},
@@ -459,7 +468,8 @@ Control action (the only non-tool action):
   genuinely distinct directions. The instruction states WHAT to
   try and WHY you think it may move the goal; the executor reads the real code
   and decides the concrete implementation, so you need not reach line-level
-  detail. evidence_refs and material_difference are optional.
+  detail. evidence_refs and material_difference are optional; research_state_id
+  and expectation are required for each Proposal.
 """
 
 _RUNTIME_BOUNDARIES = """Runtime boundaries:

@@ -5,6 +5,7 @@ Writes append-only JSONL files under ``run_dir/telemetry/``:
 - frontier_size.jsonl: |Frontier| per step.
 - lineage_axis_share.jsonl: how many axes each root-to-leaf path holds.
 - proposer_allocation_distribution.jsonl: actual allocations per node.
+- research_state_width.jsonl: identity-linked cognitive width per node.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ class StepTelemetry:
     frontier_size: int
     lineage_axis_shares: list[dict[str, Any]]
     allocation_distribution: list[dict[str, Any]]
+    research_state_width: list[dict[str, Any]]
 
 
 class TelemetryRecorder:
@@ -51,6 +53,7 @@ class TelemetryRecorder:
         timestamp = time.time()
         lineage_shares = self._lineage_axis_shares(queries)
         allocation_dist = self._allocation_distribution(queries)
+        research_state_width = queries.research_state_width()
 
         self._append(
             "frontier_size.jsonl",
@@ -63,6 +66,11 @@ class TelemetryRecorder:
                 "proposer_allocation_distribution.jsonl",
                 {"step": step, "timestamp": timestamp, **item},
             )
+        for item in research_state_width:
+            self._append(
+                "research_state_width.jsonl",
+                {"step": step, "timestamp": timestamp, **item},
+            )
 
         return StepTelemetry(
             step=step,
@@ -70,6 +78,7 @@ class TelemetryRecorder:
             frontier_size=frontier_size,
             lineage_axis_shares=lineage_shares,
             allocation_distribution=allocation_dist,
+            research_state_width=research_state_width,
         )
 
     def _lineage_axis_shares(self, queries: ResearchQueries) -> list[dict[str, Any]]:

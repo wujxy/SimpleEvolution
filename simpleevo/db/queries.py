@@ -123,6 +123,54 @@ class ResearchQueries:
             ).fetchall()
             return [_transformation_from_row(row) for row in rows]
 
+    def research_state_width(self) -> list[dict[str, Any]]:
+        """Return Node-local identity counts without interpreting state text."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                WITH state_totals AS (
+                    SELECT node_id, COUNT(*) AS registered_states
+                    FROM research_states GROUP BY node_id
+                ), proposal_totals AS (
+                    SELECT node_id,
+                           COUNT(*) AS total_proposals,
+                           COUNT(DISTINCT research_state_id) AS proposed_states
+                    FROM proposals GROUP BY node_id
+                ), per_state AS (
+                    SELECT node_id, research_state_id, COUNT(*) AS proposal_count
+                    FROM proposals
+                    WHERE research_state_id IS NOT NULL
+                    GROUP BY node_id, research_state_id
+                ), concentration AS (
+                    SELECT node_id, MAX(proposal_count) AS max_proposals_per_state
+                    FROM per_state GROUP BY node_id
+                )
+                SELECT n.node_id,
+                       COALESCE(s.registered_states, 0) AS registered_states,
+                       COALESCE(p.proposed_states, 0) AS proposed_states,
+                       COALESCE(p.total_proposals, 0) AS total_proposals,
+                       COALESCE(c.max_proposals_per_state, 0)
+                           AS max_proposals_per_state
+                FROM nodes n
+                LEFT JOIN state_totals s ON s.node_id = n.node_id
+                LEFT JOIN proposal_totals p ON p.node_id = n.node_id
+                LEFT JOIN concentration c ON c.node_id = n.node_id
+                ORDER BY n.created_at, n.node_id
+                """
+            ).fetchall()
+            return [
+                {
+                    "node_id": row["node_id"],
+                    "registered_states": row["registered_states"],
+                    "proposed_states": row["proposed_states"],
+                    "total_proposals": row["total_proposals"],
+                    "max_proposals_per_state": row[
+                        "max_proposals_per_state"
+                    ],
+                }
+                for row in rows
+            ]
+
     def list_nodes(self, status: str | None = None) -> list[Node]:
         with self._connect() as conn:
             if status is None:

@@ -125,6 +125,14 @@ experiments, or use the other capabilities of your laboratory when they help you
 understand what matters. These are research actions available to you, not
 prescribed stages; you decide what is worth doing and in what order.
 
+A ResearchState is your revisable working model of the current world, not a
+Harness fact and not a form to complete. Register it when it is useful to make
+the understanding behind an experiment explicit. `transform_worldview` is an
+optional, stateless mentor consultation: it challenges a framing but cannot
+register a state or submit a Proposal for you. Prefer breadth across viable
+ResearchStates before spending multiple Proposals under one state, but submit
+every materially distinct experiment worth its cost and never pad a quota.
+
 You do not need certainty before proposing an experiment. A proposal is a
 scientific judgment about a direction worth trying. Multiple distinct directions
 may be worth trying, and one broad restructuring may be more valuable than many

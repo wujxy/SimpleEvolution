@@ -351,6 +351,32 @@ Generator 可以由 Scientist 主动选择，也可以在需要扩大认知宽�
 Harness 提供 variation factor。无论来源如何，Harness 不判断变异结果是否
 科学正确。
 
+### 5.4 已接受的生成元作用机制
+
+一次变换严格沿着以下责任链进行：
+
+```text
+ResearchState or Child seed → exact transformation input
+Generator → one cognitive operation
+Stateless Transformer → challenge only
+Scientist → acceptance/rejection and new working model
+Harness → provenance and budget
+```
+
+Harness 在 reseed 时最多建议一个尚未使用的 generator；它不会把 generator
+作为常驻 prompt hint 强加给 Scientist。Scientist 只有显式调用
+`transform_worldview` 时才发生变换，Transformer 也只返回 challenge，不替
+Scientist 接受结论、注册 ResearchState 或提交 Proposal。
+
+如果 Scientist 希望组合多个 generator，应执行多次显式 transformation，
+每次形成独立的 `CognitiveTransformation` provenance record，再由 Scientist
+决定新 working model 如何吸收或拒绝这些挑战；不把多个 generator 拼进一次
+combined prompt hint。
+
+该机制不解析 `evidence_refs`，也不验证 working model 中的 claim。真正的
+Chain-of-Evidence / Evidence Compiler 仍是后续独立的 claim-to-evidence
+验证与审计层，不属于本次实现。
+
 ---
 
 ## 6. Scientist 研究工具

@@ -54,6 +54,7 @@ def test_scheduler_closes_proposer_experiment_loop(env):
 
     def submit_proposer(allocation_id: str, payload: dict) -> None:
         state_id = f"rs-{episode.episode_id}-001"
+        transformation_id = f"ct-{episode.episode_id}-001"
         _write_json(
             run_dir / "proposer_allocations" / allocation_id / "result.json",
             {
@@ -65,13 +66,21 @@ def test_scheduler_closes_proposer_experiment_loop(env):
                     "episode_id": episode.episode_id,
                     "node_id": root.node_id,
                     "outcome": "submit",
-                    "transformations": [],
+                    "transformations": [{
+                        "transformation_id": transformation_id,
+                        "node_id": root.node_id,
+                        "episode_id": episode.episode_id,
+                        "source_research_state_id": None,
+                        "operator_id": "G2",
+                        "challenge": "Question the call boundary.",
+                        "created_at": 0.5,
+                    }],
                     "research_states": [{
                         "research_state_id": state_id,
                         "node_id": root.node_id,
                         "episode_id": episode.episode_id,
                         "derived_from_research_state_id": None,
-                        "transformation_id": None,
+                        "transformation_id": transformation_id,
                         "working_model": "Repeated setup crosses the call boundary.",
                         "evidence_refs": ["source:src/fcn.cc:FCN"],
                         "created_at": 1.0,
@@ -82,7 +91,16 @@ def test_scheduler_closes_proposer_experiment_loop(env):
                             "research_state_id": state_id,
                             "instruction": "inline a small helper to reduce total_ms",
                             "rationale": {"expectation": "total_ms decreases"},
-                        }
+                        },
+                        {
+                            "proposal_id": payload["proposal_ids"][1],
+                            "research_state_id": state_id,
+                            "instruction": "cache the invariant at call scope",
+                            "rationale": {
+                                "expectation": "total_ms decreases differently",
+                                "material_difference": "Tests caching, not ownership.",
+                            },
+                        },
                     ],
                 },
             },
@@ -140,4 +158,22 @@ def test_scheduler_closes_proposer_experiment_loop(env):
     queries = ResearchQueries(store.path)
     states = queries.research_states_for_episode(episode.episode_id)
     assert len(states) == 1
-    assert queries.get_proposal(next(iter(experiment_results.values()))["proposal_id"]).research_state_id == states[0].research_state_id
+    transformations = queries.transformations_for_episode(episode.episode_id)
+    assert len(transformations) == 1
+    proposals = [
+        proposal for proposal in queries.queued_proposals()
+        if proposal.node_id == root.node_id
+    ]
+    experiment_proposal = queries.get_proposal(
+        next(iter(experiment_results.values()))["proposal_id"]
+    )
+    assert experiment_proposal.research_state_id == states[0].research_state_id
+    assert len(proposals) == 1
+    assert proposals[0].research_state_id == states[0].research_state_id
+    seed = scheduler._research_state_seed_for(
+        queries.get_node(children[0]["node_id"])
+    )
+    assert seed["originating_research_state"]["working_model"] == (
+        "Repeated setup crosses the call boundary."
+    )
+    assert seed["experiment"]["metrics"] == {"total_ms": 90.0}
