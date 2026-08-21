@@ -13,7 +13,9 @@ from typing import Any, Iterable
 from .store import (
     Episode, Experiment, Node, Proposal,
     _episode_from_row, _experiment_from_row, _node_from_row, _proposal_from_row,
+    _research_state_from_row, _transformation_from_row,
 )
+from simpleevo.research_state import CognitiveTransformation, ResearchState
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,34 @@ class ResearchQueries:
                 "SELECT * FROM proposals WHERE proposal_id = ?", (proposal_id,)
             ).fetchone()
             return None if row is None else _proposal_from_row(row)
+
+    def get_research_state(self, research_state_id: str) -> ResearchState | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM research_states WHERE research_state_id = ?",
+                (research_state_id,),
+            ).fetchone()
+            return None if row is None else _research_state_from_row(row)
+
+    def research_states_for_episode(self, episode_id: str) -> list[ResearchState]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM research_states WHERE episode_id = ? "
+                "ORDER BY created_at, research_state_id",
+                (episode_id,),
+            ).fetchall()
+            return [_research_state_from_row(row) for row in rows]
+
+    def get_transformation(
+        self, transformation_id: str,
+    ) -> CognitiveTransformation | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM cognitive_transformations "
+                "WHERE transformation_id = ?",
+                (transformation_id,),
+            ).fetchone()
+            return None if row is None else _transformation_from_row(row)
 
     def list_nodes(self, status: str | None = None) -> list[Node]:
         with self._connect() as conn:

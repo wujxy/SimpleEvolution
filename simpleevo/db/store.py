@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+from simpleevo.research_state import CognitiveTransformation, ResearchState
+
 from .schema import ResearchDBSchema
 
 
@@ -73,6 +75,7 @@ class Proposal:
     rationale: dict[str, Any]
     status: str
     created_at: float
+    research_state_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -817,8 +820,8 @@ class _Transaction:
             """
             INSERT INTO proposals
             (proposal_id, node_id, episode_id, instruction, rationale,
-             status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+             status, created_at, research_state_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 proposal.proposal_id,
@@ -828,9 +831,70 @@ class _Transaction:
                 _json(proposal.rationale),
                 proposal.status,
                 proposal.created_at,
+                getattr(proposal, "research_state_id", None),
             ),
         )
         return proposal
+
+    def create_cognitive_transformation(
+        self, transformation: CognitiveTransformation,
+    ) -> CognitiveTransformation:
+        self._conn.execute(
+            """
+            INSERT INTO cognitive_transformations
+            (transformation_id, node_id, episode_id, source_research_state_id,
+             operator_id, challenge, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                transformation.transformation_id,
+                transformation.node_id,
+                transformation.episode_id,
+                transformation.source_research_state_id,
+                transformation.operator_id,
+                transformation.challenge,
+                transformation.created_at,
+            ),
+        )
+        return transformation
+
+    def get_cognitive_transformation(
+        self, transformation_id: str,
+    ) -> CognitiveTransformation | None:
+        row = self._conn.execute(
+            "SELECT * FROM cognitive_transformations WHERE transformation_id = ?",
+            (transformation_id,),
+        ).fetchone()
+        return None if row is None else _transformation_from_row(row)
+
+    def create_research_state(self, state: ResearchState) -> ResearchState:
+        self._conn.execute(
+            """
+            INSERT INTO research_states
+            (research_state_id, node_id, episode_id,
+             derived_from_research_state_id, transformation_id, working_model,
+             evidence_refs, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                state.research_state_id,
+                state.node_id,
+                state.episode_id,
+                state.derived_from_research_state_id,
+                state.transformation_id,
+                state.working_model,
+                _json(list(state.evidence_refs)),
+                state.created_at,
+            ),
+        )
+        return state
+
+    def get_research_state(self, research_state_id: str) -> ResearchState | None:
+        row = self._conn.execute(
+            "SELECT * FROM research_states WHERE research_state_id = ?",
+            (research_state_id,),
+        ).fetchone()
+        return None if row is None else _research_state_from_row(row)
 
     def get_proposal(self, proposal_id: str) -> Proposal | None:
         row = self._conn.execute(
@@ -1003,6 +1067,32 @@ def _proposal_from_row(row: sqlite3.Row) -> Proposal:
         instruction=row["instruction"],
         rationale=_unjson(row["rationale"]),
         status=row["status"],
+        created_at=row["created_at"],
+        research_state_id=row["research_state_id"],
+    )
+
+
+def _transformation_from_row(row: sqlite3.Row) -> CognitiveTransformation:
+    return CognitiveTransformation(
+        transformation_id=row["transformation_id"],
+        node_id=row["node_id"],
+        episode_id=row["episode_id"],
+        source_research_state_id=row["source_research_state_id"],
+        operator_id=row["operator_id"],
+        challenge=row["challenge"],
+        created_at=row["created_at"],
+    )
+
+
+def _research_state_from_row(row: sqlite3.Row) -> ResearchState:
+    return ResearchState(
+        research_state_id=row["research_state_id"],
+        node_id=row["node_id"],
+        episode_id=row["episode_id"],
+        derived_from_research_state_id=row["derived_from_research_state_id"],
+        transformation_id=row["transformation_id"],
+        working_model=row["working_model"],
+        evidence_refs=tuple(_unjson(row["evidence_refs"])),
         created_at=row["created_at"],
     )
 

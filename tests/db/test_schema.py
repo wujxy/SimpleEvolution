@@ -22,6 +22,8 @@ def test_schema_creates_all_tables():
         expected = {
             "nodes",
             "episodes",
+            "research_states",
+            "cognitive_transformations",
             "proposals",
             "experiments",
             "attempts",
@@ -30,4 +32,31 @@ def test_schema_creates_all_tables():
             "scheduler_events",
         }
         assert expected <= tables, f"missing tables: {expected - tables}"
+        conn.close()
+
+
+def test_schema_migrates_legacy_proposal_table():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "legacy.db"
+        conn = sqlite3.connect(str(path))
+        conn.execute(
+            """
+            CREATE TABLE proposals (
+                proposal_id TEXT PRIMARY KEY,
+                node_id TEXT NOT NULL,
+                episode_id TEXT NOT NULL,
+                instruction TEXT NOT NULL,
+                rationale TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL,
+                created_at REAL NOT NULL
+            )
+            """
+        )
+
+        ResearchDBSchema.apply(conn)
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(proposals)").fetchall()
+        }
+
+        assert "research_state_id" in columns
         conn.close()

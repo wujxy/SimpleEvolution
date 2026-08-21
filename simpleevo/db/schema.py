@@ -18,6 +18,14 @@ class ResearchDBSchema:
     def apply(conn: sqlite3.Connection) -> None:
         """Create tables and indexes if they do not exist."""
         conn.executescript(_DDL)
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(proposals)").fetchall()
+        }
+        if "research_state_id" not in columns:
+            conn.execute(
+                "ALTER TABLE proposals ADD COLUMN research_state_id TEXT"
+            )
 
 
 _DDL = """
@@ -56,6 +64,39 @@ CREATE TABLE IF NOT EXISTS episodes (
 CREATE INDEX IF NOT EXISTS idx_episodes_inherited ON episodes(inherited_from_episode_id);
 CREATE INDEX IF NOT EXISTS idx_episodes_node ON episodes(node_id);
 
+-- Cognitive transformations: one recorded generator challenge.
+CREATE TABLE IF NOT EXISTS cognitive_transformations (
+    transformation_id TEXT PRIMARY KEY,
+    node_id TEXT NOT NULL REFERENCES nodes(node_id),
+    episode_id TEXT NOT NULL REFERENCES episodes(episode_id),
+    source_research_state_id TEXT,
+    operator_id TEXT NOT NULL,
+    challenge TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_transformations_node
+    ON cognitive_transformations(node_id);
+CREATE INDEX IF NOT EXISTS idx_transformations_episode
+    ON cognitive_transformations(episode_id);
+
+-- Research states: immutable Scientist working models.
+CREATE TABLE IF NOT EXISTS research_states (
+    research_state_id TEXT PRIMARY KEY,
+    node_id TEXT NOT NULL REFERENCES nodes(node_id),
+    episode_id TEXT NOT NULL REFERENCES episodes(episode_id),
+    derived_from_research_state_id TEXT,
+    transformation_id TEXT,
+    working_model TEXT NOT NULL,
+    evidence_refs TEXT NOT NULL DEFAULT '[]',
+    created_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_research_states_node
+    ON research_states(node_id);
+CREATE INDEX IF NOT EXISTS idx_research_states_episode
+    ON research_states(episode_id);
+
 -- Proposals: Scientist judgment waiting to be tested.
 CREATE TABLE IF NOT EXISTS proposals (
     proposal_id TEXT PRIMARY KEY,
@@ -63,6 +104,7 @@ CREATE TABLE IF NOT EXISTS proposals (
     episode_id TEXT NOT NULL REFERENCES episodes(episode_id),
     instruction TEXT NOT NULL,
     rationale TEXT NOT NULL DEFAULT '{}',
+    research_state_id TEXT,
     status TEXT NOT NULL DEFAULT 'queued'
         CHECK (status IN (
             'queued', 'running', 'done',
