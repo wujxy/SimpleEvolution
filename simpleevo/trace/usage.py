@@ -40,6 +40,26 @@ def extract_usage(usage: Any) -> dict[str, int] | None:
     output_tokens = first("output_tokens", "completion_tokens")
     cache_read = first("cache_read_input_tokens")
     cache_creation = first("cache_creation_input_tokens")
+
+    # OpenAI-compatible cache accounting.  Anthropic-shaped usage reports
+    # ``input_tokens`` EXCLUDING cache reads (cache_read_input_tokens is a
+    # separate counter), so the totals above are already disjoint.  OpenAI
+    # shaped usage (DeepSeek's chat-completions endpoint) reports
+    # ``prompt_tokens`` INCLUDING cached tokens, plus the cached portion in
+    # ``prompt_cache_hit_tokens`` (DeepSeek-specific) or the standard nested
+    # ``prompt_tokens_details.cached_tokens``.  Without mapping those, the
+    # proposer's cache hits are charged at the full fresh-input price and the
+    # budget curve overstates the researcher's cost.
+    if not cache_read:
+        cached = first("prompt_cache_hit_tokens")
+        if not cached:
+            details = data.get("prompt_tokens_details")
+            if isinstance(details, dict):
+                cached = int(details.get("cached_tokens", 0) or 0)
+        if cached:
+            cache_read = cached
+            input_tokens = max(0, input_tokens - cached)
+
     if not any((input_tokens, output_tokens, cache_read, cache_creation)):
         return None
     return {

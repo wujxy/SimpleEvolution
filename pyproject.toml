@@ -26,4 +26,4 @@ dev = ["pytest>=7"]
 simpleevo = "simpleevo.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["simpleevo*", "proposer*", "experiment*"]
+include = ["simpleevo*", "proposer*", "experiment*", "ablation*"]

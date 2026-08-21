@@ -147,12 +147,15 @@ class ExperimentRunner:
             ),
             mounts=self._mounts(workspace, writable=False),
         )
+        effort = executor_cfg.get("effort")
+        extra_args = ["--effort", str(effort)] if effort else []
         agent = Agent(
             world=builder,
             command="claude",
             timeout_seconds=self.request.agent_timeout_seconds,
             allowed_tools="Read,Edit,Write,Bash",
             model=executor_cfg.get("model") or None,
+            extra_args=extra_args,
             trace_store=self._trace_store(),
             usage_observer=self._usage_observer(),
             invocation_id=(
@@ -229,6 +232,16 @@ class ExperimentRunner:
                     target=PurePosixPath("/work") / rel,
                     mode=MountMode.READ_WRITE,
                 ))
+        # External read-only host paths (e.g. /cvmfs, shared data dirs) mounted
+        # as-is so the eval can reach JUNO toolchains / benchmark inputs that
+        # live outside the worktree. Same semantics as the proposer lane's
+        # ``read_only_binds``.
+        for src in self.request.read_only_binds:
+            mounts.append(MountSpec(
+                source=Path(src),
+                target=PurePosixPath(src),
+                mode=MountMode.READ_ONLY,
+            ))
         return tuple(mounts)
 
     def _result(

@@ -250,3 +250,56 @@ def test_sample_weighted_by_axis_count():
     a_count = sum(1 for s in samples if s == "a")
     b_count = sum(1 for s in samples if s == "b")
     assert a_count > b_count
+
+
+def test_topk_direction_objective_block_form():
+    """Higher-better objective declared in the metrics_schema.objective block
+    (the shape real task.yaml configs use) must drive the top-k the right way.
+
+    Regression: _axis_direction read only metrics_schema[axis] and defaulted to
+    lower-is-better, so xsbench's lookups_per_sec (higher better, no per-axis
+    key) kept the WORST nodes as frontier winners.
+    """
+    nodes = [
+        _node("n1", {"lookups_per_sec": 1.0}),
+        _node("n2", {"lookups_per_sec": 2.0}),
+    ]
+    config = FrontierConfig(
+        axes=("lookups_per_sec",),
+        policy=TopKPolicy(k=1),
+        schema={"objective": {"key": "lookups_per_sec", "lower_is_better": False}},
+    )
+    frontier = compute_frontier(nodes, [], config)
+    assert "n2" in frontier
+    assert "n1" not in frontier
+
+
+def test_gepa_direction_objective_block_form():
+    """GEPA per-axis winner must use the objective-block direction too."""
+    nodes = [
+        _node("n1", {"lookups_per_sec": 1.0}),
+        _node("n2", {"lookups_per_sec": 2.0}),
+    ]
+    config = FrontierConfig(
+        axes=("lookups_per_sec",),
+        schema={"objective": {"key": "lookups_per_sec", "lower_is_better": False}},
+    )
+    frontier = compute_frontier(nodes, [], config)
+    assert "n2" in frontier
+    assert "n1" not in frontier
+
+
+def test_direction_legacy_per_axis_key_still_respected():
+    """The legacy per-axis key form keeps working when no objective block is
+    given (scheduler unit-test fixtures use it)."""
+    nodes = [
+        _node("n1", {"ms_per_call": 10.0}),
+        _node("n2", {"ms_per_call": 5.0}),
+    ]
+    config = FrontierConfig(
+        axes=("ms_per_call",),
+        policy=TopKPolicy(k=1),
+        schema={"ms_per_call": {"lower_is_better": True}},
+    )
+    frontier = compute_frontier(nodes, [], config)
+    assert "n2" in frontier

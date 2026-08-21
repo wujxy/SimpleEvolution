@@ -67,6 +67,7 @@ class Scheduler:
         submit_experiment: Callable[[str, dict[str, Any]], str] | None = None,
         clock: Callable[[], float] = time.time,
         generator_basis: list[Generator] | None = None,
+        stop_allocating: bool = False,
     ):
         self.store = store
         self.run_dir = Path(run_dir)
@@ -84,6 +85,12 @@ class Scheduler:
             self.submit_proposer = submit_proposer or (lambda _aid, _p: "")
             self.submit_experiment = submit_experiment or (lambda _eid, _p: "")
         self.clock = clock
+        # When True, ``step()`` stops allocating new proposers; in-flight work
+        # (running proposers/experiments and queued proposals) is still drained
+        # until the scheduler reaches quiescence.  Used by the ablation driver
+        # to turn the eval/budget cap into an actual stop for tree runs, which
+        # otherwise never quiesce while frontier nodes keep research budget.
+        self.stop_allocating = stop_allocating
         self._allocations_counter: dict[str, int] = {}
         self._queries = ResearchQueries(store.path)
         self._telemetry = TelemetryRecorder(self.run_dir)
@@ -114,16 +121,26 @@ class Scheduler:
         # 2. Compute frontier.
         frontier = self._compute_frontier()
 
-        # 3. Allocate proposers to frontier nodes.
-        proposer_jobs = self._allocate_proposers(frontier)
+        # 3. Allocate proposers to frontier nodes.  Suppressed once the driver
+        #    has hit its eval/budget cap — the run then only drains in-flight
+        #    work (running proposers publish; queued proposals become
+        #    experiments; running experiments complete) and quiesces.
+        proposer_jobs = (
+            [] if self.stop_allocating else self._allocate_proposers(frontier)
+        )
 
         # 4. Poll proposer results and publish proposals.
         published = self._poll_proposers()
         if published:
             self._last_proposal_step = self._step_count
 
-        # 5. Drain executor queue up to capacity.
-        experiment_jobs = self._drain_executor_queue(frontier)
+        # 5. Drain executor queue up to capacity.  Suppressed once the driver
+        #    has hit its cap: queued proposals are abandoned (left queued in
+        #    L2, never turned into new experiments), so the run only drains
+        #    experiments already in flight.
+        experiment_jobs = (
+            [] if self.stop_allocating else self._drain_executor_queue(frontier)
+        )
 
         # 6. Poll running experiments for completed results.
         ingested = self._poll_experiments()
@@ -736,6 +753,19 @@ class Scheduler:
     # ------------------------------------------------------------------
     # Quiescence
     # ------------------------------------------------------------------
+
+    def _in_flight(self) -> bool:
+        """True while any proposer or experiment worker is running.
+
+        The cap-bypass counterpart to ``_quiescent``: once the driver has
+        declared the run capped (``stop_allocating``), it only needs in-flight
+        work to drain — it deliberately ignores queued proposals and open
+        allocations, which are abandoned rather than blocking termination.
+        """
+        return bool(
+            self.store.running_attempts("proposer")
+            or self.store.running_attempts("experiment")
+        )
 
     def _quiescent(self) -> bool:
         """True when there is nothing left to do."""

@@ -248,8 +248,16 @@ def experiment_marks(view: TreeView) -> list[tuple[int, float | None, str]]:
 
 def _axis_lower(axis: str, schema: Mapping[str, Any]) -> bool:
     """Per-axis direction, mirroring ``frontier._axis_direction`` exactly so the
-    %-sign matches the frontier replay's notion of "better"."""
-    axis_schema = (schema or {}).get(axis, {})
+    %-sign matches the frontier replay's notion of "better".
+
+    Reads the ``metrics_schema.objective`` block first (canonical declaration),
+    then the per-axis key form — see ``frontier._axis_direction``.
+    """
+    schema = schema or {}
+    objective = schema.get("objective") or {}
+    if objective.get("key") == axis:
+        return bool(objective.get("lower_is_better", True))
+    axis_schema = schema.get(axis, {})
     return bool(axis_schema.get("lower_is_better", True))
 
 

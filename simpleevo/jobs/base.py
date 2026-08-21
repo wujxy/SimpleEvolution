@@ -183,6 +183,7 @@ class BaseSubmitter(ABC):
             "runtime_image": str(cfg.runtime_image),
             "editable_paths": list(cfg.editable_paths),
             "frozen_paths": list(cfg.frozen_paths),
+            "read_only_binds": list(cfg.read_only_binds),
             "eval_commands": list(cfg.eval_commands),
             "metrics_schema": dict(cfg.metrics_schema),
             "agent_timeout_seconds": cfg.agent_timeout_seconds,

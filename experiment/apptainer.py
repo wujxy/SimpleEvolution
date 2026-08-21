@@ -34,6 +34,10 @@ _FORWARDED_ENV = frozenset({
     "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy",
     "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR",
+    # Per-run benchmark core pin: the ablation driver sets BENCH_PIN so
+    # concurrent runs measure on distinct cores instead of all fighting over
+    # bench.sh's default core 9. Unset -> bench.sh defaults to 9.
+    "BENCH_PIN",
 })
 
 

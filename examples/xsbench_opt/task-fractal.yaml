@@ -1,16 +1,18 @@
-# SimpleEvolution task: optimize the XSBench macroscopic cross-section lookup
-# kernel for speed.
+# SimpleEvolution task: XSBench — fractal-tree evolution demo.
 #
-# Paths below are relative to this file (load_config resolves them against the
-# config's own directory), so the example is runnable from anywhere:
+# Identical to task.yaml except for the tree-shape knobs, so each frontier node
+# is studied exactly once and a single study emits 3 proposals — the classic
+# self-similar branching tree (root -> 3 children -> top-3 frontier -> 3
+# children each -> ...). No ablation-control knobs (those live in
+# ablation/driver.py _COMMON_ARM_KNOBS and only apply to the ablation `run`);
+# run this config with `--no-arm-override` so the knobs here take effect.
 #
-#   python -m simpleevo --run-dir runs/xsbench-001 \
-#     init --config examples/xsbench_opt/task.yaml
-#   python -m simpleevo --run-dir runs/xsbench-001 \
-#     run --config examples/xsbench_opt/task.yaml
+#   python -m ablation.driver run --config examples/xsbench_opt/task-fractal.yaml \
+#     --arm topk --run-dir runs/fractal/seed-1 --seed 1 \
+#     --max-evals 30 --budget-usd 4.0 --no-arm-override
 #
-# Before the first run, `setup.sh` must have initialized the target repo as a
-# git repository and built the Apptainer runtime image (see README.md).
+#   python -m simpleevo --run-dir runs/fractal/seed-1 tree   # ASCII tree
+#   python -m simpleevo --run-dir runs/fractal/seed-1 tree-graph   # Graphviz
 
 goal: >
   Optimize the XSBench macroscopic cross-section lookup kernel in src/ for
@@ -69,11 +71,7 @@ gate_block: |
   lookup work into untimed init and streaming precomputed results in the timed
   loop) that would otherwise keep VERIFY bit-identical.
 
-# Proposer (Scientist) chat-model configuration. Any OpenAI-compatible
-# provider supported by proposer/model.py works: api is one of
-# hepai | openai | zhipu | anthropic, with base_url and model to match. The
-# API key is read from the environment (HEPAI_API_KEY / OPENAI_API_KEY /
-# ZHIPU_API_KEY / ANTHROPIC_API_KEY), never from this file.
+# Proposer (Scientist) chat-model configuration.
 researcher:
   api: openai
   model: deepseek-v4-flash
@@ -94,8 +92,8 @@ pricing:
   cache_read_usd_per_1m: 0.02
   cache_creation_usd_per_1m: 0.0
 
-# Scheduling / episode budgets (local smoke defaults; raise for real runs).
-proposal_slots: 3
+# Scheduling / episode budgets.
+proposal_slots: 3          # every study emits 3 proposals -> 3 children
 scientist_steps: 200
 agent_timeout_seconds: 3600
 eval_timeout_seconds: 600
@@ -105,19 +103,15 @@ poll_seconds: 2.0
 queue_max_size: 10
 quiescence_window_proposals: 2
 
-# Frontier selection policy: "gepa" = per-axis best + dominated pruning of
-# strictly-dominated nodes (GEPA, arXiv:2507.19457); "topk" = keep the
-# frontier_top_k best nodes per axis and union them.
+# Frontier selection policy.
 frontier_policy: topk  # gepa or topk
 # Width for the "topk" policy.
 frontier_top_k: 3
 # Total proposer allocations a single frontier node may receive over its
-# lifetime. A frontier node whose fresh episodes are exhausted is
-# programmatically reseeded (fresh episode inheriting its most recent one)
-# until this budget is spent.
-max_research_per_node: 3
-# Inject variation-factor directives (G1..G10 from generator.json) into
-# reseeded episodes: each re-study is pointed at 1-2 generators not yet tried
-# on that node, sampled by the harness. Set false for the pure
-# cognition-fork-reseed control arm.
+# lifetime. =1 means each node is studied exactly once: its 3 children enter
+# the pool, the frontier keeps the top 3, and the next generation starts. This
+# is the knob that makes the tree fractal instead of a deep chain.
+max_research_per_node: 1
+# Variation-factor directives on reseeded episodes. Inert here (max_research=1
+# means no reseed happens); kept at the shipped default.
 generator_reseed: true

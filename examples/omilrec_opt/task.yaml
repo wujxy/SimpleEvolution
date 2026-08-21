@@ -1,0 +1,132 @@
+# SimpleEvolution task: optimize the OMILREC v1.0.0 reconstruction algorithm
+# for speed.
+#
+# Paths below are relative to this file (load_config resolves them against the
+# config's own directory), so the example is runnable from anywhere:
+#
+#   python -m simpleevo --run-dir runs/omilrec-001 \
+#     init --config examples/omilrec_opt/task.yaml
+#   python -m simpleevo --run-dir runs/omilrec-001 \
+#     run --config examples/omilrec_opt/task.yaml
+#
+# Before the first run, `setup.sh` must have initialized the target repo as a
+# git repository, verified the host prerequisites (/cvmfs JUNO toolchain and
+# /data/juno/dingxf bench data), and built the Apptainer runtime image (see
+# README.md).
+
+goal: >
+  Optimize the OMILREC v1.0.0 reconstruction algorithm in OMILRECV2/src/ for
+  speed — lower SPEED_MS (SniperProfiling mean ms per event, single-threaded
+  100-event benchmark; see scripts/sl_eval_v100.sh) — while keeping results
+  within the frozen gates: FCN relative LL error < 1e-13
+  (tests/test_fcn.py), 18-event E2E within 4 mm / 7 keV / 10 ps / 0.1 PE
+  (tests/test_consistency.py), the static gate contract
+  (tests/test_gate_contract.py), and SINGLE_THREADED=PASS. Edit only
+  OMILRECV2/src/. tests/, scripts/, baseline/, and the build config are fixed
+  by the harness.
+
+repo_path: repo
+runtime_image: apptainer.sif
+
+editable_paths:
+  - OMILRECV2/src
+frozen_paths: []
+
+# The eval needs the JUNO software stack (CVMFS) and the benchmark input +
+# reconstruction maps (/data/juno/dingxf), mounted read-only into the sandbox.
+read_only_binds:
+  - /cvmfs
+  - /data/juno/dingxf
+
+eval_commands:
+  - bash scripts/sl_eval_v100.sh --evtmax 100
+
+metrics_schema:
+  objective:
+    key: SPEED_MS
+    lower_is_better: true
+  gates:
+    - key: CONTRACT
+      description: >
+        Static gate contract (tests/test_gate_contract.py): the gate probes
+        call the production OMILRECV2::Calculate_EVLikelihood and the build
+        config declares the probe correctly.
+    - key: FCN
+      description: >
+        FCN gate (tests/test_fcn.py): 4 events x 4 stages, all finite,
+        relative LL error < 1e-13 against tests/fixtures/v100/fcn_points.tsv.
+    - key: CONSISTENCY
+      description: >
+        E2E gate (tests/test_consistency.py): all 18 reference events within
+        4 mm / 7 keV / 10 ps / 0.1 PE of tests/reference/ref_v100_18evt.root.
+    - key: SINGLE_THREADED
+      description: >
+        OMP_NUM_THREADS/MKL_NUM_THREADS/ROOT_NTHREADS all pinned to 1 — the
+        speedup must come from the algorithm, not parallelism.
+
+axes:
+  - SPEED_MS
+
+gate_block: |
+  Only modify files under OMILRECV2/src/. The harness runs:
+    - bash scripts/sl_eval_v100.sh --evtmax 100
+  It builds with ENABLE_FCN_GATE_PROBE=ON, runs the CONTRACT / FCN /
+  CONSISTENCY gate suites, rebuilds probe-free, then benchmarks the production
+  library (single-threaded) and emits SPEED_MS (ms/evt, lower is better) plus
+  the four gate tokens. A change is accepted only if CONTRACT=FCN=
+  CONSISTENCY=SINGLE_THREADED=PASS; among accepted changes, lower SPEED_MS is
+  better. The eval requires the JUNO toolchain (/cvmfs) and benchmark data
+  (/data/juno/dingxf), which the harness mounts read-only.
+
+# Proposer (Scientist) chat-model configuration. Any OpenAI-compatible
+# provider supported by proposer/model.py works: api is one of
+# hepai | openai | zhipu | anthropic, with base_url and model to match. The
+# API key is read from the environment (HEPAI_API_KEY / OPENAI_API_KEY /
+# ZHIPU_API_KEY / ANTHROPIC_API_KEY), never from this file.
+researcher:
+  api: openai
+  model: deepseek-v4-flash
+  base_url: https://api.deepseek.com
+  command_timeout_seconds: 360
+  command_output_cap_chars: 12000
+executor:
+  api: anthropic
+  model: deepseek-v4-flash
+  base_url: https://api.deepseek.com/anthropic
+
+# LLM token pricing for budget accounting (USD per 1M tokens). 1 $ = 6.7 CNY
+pricing:
+  input_usd_per_1m: 0.67
+  output_usd_per_1m: 2.02
+  cache_read_usd_per_1m: 0.02
+  cache_creation_usd_per_1m: 0.0
+
+# Scheduling / episode budgets. The eval is heavy: two cmake builds + the FCN
+# (~40 s) and E2E (~50 s) gate suites + a 100-event benchmark (~90 s) ≈ 5-8
+# minutes, so eval_timeout_seconds must stay generous.
+proposal_slots: 3
+scientist_steps: 200
+agent_timeout_seconds: 3600
+eval_timeout_seconds: 1800
+max_proposer_inflight: 1
+max_experiment_inflight: 1
+poll_seconds: 2.0
+queue_max_size: 10
+quiescence_window_proposals: 2
+
+# Frontier selection policy: "gepa" = per-axis best + dominated pruning of
+# strictly-dominated nodes (GEPA, arXiv:2507.19457); "topk" = keep the
+# frontier_top_k best nodes per axis and union them.
+frontier_policy: gepa
+# Width for the "topk" policy.
+frontier_top_k: 3
+# Total proposer allocations a single frontier node may receive over its
+# lifetime. A frontier node whose fresh episodes are exhausted is
+# programmatically reseeded (fresh episode inheriting its most recent one)
+# until this budget is spent.
+max_research_per_node: 3
+# Inject variation-factor directives (G1..G10 from generator.json) into
+# reseeded episodes: each re-study is pointed at 1-2 generators not yet tried
+# on that node, sampled by the harness. Set false for the pure
+# cognition-fork-reseed control arm.
+generator_reseed: true
