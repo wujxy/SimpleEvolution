@@ -5,6 +5,21 @@
 SimpleEvolution 维护一棵客观的 Node Tree，但由 Proposer 形成、由
 Proposal 携带、并在代际间演化的认知对象是 `ResearchState`。
 
+本次设计只引入两个认知核心：
+
+```text
+ResearchState
+    = Scientist 对课题的当前认识，也是认知演化对象
+
+CognitiveTransformation
+    = Scientist 向外部“导师”陈述当前认识后，由一个生成元引导的认知挑战
+```
+
+Evidence 不是第三个演化核心。现有 `evidence_refs` 只是 ResearchState 对
+源码、实验和 finding 等已有材料的可选来源引用。真正的
+Chain-of-Evidence / Evidence Compiler 将声明与原始材料、执行记录和产出绑定，
+并验证其可追溯性与一致性；这是后续独立设计，不属于本次 MVP。
+
 ```text
 Node
   = 项目在一个确定 source SHA 上的客观研究进度
@@ -263,8 +278,8 @@ Scientist 接受了该挑战。只有后续 ResearchState 显式引用
 - supported / contradicted / validated。
 
 它们可以自然写在 `working_model` 中。只有真实运行证明 Scheduler、
-Evidence Compiler 或 reporting 必须机械查询某项语义时，才将该项提升为
-结构化字段。
+ResearchStateSeedBuilder 或 reporting 必须机械查询某项语义时，才将该项
+提升为结构化字段。
 
 ---
 
@@ -422,7 +437,7 @@ originating ResearchState
 
 ### 7.2 ResearchStateSeed
 
-Harness / Evidence Compiler 为 Child 生成确定性的启动材料：
+Harness 通过 ResearchStateSeedBuilder 为 Child 生成确定性的启动材料：
 
 ```text
 ResearchStateSeed
@@ -443,14 +458,14 @@ ResearchStateSeed 不是一个已注册 ResearchState，也不包含自动生成
 结论。Child Proposer 必须重新检查当前世界，并根据启动材料注册新的
 ResearchState。
 
-MVP 中 ResearchStateSeed 由 Evidence Compiler 按需编译，不需要独立的
-持久化表；其全部输入都来自已有的 Node、ResearchState、Proposal 和
-Experiment 事实记录。
+MVP 中 ResearchStateSeed 由一个确定性的 builder 按需组装，不需要独立的
+持久化表或新智能组件；其全部输入都来自已有的 Node、ResearchState、
+Proposal 和 Experiment 记录。
 
 因此：
 
 ```text
-Harness 编译事实与认知来源；
+Harness 组装事实与认知来源；
 Scientist 形成修正后的理解。
 ```
 
@@ -459,50 +474,66 @@ Child 的热上下文。
 
 ---
 
-## 8. Evidence Compiler
+## 8. ResearchStateSeedBuilder 与未来 Chain-of-Evidence
 
-### 8.1 定位
+### 8.1 ResearchStateSeedBuilder 的定位
 
-Evidence Compiler 是确定性的证据关联与上下文编排器，不是 LLM 总结器、
-Reviewer 或 epistemic judge。
+ResearchStateSeedBuilder 是 Child 上下文的确定性组装函数，不是新的领域对象、
+LLM 总结器、Reviewer 或 epistemic judge。
 
-它连接：
+它只沿已有 identity / foreign-key 关系读取：
 
 ```text
-source evidence
-experiment ledger
-Node transition
-ResearchState
-Proposal expectation
-Experiment outcome
+Child Node
+    → producing Experiment
+    → originating Proposal
+    → originating ResearchState
 ```
 
 它负责回答：
 
-- 某个 ResearchState 注册时绑定了哪些证据；
 - 某个 Proposal 来源于哪个 ResearchState；
 - Proposal 在实验前登记了什么 expectation；
 - 实验实际上改变了什么、测得什么；
 - Child Proposer 应看到哪些对应材料。
 
-### 8.2 不负责的内容
+它可以原样携带 ResearchState 已保存的 `evidence_refs`，但不解析、搜索或验证
+这些引用。它的实现应当是一个小型纯组装边界，而不是独立 Evidence 子系统。
 
-Evidence Compiler 不输出：
+### 8.2 未来 Chain-of-Evidence / Evidence Compiler 的定位
+
+真正的 Evidence Compiler 面向科研可信性，而不是 Child handoff。它连接：
+
+```text
+research claim
+    → declared evidence
+    → source / code / experiment config / execution log / raw metrics
+    → verification and auditable evidence bundle
+```
+
+它负责检查声明是否有来源、数值是否来自对应实验、方法描述是否符合代码、
+产出是否能够被复现或审计。该能力可以利用本次保留的 `evidence_refs`、
+ResearchState provenance 和 Experiment Ledger，但需要独立的 claim model、
+验证规则与产出格式，因此明确推迟到后续设计。
+
+本次 Research State 演化不实现声明抽取、claim-to-evidence 验证、引用真实性
+检查、方法—代码一致性检查或 proof pack。
+
+### 8.3 不负责的科学判断
+
+ResearchStateSeedBuilder 不输出：
 
 - “该假设已被证明”；
 - “该 worldview 已被推翻”；
 - “该方向值得继续”；
 - “该 ResearchState 优于另一个 ResearchState”。
 
-这些都是 Scientist judgment 或现实评价，不是确定性 compiler 的职责。
+这些都是 Scientist judgment 或现实评价，不是确定性 builder 的职责。
 
-### 8.3 可追溯链
+### 8.4 本次保留的身份链
 
 ```text
-Raw Evidence
-    │ evidence_refs
-    ▼
-ResearchState RS1
+ResearchState RS1 + optional evidence_refs
     │ research_state_id
     ▼
 Proposal P1 + expectation
@@ -517,7 +548,8 @@ ResearchStateSeed @ Child Node
 ResearchState RS2
 ```
 
-该链允许后续 evidence compilation、reporting 和研究分析区分：
+该身份链为后续 Chain-of-Evidence、reporting 和研究分析提供 provenance，但
+本次只要求它能够区分：
 
 - 事实本身；
 - Scientist 当时对事实的解释；
@@ -627,7 +659,7 @@ Harness 不通过文本相似度、embedding 或 LLM judge 裁决两个 working 
 2. Proposal 没有显式引用产生自己的 working model；
 3. generator 目前主要作为 reseed hint，变异结果没有 provenance；
 4. Child 复制完整父 session，不能隔离 originating ResearchState；
-5. Evidence Compiler 缺少 ResearchState 这一认知关联关节；
+5. Child 上下文缺少按 originating ResearchState 精确组装的 seed builder；
 6. Proposal budget 是 per-allocation slots，不是 per-Node lifetime budget。
 
 该设计不是重建 Proposer 或 Scheduler，而是把这些已有机制围绕一个明确的
@@ -645,7 +677,7 @@ ResearchState 演化对象重新连接。
 - `submit_proposal(research_state_id=...)`；
 - Proposal N:1 ResearchState 关系；
 - Child ResearchStateSeed；
-- 确定性的 Evidence Compiler 编排；
+- 确定性的 ResearchStateSeedBuilder；
 - `max_proposals_per_node` 与并发 reservation；
 - 相关 schema、工具、继承和预算测试。
 
@@ -659,7 +691,8 @@ ResearchState 演化对象重新连接。
 - 第二棵 cognitive tree scheduler；
 - 自动宣布 supported / contradicted / validated；
 - 新的 Reviewer agent；
-- 为完整性增加独立 Hypothesis 对象。
+- 为完整性增加独立 Hypothesis 对象；
+- Chain-of-Evidence / Evidence Compiler 的 claim-to-evidence 验证与 proof pack。
 
 这些能力只有在真实运行暴露明确 failure mode 后再讨论。
 
@@ -674,7 +707,8 @@ ResearchState 演化对象重新连接。
 5. 一个 ResearchState 可以产生零个或多个 Proposal。
 6. ResearchState 与 Proposal 的一对一只可作为软提示。
 7. Cognitive Transformation 不直接产生 Proposal 或注册结论。
-8. Evidence Compiler 只关联和编排，不做科学解释。
+8. ResearchStateSeedBuilder 只沿 identity 关系组装 Child 材料，不解析或验证
+   evidence。
 9. Child 继承 originating ResearchState 和对应实验结果，不热继承 sibling
    ResearchState。
 10. Frontier 仍选择 Node；ResearchState 不引入第二棵调度树。
