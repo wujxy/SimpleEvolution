@@ -52,6 +52,7 @@ class CognitiveTransformer:
             system=_SYSTEM,
             messages=[{"role": "user", "content": prompt}],
             timeout_seconds=timeout_seconds,
+            json_object=False,  # the challenge is prose, not an action object
         )
         challenge = reply.text.strip()
         if not challenge:

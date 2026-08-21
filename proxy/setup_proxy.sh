@@ -207,7 +207,16 @@ warn_firewall() {
 hint_cron() {
     echo
     echo "This account has no systemd; to auto-start after a reboot:"
-    echo "  crontab -l | { cat; echo '@reboot ${SCRIPT_DIR}/setup_proxy.sh start'; } | crontab -"
+    if crontab -l >/dev/null 2>&1; then
+        echo "  crontab -l | { cat; echo '@reboot ${SCRIPT_DIR}/setup_proxy.sh start'; } | crontab -"
+    else
+        echo "  crontab is denied for this account (PAM) — no @reboot entry can be installed."
+        echo "  Instead, add the idempotent start line to ~/.profile so the proxy comes back"
+        echo "  up on your first login after a reboot (still needs one login; fully-unattended"
+        echo "  boot-start would need an admin's systemd unit). Run it FOREGROUND (no '&') so"
+        echo "  the launch reliably completes; the only cost is a ~1s login delay when down:"
+        echo "    pgrep -f '[f]orward_proxy.py' >/dev/null 2>&1 || ${SCRIPT_DIR}/setup_proxy.sh start >>\$HOME/.simpleevo-proxy/start.log 2>&1"
+    fi
 }
 
 print_verify() {

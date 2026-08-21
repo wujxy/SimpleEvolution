@@ -692,12 +692,23 @@ class ResearchTools:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise ValueError("proposer deadline exceeded")
-        operator_id, challenge, _usage = self.cognitive_transformer.transform(
-            source_text,
-            action.get("operator_id"),
-            used,
-            remaining,
-        )
+        try:
+            operator_id, challenge, _usage = self.cognitive_transformer.transform(
+                source_text,
+                action.get("operator_id"),
+                used,
+                remaining,
+            )
+        except ValueError:
+            # Protocol/validation errors (unknown generator, empty challenge,
+            # deadline exceeded) keep their actionable message via execute()'s
+            # normal error path.
+            raise
+        except Exception as exc:
+            # A mentor consultation must never kill the research round: a
+            # gateway 400, a dead stream, or an empty reply come back as an
+            # ok=False observation the Scientist can continue from.
+            return {"ok": False, "error": f"cognitive transformation failed: {exc}"}
         transformation_id = (
             f"ct-{self.episode_id}-{len(state.transformations) + 1:03d}"
         )

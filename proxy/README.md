@@ -52,6 +52,15 @@ entry (the script prints the exact line; `crontab` needs no sudo):
 @reboot /path/to/SimpleEvolution/proxy/setup_proxy.sh start
 ```
 
+> **If crontab is denied** (some sites deny users via PAM — `crontab -l` errors
+> with "not allowed"), `@reboot` will not work. The script detects this and
+> prints an alternative: an idempotent `pgrep ... || setup_proxy.sh start` line
+> for `~/.profile` (run it **foreground** — no `&` — so the launch reliably
+> completes; the only cost is a ~1s login delay on the rare occasion the proxy
+> was down), bringing the proxy back up on your first login after a reboot.
+> Note this still requires one login; a fully unattended boot-start would need
+> an admin's systemd unit.
+>
 > **Firewall**: if `firewalld` is active and blocks inbound 3128, only an
 > admin (sudo) can open it — the script prints the exact `firewall-cmd` line
 > and warns at `start`. Verify from an execute node (step below) to catch this.

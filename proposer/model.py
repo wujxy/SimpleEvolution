@@ -40,8 +40,18 @@ class ChatModel(Protocol):
         system: str,
         messages: list[dict],
         timeout_seconds: float,
+        json_object: bool = True,
     ) -> ModelReply:
-        """Return one assistant message."""
+        """Return one assistant message.
+
+        ``json_object`` opts OUT of the OpenAI-compatible
+        ``response_format={"type": "json_object"}`` guard. The Scientist
+        protocol needs strict JSON, but consumers that expect free text (the
+        cognitive transformer's challenge) must not pay for it: DeepSeek 400s
+        json_object calls whose prompt lacks the word 'json', and its
+        json_object mode is the fragile one that has returned empty/missing
+        content before.
+        """
 
 
 # --- transient-error retry ------------------------------------------------
@@ -99,7 +109,7 @@ class _RetryChatModel:
         return delay * random.uniform(0.75, 1.25)
 
     def _create(self, *, system: str, messages: list[dict],
-                remaining: float):
+                remaining: float, json_object: bool = True):
         raise NotImplementedError
 
     def _to_reply(self, response) -> ModelReply:
@@ -111,6 +121,7 @@ class _RetryChatModel:
         system: str,
         messages: list[dict],
         timeout_seconds: float,
+        json_object: bool = True,
     ) -> ModelReply:
         deadline = time.monotonic() + max(timeout_seconds, 0.0)
         last_exc: Exception | None = None
@@ -128,6 +139,7 @@ class _RetryChatModel:
                 # retry like any other transient failure.
                 response = self._create(
                     system=system, messages=messages, remaining=remaining,
+                    json_object=json_object,
                 )
                 return self._to_reply(response)
             except Exception as exc:
@@ -187,14 +199,19 @@ class OpenAICompatChatModel(_RetryChatModel):
         self._stream_usage = True
 
     def _create(self, *, system: str, messages: list[dict],
-                remaining: float):
+                remaining: float, json_object: bool = True):
         kwargs: dict = dict(
             model=self.model,
             messages=[{"role": "system", "content": system}, *messages],
             stream=True,
-            response_format={"type": "json_object"},
             timeout=remaining,
         )
+        if json_object:
+            # The Scientist protocol needs strict JSON. Free-text consumers
+            # (cognitive transformer) pass json_object=False: DeepSeek 400s
+            # json_object calls whose prompt lacks 'json', and json mode is
+            # its most fragile — never force it where the reply is prose.
+            kwargs["response_format"] = {"type": "json_object"}
         if self.reasoning_effort:
             kwargs["reasoning_effort"] = self.reasoning_effort
         # Provider-native request-body extras (e.g. GLM's thinking switch);
@@ -403,7 +420,9 @@ class AnthropicChatModel(_RetryChatModel):
         )
 
     def _create(self, *, system: str, messages: list[dict],
-                remaining: float):
+                remaining: float, json_object: bool = True):
+        # The Messages API has no json_object response mode; the flag is
+        # accepted for interface symmetry and ignored.
         return self.client.messages.create(
             model=self.model,
             system=system,

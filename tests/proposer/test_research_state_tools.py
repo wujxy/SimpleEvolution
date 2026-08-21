@@ -140,6 +140,40 @@ def test_transform_worldview_uses_one_generator_and_records_challenge(tmp_path):
     assert "Do not generate implementation proposals" in model.calls[0]["system"]
 
 
+def test_transform_worldview_requests_plain_text(tmp_path):
+    """The transformer consumes free-text challenges, so it must NOT force
+    DeepSeek's json_object response mode (which 400s when the prompt lacks
+    'json', and is exactly the crash that killed a whole research round)."""
+    model = FakeModel("Question whether FCN is the natural ownership boundary.")
+    _tools(tmp_path, model=model).execute(
+        {"action": "transform_worldview", "operator_id": "G2"},
+        deadline=time.monotonic() + 10,
+        working_state=WorkingState(),
+    )
+    assert model.calls[0]["json_object"] is False
+
+
+class ExplodingModel(FakeModel):
+    """A model that blows up mid-call (as DeepSeek did on the 400)."""
+
+    def complete(self, **kwargs):
+        raise RuntimeError(
+            "Error code: 400 - prompt must contain 'json' for json_object"
+        )
+
+
+def test_transform_worldview_failure_degrades_gracefully(tmp_path):
+    """A failing transform must come back as an ok=False observation the
+    Scientist can continue from, never crash the whole research round."""
+    result = _tools(tmp_path, model=ExplodingModel("")).execute(
+        {"action": "transform_worldview", "operator_id": "G2"},
+        deadline=time.monotonic() + 10,
+        working_state=WorkingState(),
+    )
+    assert result["ok"] is False
+    assert "400" in result["error"]
+
+
 def test_transform_worldview_rejects_unknown_generator(tmp_path):
     result = _tools(tmp_path).execute(
         {"action": "transform_worldview", "operator_id": "G99"},
