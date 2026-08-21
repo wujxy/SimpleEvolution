@@ -175,7 +175,7 @@ class ReflectionResult:
 # Research / memory tools never terminate the loop.
 _RESEARCH_TOOL_ACTIONS = frozenset({
     "run_research_command", "read_file", "grep_files", "glob_files",
-    "write_scratch_file",
+    "write_scratch_file", "register_research_state", "transform_worldview",
 } | MEMORY_TOOL_ACTIONS)
 
 # Terminal actions end the deliberation; they are always sent alone, never
@@ -1591,6 +1591,50 @@ def _dispatch(action: dict, proposal_slots: int) -> dict:
             "action": name, "query": query.strip(),
             "filters": filters or {}, "limit": limit, "buckets": buckets,
         }
+    if name == "register_research_state":
+        _require_keys(
+            action,
+            {"action", "working_model"},
+            {
+                "evidence_refs",
+                "derived_from_research_state_id",
+                "transformation_id",
+            },
+        )
+        working_model = action["working_model"]
+        if not isinstance(working_model, str) or not working_model.strip():
+            raise ProposerError("working_model must be non-empty")
+        evidence_refs = tuple(_require_string_list(
+            action.get("evidence_refs", []),
+            name="research_state.evidence_refs",
+            allow_empty=True,
+        ))
+        parsed = {
+            "action": name,
+            "working_model": working_model.strip(),
+            "evidence_refs": evidence_refs,
+        }
+        for key in ("derived_from_research_state_id", "transformation_id"):
+            value = action.get(key)
+            if value is not None:
+                if not isinstance(value, str) or not value.strip():
+                    raise ProposerError(f"{key} must be a non-empty string")
+                parsed[key] = value.strip()
+        return parsed
+    if name == "transform_worldview":
+        _require_keys(
+            action,
+            {"action"},
+            {"source_research_state_id", "operator_id"},
+        )
+        parsed = {"action": name}
+        for key in ("source_research_state_id", "operator_id"):
+            value = action.get(key)
+            if value is not None:
+                if not isinstance(value, str) or not value.strip():
+                    raise ProposerError(f"{key} must be a non-empty string")
+                parsed[key] = value.strip()
+        return parsed
 
     # --- terminal action ---
     if name == "submit_proposals":
@@ -2456,7 +2500,9 @@ class ScientistAgent(ResearchAgent):
                 for action in actions:
                     name = action["action"]
                     state.action_log.append({"action": name, "step": step})
-                    observation = tools.execute(action, deadline=deadline)
+                    observation = tools.execute(
+                        action, deadline=deadline, working_state=state,
+                    )
                     _bump(state, "tool")
                     _register_evidence(state, action, observation)
                     state.last_tool_fingerprint = _fingerprint(action)

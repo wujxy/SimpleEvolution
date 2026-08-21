@@ -4,7 +4,12 @@ from __future__ import annotations
 import json
 import random
 
-from simpleevo.generator import Generator, load_generator_basis, sample_generators
+from simpleevo.generator import (
+    Generator,
+    load_generator_basis,
+    sample_generators,
+    select_one_generator,
+)
 
 
 def _basis() -> list[Generator]:
@@ -73,3 +78,11 @@ def test_sample_k_truncates_to_untried_count():
     rng = random.Random(3)
     chosen = sample_generators(_basis(), {"G1", "G2", "G3"}, k=2, rng=rng)
     assert [g.id for g in chosen] == ["G4"]
+
+
+def test_select_one_generator_returns_first_untried():
+    assert select_one_generator(_basis(), {"G1", "G2"}).id == "G3"
+
+
+def test_select_one_generator_returns_none_when_exhausted():
+    assert select_one_generator(_basis(), {"G1", "G2", "G3", "G4"}) is None

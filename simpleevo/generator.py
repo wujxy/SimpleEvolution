@@ -74,3 +74,11 @@ def sample_generators(
     rng = rng if rng is not None else random
     chosen = rng.sample(untried, min(k, len(untried)))
     return list(chosen)
+
+
+def select_one_generator(
+    basis: Sequence[Generator],
+    tried_ids: set[str] | frozenset[str],
+) -> Generator | None:
+    """Return the first generator not yet used, or ``None`` when exhausted."""
+    return next((item for item in basis if item.id not in tried_ids), None)
