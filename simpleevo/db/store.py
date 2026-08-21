@@ -148,10 +148,12 @@ class ResearchStore:
             conn.commit()
 
     @contextmanager
-    def transaction(self):
+    def transaction(self, *, immediate: bool = False):
         """Context manager yielding a Transaction object."""
         conn = self._connect()
         try:
+            if immediate:
+                conn.execute("BEGIN IMMEDIATE")
             tx = _Transaction(conn)
             yield tx
             conn.commit()
@@ -484,7 +486,7 @@ class ResearchStore:
         Pre-reserves ``proposal_slots`` proposal ids (§2.4 identity-first):
         the ids are issued here by the single writer and handed to the worker.
         """
-        with self.transaction() as tx:
+        with self.transaction(immediate=True) as tx:
             node = tx.get_node(node_id)
             episode = tx.get_episode(episode_id)
             if node is None:

@@ -1,6 +1,7 @@
 """Node-lifetime Proposal capacity and allocation reservations."""
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -109,3 +110,24 @@ def test_scheduler_skips_node_when_proposal_capacity_is_exhausted(store):
     )
     assert scheduler._allocate_proposers(scheduler._compute_frontier()) == []
     assert store.open_allocations() == []
+
+
+def test_concurrent_allocations_cannot_exceed_node_budget(store):
+    node, episodes = _node_with_episodes(store, count=6)
+
+    def allocate(episode):
+        return store.allocate_proposer(
+            node_id=node.node_id,
+            episode_id=episode.episode_id,
+            proposal_slots=3,
+            max_proposals_per_node=4,
+        )
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        allocations = list(executor.map(allocate, episodes))
+    reserved = sum(
+        len(allocation.reserved_proposal_ids)
+        for allocation in allocations
+        if allocation is not None
+    )
+    assert reserved == 4
