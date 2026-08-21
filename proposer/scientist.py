@@ -38,7 +38,7 @@ from tempfile import TemporaryDirectory
 
 from .model import ChatModel
 from .cognitive_transformer import CognitiveTransformer
-from .context import build_research_state_seed_pack
+from .context import build_generator_catalog, build_research_state_seed_pack
 from simpleevo.generator import Generator, load_generator_basis
 from simpleevo.research_state import CognitiveTransformation, ResearchState
 
@@ -53,6 +53,7 @@ from .research_tools import (
     ResearchTools,
     render_research_tool_prompt,
 )
+from .research_skills import render_research_skill_catalog
 from .research_agent import (
     AgentError,
     ResearchAgent,
@@ -181,7 +182,8 @@ class ReflectionResult:
 # Research / memory tools never terminate the loop.
 _RESEARCH_TOOL_ACTIONS = frozenset({
     "run_research_command", "read_file", "grep_files", "glob_files",
-    "write_scratch_file", "register_research_state", "transform_worldview",
+    "write_scratch_file", "use_research_skill", "register_research_state",
+    "transform_worldview",
 } | MEMORY_TOOL_ACTIONS)
 
 # Terminal actions end the deliberation; they are always sent alone, never
@@ -412,6 +414,11 @@ def _compact_live_messages(
 _TOOL_BLOCK = (
     "Research tools (your lab and your library — use them freely to "
     "investigate, verify, and understand):\n" + render_research_tool_prompt()
+)
+
+_SKILL_BLOCK = (
+    "Research skills (optional methods you choose for yourself; load one "
+    "with use_research_skill to read it):\n" + render_research_skill_catalog()
 )
 
 _PROTOCOL_BLOCK = """Output protocol (immutable): every response is exactly one \
@@ -973,6 +980,7 @@ def _build_system_prompt(
         charter.rstrip(),
         world,
         _TOOL_BLOCK,
+        _SKILL_BLOCK,
         _PROTOCOL_BLOCK.replace("{n}", str(proposal_slots)),
         _RUNTIME_BOUNDARIES,
     ]
@@ -1616,6 +1624,12 @@ def _dispatch(action: dict, proposal_slots: int) -> dict:
             "action": name, "query": query.strip(),
             "filters": filters or {}, "limit": limit, "buckets": buckets,
         }
+    if name == "use_research_skill":
+        _require_keys(action, {"action", "skill_id"})
+        skill_id = action["skill_id"]
+        if not isinstance(skill_id, str) or not skill_id.strip():
+            raise ProposerError("use_research_skill.skill_id must be non-empty")
+        return {"action": name, "skill_id": skill_id.strip()}
     if name == "register_research_state":
         _require_keys(
             action,
@@ -1647,18 +1661,21 @@ def _dispatch(action: dict, proposal_slots: int) -> dict:
                 parsed[key] = value.strip()
         return parsed
     if name == "transform_worldview":
+        if "operator_id" not in action:
+            raise ProposerError("transform_worldview.operator_id is required")
         _require_keys(
             action,
-            {"action"},
-            {"source_research_state_id", "operator_id"},
+            {"action", "operator_id"},
+            {"source_research_state_id"},
         )
         parsed = {"action": name}
         for key in ("source_research_state_id", "operator_id"):
             value = action.get(key)
-            if value is not None:
-                if not isinstance(value, str) or not value.strip():
-                    raise ProposerError(f"{key} must be a non-empty string")
-                parsed[key] = value.strip()
+            if value is None and key == "source_research_state_id":
+                continue
+            if not isinstance(value, str) or not value.strip():
+                raise ProposerError(f"{key} must be a non-empty string")
+            parsed[key] = value.strip()
         return parsed
 
     # --- terminal action ---
@@ -2058,6 +2075,7 @@ class ScientistAgent(ResearchAgent):
                 if isinstance(item, dict) and item.get("id")
             ]
         generators = {item.id: item for item in basis}
+        generator_catalog = build_generator_catalog(basis)
         episode_seed = world_context or (
             f"Goal: {goal}\nAccepted revision: {base_sha}"
         )
@@ -2065,7 +2083,8 @@ class ScientistAgent(ResearchAgent):
         system_prompt = _build_system_prompt(
             charter=charter, goal=goal, editable=editable, base_sha=base_sha,
             gate_block=gate_block, proposal_slots=proposal_slots,
-            hints=hints, notebook=session.notebook,
+            hints=[*(hints or ()), generator_catalog],
+            notebook=session.notebook,
         )
 
         # --- assemble the live context (cold start vs resume) ---
@@ -2183,7 +2202,7 @@ class ScientistAgent(ResearchAgent):
                     model=self.model,
                     generators=generators,
                     episode_seed=episode_seed,
-                    suggested_operator_id=suggested_operator_id,
+                    suggested_operator_id=None,
                 ),
                 inherited_research_states=inherited_research_states,
             )

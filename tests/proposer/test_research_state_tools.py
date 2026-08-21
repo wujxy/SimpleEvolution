@@ -12,6 +12,7 @@ from proposer.cli import _proposal_to_dict, _result_to_dict
 from proposer.model import ModelReply
 from proposer.research_agent import WorkingState, _build_telemetry, _build_trace
 from proposer.research_tools import ResearchTools
+from proposer.research_skills import render_research_skill_catalog
 from proposer.runtime import MountMap
 from proposer.scientist import (
     ProposerError,
@@ -88,6 +89,26 @@ def test_parser_accepts_research_state_actions():
     assert action["action"] == "register_research_state"
 
 
+def test_research_skill_is_discoverable_and_loaded_on_demand(tmp_path):
+    catalog = render_research_skill_catalog()
+    assert "reframe_inherited_problem" in catalog
+
+    action = parse_response(
+        '{"action":"use_research_skill",'
+        '"skill_id":"reframe_inherited_problem"}',
+        proposal_slots=3,
+    )
+    result = _tools(tmp_path).execute(
+        action,
+        deadline=time.monotonic() + 10,
+        working_state=WorkingState(),
+    )
+
+    assert result["ok"] is True
+    assert result["skill_id"] == "reframe_inherited_problem"
+    assert "The predecessor material is a memo" in result["content"]
+
+
 def test_register_research_state_assigns_host_identity(tmp_path):
     state = WorkingState()
     state.session_evidence.add("__source_examined__")
@@ -128,15 +149,11 @@ def test_transform_worldview_rejects_unknown_generator(tmp_path):
     assert result == {"ok": False, "error": "unknown generator: G99"}
 
 
-def test_transform_worldview_uses_scheduler_suggestion_when_omitted(tmp_path):
-    state = WorkingState()
-    result = _tools(tmp_path, suggested_operator_id="G2").execute(
-        {"action": "transform_worldview"},
-        deadline=time.monotonic() + 10,
-        working_state=state,
-    )
-    assert result["operator_id"] == "G2"
-    assert state.transformations[result["transformation_id"]].operator_id == "G2"
+def test_transform_worldview_requires_proposer_selected_generator():
+    with pytest.raises(ProposerError, match="operator_id"):
+        parse_response(
+            '{"action":"transform_worldview"}', proposal_slots=3,
+        )
 
 
 def test_registration_rejects_unknown_local_references(tmp_path):

@@ -4,9 +4,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from simpleevo.generator import Generator
+
 
 def build_research_state_seed_pack(seed: dict[str, Any]) -> str:
-    """Render a Child's proposal-specific cognitive starting point."""
+    """Render a Child's facts-first, proposal-specific starting point."""
     if not seed:
         return ""
     state = seed.get("originating_research_state", {})
@@ -14,15 +16,33 @@ def build_research_state_seed_pack(seed: dict[str, Any]) -> str:
     experiment = seed.get("experiment", {})
     child = seed.get("child_node", {})
     return "\n".join([
-        "Originating working model — Scientist judgment, not an established fact:",
-        str(state.get("working_model", "")),
-        "Proposal expectation — Scientist judgment:",
-        str(proposal.get("expectation", "")),
-        "Experiment outcome — authoritative Harness facts:",
-        json.dumps(experiment, ensure_ascii=False, sort_keys=True),
+        "You are a newly assigned Scientist to this Child world. You inherit "
+        "the objective project, not the predecessor's cognition. The "
+        "predecessor material below is a research memo, not your notebook and "
+        "not a default direction. Form your own working model from the current "
+        "world and these facts; preserving, revising, or rejecting the memo "
+        "are all legitimate judgments.",
         "Current Child Node — authoritative Harness facts:",
         json.dumps(child, ensure_ascii=False, sort_keys=True),
-        "Re-ground in the current Child world before registering a revised ResearchState.",
+        "Experiment outcome — authoritative Harness facts:",
+        json.dumps(experiment, ensure_ascii=False, sort_keys=True),
+        "Predecessor proposal — prior intervention and expectation, not an instruction:",
+        json.dumps(proposal, ensure_ascii=False, sort_keys=True),
+        "Predecessor hypothesis — Scientist judgment to examine, not an established fact:",
+        str(state.get("working_model", "")),
+    ])
+
+
+def build_generator_catalog(generators: list[Generator]) -> str:
+    """Expose every available cognitive operator without recommending one."""
+    return "\n".join([
+        "Cognitive generators available for an optional mentor consultation:",
+        *(
+            f"- {item.id} — {item.name}: {item.description}"
+            for item in generators
+        ),
+        "Choose an operator yourself and pass its id to transform_worldview "
+        "when an external challenge would help.",
     ])
 
 

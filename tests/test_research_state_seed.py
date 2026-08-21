@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from proposer.context import build_research_state_seed_pack
+from proposer.context import build_generator_catalog, build_research_state_seed_pack
+from simpleevo.generator import Generator
 from simpleevo.db.store import GateDecision, Proposal, ResearchStore
 from simpleevo.research_state import ResearchState
 from simpleevo.scheduler.loop import Scheduler, SchedulerConfig
@@ -104,14 +105,31 @@ def test_root_has_no_research_state_seed(store):
     assert _scheduler(store)._research_state_seed_for(root) == {}
 
 
-def test_seed_pack_separates_judgment_from_harness_facts(store):
+def test_seed_pack_gives_child_facts_before_predecessor_hypothesis(store):
     seed = _scheduler(store)._research_state_seed_for(
         _seed_completed_research_path(store)
     )
     text = build_research_state_seed_pack(seed)
-    assert "Originating working model — Scientist judgment" in text
+    assert "You are a newly assigned Scientist" in text
+    assert "not your notebook" in text
+    assert "Current Child Node — authoritative Harness facts" in text
     assert "Experiment outcome — authoritative Harness facts" in text
-    assert "Re-ground in the current Child world" in text
+    assert "Predecessor proposal — prior intervention and expectation" in text
+    assert "Predecessor hypothesis — Scientist judgment to examine" in text
+    assert "Preserve reusable state across FCN calls." in text
+    assert text.index("Current Child Node") < text.index("Experiment outcome")
+    assert text.index("Experiment outcome") < text.index("Predecessor proposal")
+    assert text.index("Predecessor proposal") < text.index("Predecessor hypothesis")
+
+
+def test_generator_catalog_exposes_all_choices_without_a_recommendation():
+    text = build_generator_catalog([
+        Generator("G1", "Assumption Attack", "Attack a critical assumption."),
+        Generator("G2", "Boundary Shift", "Shift the problem boundary."),
+    ])
+    assert "G1 — Assumption Attack" in text
+    assert "G2 — Boundary Shift" in text
+    assert "recommended" not in text.lower()
 
 
 def test_child_proposer_payload_uses_research_state_seed(store):

@@ -27,6 +27,7 @@ from .research_agent import WorkingState
 from .runtime import MountMap
 from .child_processes import CHILD_PROCESSES
 from .research_files import PathBoundary, ResearchFiles
+from .research_skills import load_research_skill
 
 
 @dataclass(frozen=True)
@@ -185,6 +186,15 @@ RESEARCH_TOOL_SPECS = (
         ),
     ),
     ResearchToolSpec(
+        action="use_research_skill",
+        schema='{"action":"use_research_skill","skill_id":"..."}',
+        description=(
+            "Load one optional research method from the catalog. It returns "
+            "guidance only: you retain all scientific judgment and decide "
+            "whether to register a ResearchState or submit a Proposal."
+        ),
+    ),
+    ResearchToolSpec(
         action="register_research_state",
         schema=(
             '{"action":"register_research_state",'
@@ -201,7 +211,7 @@ RESEARCH_TOOL_SPECS = (
         action="transform_worldview",
         schema=(
             '{"action":"transform_worldview",'
-            '"source_research_state_id":null,"operator_id":null}'
+            '"operator_id":"G...","source_research_state_id":null}'
         ),
         description=(
             "Ask a stateless mentor to apply exactly one cognitive generator "
@@ -513,6 +523,12 @@ class ResearchTools:
         continues past a bad item."""
         name = action["action"]
         try:
+            if name == "use_research_skill":
+                return {
+                    "ok": True,
+                    "skill_id": action["skill_id"],
+                    "content": load_research_skill(action["skill_id"]),
+                }
             if name == "register_research_state":
                 return self._register_research_state(action, working_state)
             if name == "transform_worldview":
