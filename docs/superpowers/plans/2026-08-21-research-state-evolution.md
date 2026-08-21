@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `ResearchState` the explicit, traceable cognitive evolution object connecting evidence, Cognitive Transformation, Proposal, Experiment, and Child Node while retaining one objective Node Tree.
+**Goal:** Implement `ResearchState` and `CognitiveTransformation` as the two cognitive cores connecting Scientist understanding, Proposal, Experiment, and Child Node while retaining one objective Node Tree.
 
-**Architecture:** Proposer workers keep ResearchState and CognitiveTransformation records in round-local memory and publish them in their durable result artifact; the Scheduler remains the only L2 writer and atomically ingests the cognitive records with their Proposals. `transform_worldview` uses one generator in a short stateless model call, while a deterministic Harness-side Evidence Compiler assembles the originating state plus experiment facts for Child startup.
+**Architecture:** Proposer workers keep ResearchState and CognitiveTransformation records in round-local memory and publish them in their durable result artifact; the Scheduler remains the only L2 writer and atomically ingests the cognitive records with their Proposals. `transform_worldview` uses one generator in a short stateless model call, while the existing Scheduler/context path deterministically assembles the originating state plus experiment facts for Child startup.
 
 **Tech Stack:** Python 3.9+, dataclasses, SQLite, pytest, existing ChatModel/Scientist/Scheduler runtime.
 
@@ -14,10 +14,12 @@
 - At execution time, invoke `using-git-worktrees` before editing and create an isolated worktree for `research_state_evolve`; do not disturb the dirty `main` checkout.
 - Preserve the Scheduler as the sole writer of `simpleevo.db`; HTCondor/local proposer workers only emit durable result artifacts.
 - Keep one objective Node Tree and the existing measured-axis Frontier; do not add a ResearchState Frontier or semantic similarity judge.
+- Implement exactly two cognitive cores: `ResearchState` and `CognitiveTransformation`; Proposal/Experiment/Node remain the existing objective action-and-feedback path.
 - `working_model` is free-form Scientist text. Do not add mandatory assumptions, root-cause, causal-model, hypothesis-family, or validation-status fields.
 - Every new Proposal must reference exactly one ResearchState; one ResearchState may produce zero or more Proposals.
 - “Prefer one Proposal from each viable ResearchState before adding a second” remains prompt guidance, never a schema constraint.
-- Evidence Compiler only joins and formats facts; it must not infer supported, contradicted, validated, or recommended.
+- `evidence_refs` remains optional provenance only. Do not add claim extraction, claim-to-evidence verification, reference validation, method-code alignment checks, proof packs, or an Evidence Compiler; Chain-of-Evidence is future work.
+- ResearchStateSeed assembly only follows existing identity links and formats Child context; it must not resolve or validate evidence or infer supported, contradicted, validated, or recommended.
 - One `transform_worldview` invocation applies exactly one generator. Composition happens through multiple recorded transformations.
 - `proposal_slots` remains a per-Episode ceiling; `max_proposals_per_node` is the lifetime Node ceiling. Neither is a quota.
 - Preserve legacy SQLite run directories: old Proposal rows may have `research_state_id = NULL`, but all newly ingested Proposals must have a non-null ResearchState.
@@ -30,10 +32,9 @@
 
 - `simpleevo/research_state.py` — shared immutable ResearchState and CognitiveTransformation records plus JSON conversion.
 - `proposer/cognitive_transformer.py` — one-shot generator application through the existing `ChatModel` boundary.
-- `simpleevo/evidence_compiler.py` — deterministic `ResearchStateSeed` assembly from L2 facts.
 - `tests/db/test_research_state_store.py` — L2 schema, migration, persistence, and atomic-ingest tests.
 - `tests/proposer/test_research_state_tools.py` — action parsing, local registration, generator application, and Proposal linkage tests.
-- `tests/test_evidence_compiler.py` — root/Child seed compilation tests.
+- `tests/test_research_state_seed.py` — root/Child seed assembly tests.
 - `tests/test_node_proposal_budget.py` — lifetime budget and concurrent reservation tests.
 - `tests/scheduler/test_research_state_telemetry.py` — cognitive-width telemetry tests.
 
@@ -41,7 +42,7 @@
 
 - `simpleevo/db/schema.py` — ResearchState/Transformation tables and backward-compatible Proposal column migration.
 - `simpleevo/db/store.py` — domain persistence, atomic research batch ingest, and Node-level proposal reservations.
-- `simpleevo/db/queries.py` — read projections for ResearchState, Transformation, seed compilation, and telemetry.
+- `simpleevo/db/queries.py` — read projections for ResearchState, Transformation, and telemetry.
 - `proposer/research_agent.py` — round-local cognitive records and trace/telemetry fields.
 - `proposer/research_tools.py` — register/transform tool schemas and dispatch.
 - `proposer/memory/models.py` — Proposal reference to ResearchState and preregistered expectation.
@@ -51,7 +52,7 @@
 - `proposer/context.py` — render `ResearchStateSeed` as Scientist startup context.
 - `simpleevo/generator.py` — explicit single-generator selection helper.
 - `simpleevo/config.py` — `max_proposals_per_node` configuration.
-- `simpleevo/scheduler/loop.py` — allocation budget, generator payload, atomic cognitive ingest, and seed compilation.
+- `simpleevo/scheduler/loop.py` — allocation budget, generator payload, atomic cognitive ingest, and minimal Child seed assembly.
 - `simpleevo/scheduler/telemetry.py` — ResearchState width and Proposal concentration telemetry.
 - `proposer/prompts/proposer.md` — working-model ownership and soft breadth guidance.
 - `tests/db/test_schema.py`, `tests/db/test_store.py`, `tests/test_generator.py`, `tests/test_scheduler_reseed.py`, `tests/test_config.py`, `tests/test_integration.py`, `tests/scheduler/test_frontier_persistence.py` — update existing contracts and regression coverage.
@@ -581,35 +582,105 @@ git commit -m "feat: ingest research state batches atomically"
 
 ---
 
-### Task 5: Deterministic Evidence Compiler and Child ResearchStateSeed
+### Task 5: Proposal-specific Child ResearchStateSeed handoff
 
 **Files:**
 
-- Create: `simpleevo/evidence_compiler.py`
-- Create: `tests/test_evidence_compiler.py`
+- Create: `tests/test_research_state_seed.py`
 - Modify: `proposer/context.py`
 - Modify: `proposer/orchestrator.py`
 - Modify: `proposer/cli.py`
 - Modify: `proposer/scientist.py`
 - Modify: `simpleevo/scheduler/loop.py`
-- Modify: `tests/db/test_store.py`
 - Modify: `tests/scheduler/test_frontier_persistence.py`
 - Modify: `tests/proposer/test_scientist_session.py`
 
 **Interfaces:**
 
-- Produces `EvidenceCompiler.compile_seed(node_id: str) -> dict[str, Any]`.
+- Produces `Scheduler._research_state_seed_for(node: Node) -> dict[str, Any]`; this is a small payload assembler, not a domain service or Evidence Compiler.
 - Scheduler payload key becomes `research_state_seed`; `world_transition` remains accepted only as a legacy fallback.
 - Child episodes do not hot-copy the full parent session when an originating ResearchState seed exists.
 
-- [ ] **Step 1: Write failing compiler tests**
+- [ ] **Step 1: Write failing seed-assembly tests**
 
 Test root and Child behavior:
 
 ```python
-def test_compile_child_seed_joins_state_expectation_and_outcome(store):
+@pytest.fixture
+def store(tmp_path: Path) -> ResearchStore:
+    return ResearchStore(tmp_path / "simpleevo.db")
+
+
+def _scheduler(store: ResearchStore) -> Scheduler:
+    return Scheduler(
+        store,
+        store.path.parent,
+        SchedulerConfig(
+            max_proposer_inflight=0,
+            max_experiment_inflight=0,
+            poll_seconds=0.0,
+        ),
+    )
+
+
+def _seed_root(store: ResearchStore) -> Node:
+    with store.transaction() as tx:
+        return tx.create_node(
+            parent_node_id=None,
+            experiment_id=None,
+            sha="sha-root",
+            metrics={"total_ms": 100.0},
+            gate_result=GateDecision({}, True),
+            depth=0,
+            status="active",
+        )
+
+
+def _seed_completed_research_path(store: ResearchStore) -> Node:
+    root = _seed_root(store)
+    with store.transaction() as tx:
+        episode = tx.create_episode(node_id=root.node_id)
+        tx.create_research_state(ResearchState(
+            research_state_id="rs-ep-1-001",
+            node_id=root.node_id,
+            episode_id=episode.episode_id,
+            derived_from_research_state_id=None,
+            transformation_id=None,
+            working_model="The boundary loses reusable state.",
+            evidence_refs=("source:src/fcn.cc:FCN",),
+            created_at=1.0,
+        ))
+        tx.create_proposal(Proposal(
+            proposal_id="proposal-1",
+            node_id=root.node_id,
+            episode_id=episode.episode_id,
+            instruction="Preserve reusable state across FCN calls.",
+            rationale={"expectation": "total_ms decreases"},
+            status="running",
+            created_at=2.0,
+            research_state_id="rs-ep-1-001",
+        ))
+        experiment = tx.create_experiment(
+            experiment_id="experiment-1",
+            proposal_id="proposal-1",
+            parent_node_id=root.node_id,
+        )
+    child = store.ingest_experiment_result(
+        experiment_id=experiment.experiment_id,
+        result_sha="sha-child",
+        metrics={"total_ms": 90.0},
+        gate_result=GateDecision({}, True),
+        status="completed",
+        changed_paths=("src/fcn.cc",),
+    )
+    assert child is not None
+    return child
+
+
+def test_child_seed_joins_state_expectation_and_outcome(store):
     child = _seed_completed_research_path(store)
-    seed = EvidenceCompiler(ResearchQueries(store.path)).compile_seed(child.node_id)
+    scheduler = _scheduler(store)
+    seed = scheduler._research_state_seed_for(child)
     assert seed["child_node"]["node_id"] == child.node_id
     assert seed["originating_research_state"]["working_model"] == (
         "The boundary loses reusable state."
@@ -619,26 +690,34 @@ def test_compile_child_seed_joins_state_expectation_and_outcome(store):
     assert "interpretation" not in seed
 
 
-def test_compile_root_seed_has_only_objective_world(store):
+def test_root_has_no_research_state_seed(store):
     root = _seed_root(store)
-    seed = EvidenceCompiler(ResearchQueries(store.path)).compile_seed(root.node_id)
-    assert seed["child_node"]["node_id"] == root.node_id
-    assert "originating_research_state" not in seed
+    assert _scheduler(store)._research_state_seed_for(root) == {}
+
+
+def test_seed_pack_separates_judgment_from_harness_facts(store):
+    seed = _scheduler(store)._research_state_seed_for(
+        _seed_completed_research_path(store)
+    )
+    text = build_research_state_seed_pack(seed)
+    assert "Originating working model — Scientist judgment" in text
+    assert "Experiment outcome — authoritative Harness facts" in text
+    assert "Re-ground in the current Child world" in text
 ```
 
-Add a context rendering test that the pack labels working-model text as Scientist judgment and metrics/gates as Harness facts.
+Use imports from `pytest`, `pathlib`, `simpleevo.db.store`, `simpleevo.research_state`, `simpleevo.scheduler.loop`, and `proposer.context` exactly as required by the snippet.
 
 - [ ] **Step 2: Run focused tests and verify RED**
 
 ```bash
-python -m pytest tests/test_evidence_compiler.py tests/proposer/test_scientist_session.py tests/db/test_store.py tests/scheduler/test_frontier_persistence.py -q
+python -m pytest tests/test_research_state_seed.py tests/proposer/test_scientist_session.py tests/scheduler/test_frontier_persistence.py -q
 ```
 
-Expected: import failure for `simpleevo.evidence_compiler`.
+Expected: failure because `_research_state_seed_for()` and the new payload are absent.
 
-- [ ] **Step 3: Implement the deterministic compiler**
+- [ ] **Step 3: Assemble the seed in the existing Scheduler path**
 
-`compile_seed()` follows only foreign-key/identity links:
+Add `_research_state_seed_for()` next to `_world_transition_for()` in `simpleevo/scheduler/loop.py`. It follows only foreign-key/identity links:
 
 ```text
 Node.experiment_id
@@ -647,7 +726,7 @@ Node.experiment_id
 → ResearchState
 ```
 
-Return plain dicts containing Child Node identity/metrics/gate, originating state identity/working model/evidence refs, Proposal instruction/expectation/material difference, and Experiment identity/metrics/gate/changed paths/parent metrics. Do not call a model, summarize, rank, or emit epistemic status.
+Return `{}` for a root Node or legacy chain without `research_state_id`. Otherwise return plain dicts containing Child Node identity/metrics/gate, originating state identity/working model/evidence refs, Proposal instruction/expectation/material difference, and Experiment identity/metrics/gate/changed paths/parent metrics. Reuse `_world_transition_for()` for experiment facts. Do not create a new production module, call a model, resolve evidence refs, summarize, rank, verify claims, or emit epistemic status.
 
 - [ ] **Step 4: Render and inject the seed**
 
@@ -670,16 +749,16 @@ Update Child Episode tests: `inherited_from_episode_id` remains provenance, but 
 - [ ] **Step 6: Run focused seed tests and verify GREEN**
 
 ```bash
-python -m pytest tests/test_evidence_compiler.py tests/proposer/test_scientist_session.py tests/db/test_store.py tests/scheduler/test_frontier_persistence.py -q
+python -m pytest tests/test_research_state_seed.py tests/proposer/test_scientist_session.py tests/scheduler/test_frontier_persistence.py -q
 ```
 
 Expected: all selected tests pass.
 
-- [ ] **Step 7: Commit the evidence-handoff slice**
+- [ ] **Step 7: Commit the Child-state handoff slice**
 
 ```bash
-git add simpleevo/evidence_compiler.py simpleevo/scheduler/loop.py proposer/context.py proposer/orchestrator.py proposer/cli.py proposer/scientist.py tests/test_evidence_compiler.py tests/proposer/test_scientist_session.py tests/db/test_store.py tests/scheduler/test_frontier_persistence.py
-git commit -m "feat: compile proposal-specific child research seeds"
+git add simpleevo/scheduler/loop.py proposer/context.py proposer/orchestrator.py proposer/cli.py proposer/scientist.py tests/test_research_state_seed.py tests/proposer/test_scientist_session.py tests/scheduler/test_frontier_persistence.py
+git commit -m "feat: assemble proposal-specific child research seeds"
 ```
 
 ---
@@ -827,7 +906,7 @@ Extend `test_scheduler_closes_proposer_experiment_loop()` to assert:
 - ResearchState and Transformation rows are ingested;
 - Proposal references the ResearchState;
 - Experiment creates the Child Node;
-- `EvidenceCompiler.compile_seed(child_id)` returns the originating working model and actual outcome;
+- `Scheduler._research_state_seed_for(child)` returns the originating working model and actual outcome;
 - a second Proposal from the same state remains legal.
 
 - [ ] **Step 2: Run the tests and verify RED**
@@ -863,19 +942,19 @@ Do not prescribe a mandatory transform → register → submit sequence.
 Add a subsection to `docs/design/evolution_for_research_state.md` documenting:
 
 ```text
-Evidence Compiler → exact transformation input
+ResearchState or Child seed → exact transformation input
 Generator → one cognitive operation
 Stateless Transformer → challenge only
 Scientist → acceptance/rejection and new working model
 Harness → provenance and budget
 ```
 
-State that multiple generators compose through multiple explicit transformation records, not one combined prompt hint.
+State that multiple generators compose through multiple explicit transformation records, not one combined prompt hint. Keep Chain-of-Evidence / Evidence Compiler explicitly out of this implementation.
 
 - [ ] **Step 6: Run the complete relevant suite**
 
 ```bash
-python -m pytest tests/db tests/proposer tests/scheduler tests/test_generator.py tests/test_scheduler_reseed.py tests/test_node_proposal_budget.py tests/test_evidence_compiler.py tests/test_scheduler_attempts.py tests/test_integration.py tests/test_config.py tests/test_example_config.py tests/test_omilrec_example_config.py -q
+python -m pytest tests/db tests/proposer tests/scheduler tests/test_generator.py tests/test_scheduler_reseed.py tests/test_node_proposal_budget.py tests/test_research_state_seed.py tests/test_scheduler_attempts.py tests/test_integration.py tests/test_config.py tests/test_example_config.py tests/test_omilrec_example_config.py -q
 ```
 
 Expected: all selected tests pass with zero failures.
@@ -908,7 +987,8 @@ git commit -m "feat: complete research state evolution flow"
 - [ ] Invalid cross-Node/cross-Episode references roll back the entire proposer batch.
 - [ ] `transform_worldview` makes one stateless model call with one generator and never registers a state itself.
 - [ ] Child startup contains only its originating ResearchState plus corresponding Proposal/Experiment facts, not sibling state/session content.
-- [ ] Evidence Compiler output is deterministic and contains no inferred support/contradiction/recommendation.
+- [ ] No Evidence Compiler, claim model, verification layer, or proof pack is added; `evidence_refs` remains optional provenance.
+- [ ] ResearchStateSeed assembly is deterministic, follows only identity links, and contains no inferred support/contradiction/recommendation.
 - [ ] Concurrent allocations cannot exceed `max_proposals_per_node`; unused reservations are released.
 - [ ] Frontier remains Node/metrics based and no semantic diversity judge exists.
 - [ ] Full pytest, compileall, and diff checks pass from fresh output.
