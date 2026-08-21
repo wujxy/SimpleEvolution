@@ -535,16 +535,38 @@ class Scheduler:
         result = raw.get("result", {})
         node_id = result.get("node_id")
         episode_id = result.get("episode_id")
+        transformations = result.get("transformations", [])
+        research_states = result.get("research_states", [])
         proposals = result.get("proposals", [])
         allocation = self.store.get_allocation(allocation_id)
         reserved = allocation.reserved_proposal_ids if allocation else ()
-        if node_id and episode_id and proposals:
-            self.store.publish_proposals(
+        try:
+            if allocation is None:
+                raise ValueError(f"unknown proposer allocation: {allocation_id}")
+            if node_id != allocation.node_id or episode_id != allocation.episode_id:
+                raise ValueError("proposer result belongs to another node or episode")
+            self.store.publish_research_batch(
                 node_id=node_id,
                 episode_id=episode_id,
+                transformations=transformations,
+                research_states=research_states,
                 proposals=proposals,
                 reserved_proposal_ids=reserved,
             )
+        except Exception as exc:
+            print(
+                f"[scheduler] invalid proposer result {allocation_id}: {exc}",
+                flush=True,
+            )
+            if attempt is not None:
+                self.store.mark_proposer_infra_failed(
+                    allocation_id=allocation_id,
+                    attempt_id=attempt.attempt_id,
+                )
+            self._archive_result(
+                result_path, attempt.attempt_id if attempt else None,
+            )
+            return False
         self.store.deallocate_proposer(
             allocation_id=allocation_id,
             proposals_produced=len(proposals),

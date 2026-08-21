@@ -314,6 +314,163 @@ class ResearchStore:
             tx.update_episode_last_active(episode_id, now)
         return created
 
+    def publish_research_batch(
+        self,
+        *,
+        node_id: str,
+        episode_id: str,
+        transformations: Iterable[dict[str, Any]],
+        research_states: Iterable[dict[str, Any]],
+        proposals: Iterable[dict[str, Any]],
+        reserved_proposal_ids: Iterable[str] | None = None,
+    ) -> list[Proposal]:
+        """Atomically publish one Episode's cognitive records and proposals."""
+        transformation_rows = list(transformations)
+        state_rows = list(research_states)
+        proposal_rows = list(proposals)
+        reserved = (
+            set(reserved_proposal_ids)
+            if reserved_proposal_ids is not None else None
+        )
+        now = time.time()
+        created: list[Proposal] = []
+
+        with self.transaction() as tx:
+            node = tx.get_node(node_id)
+            if node is None:
+                raise ValueError(f"unknown node: {node_id}")
+            episode = tx.get_episode(episode_id)
+            if episode is None:
+                raise ValueError(f"unknown episode: {episode_id}")
+            if episode.node_id != node_id:
+                raise ValueError("episode belongs to another node")
+
+            transformation_ids = [
+                row.get("transformation_id") for row in transformation_rows
+            ]
+            state_ids = [row.get("research_state_id") for row in state_rows]
+            proposal_ids = [row.get("proposal_id") for row in proposal_rows]
+            self._validate_unique_ids(
+                transformation_ids, "transformation_id",
+            )
+            self._validate_unique_ids(state_ids, "research_state_id")
+            self._validate_unique_ids(proposal_ids, "proposal_id")
+
+            incoming_transformations = set(transformation_ids)
+            incoming_states = set(state_ids)
+            for transformation_id in incoming_transformations:
+                if not transformation_id.startswith(f"ct-{episode_id}-"):
+                    raise ValueError(
+                        f"invalid transformation_id for episode: {transformation_id}"
+                    )
+                if tx.get_cognitive_transformation(transformation_id) is not None:
+                    raise ValueError(
+                        f"duplicate transformation_id: {transformation_id}"
+                    )
+            for state_id in incoming_states:
+                if not state_id.startswith(f"rs-{episode_id}-"):
+                    raise ValueError(
+                        f"invalid research_state_id for episode: {state_id}"
+                    )
+                if tx.get_research_state(state_id) is not None:
+                    raise ValueError(f"duplicate research_state_id: {state_id}")
+
+            for raw in transformation_rows:
+                if raw.get("node_id") != node_id or raw.get("episode_id") != episode_id:
+                    raise ValueError(
+                        "transformation belongs to another node or episode"
+                    )
+                source_id = raw.get("source_research_state_id")
+                if (
+                    source_id
+                    and source_id not in incoming_states
+                    and tx.get_research_state(source_id) is None
+                ):
+                    raise ValueError(f"unknown source_research_state_id: {source_id}")
+
+            for raw in state_rows:
+                if raw.get("node_id") != node_id or raw.get("episode_id") != episode_id:
+                    raise ValueError(
+                        "research state belongs to another node or episode"
+                    )
+                derived_id = raw.get("derived_from_research_state_id")
+                if (
+                    derived_id
+                    and derived_id not in incoming_states
+                    and tx.get_research_state(derived_id) is None
+                ):
+                    raise ValueError(
+                        f"unknown derived_from_research_state_id: {derived_id}"
+                    )
+                transformation_id = raw.get("transformation_id")
+                if (
+                    transformation_id
+                    and transformation_id not in incoming_transformations
+                    and tx.get_cognitive_transformation(transformation_id) is None
+                ):
+                    raise ValueError(
+                        f"unknown transformation_id: {transformation_id}"
+                    )
+
+            for raw in transformation_rows:
+                tx.create_cognitive_transformation(CognitiveTransformation(
+                    transformation_id=raw["transformation_id"],
+                    node_id=node_id,
+                    episode_id=episode_id,
+                    source_research_state_id=raw.get("source_research_state_id"),
+                    operator_id=raw["operator_id"],
+                    challenge=raw["challenge"],
+                    created_at=float(raw.get("created_at", now)),
+                ))
+            for raw in state_rows:
+                tx.create_research_state(ResearchState(
+                    research_state_id=raw["research_state_id"],
+                    node_id=node_id,
+                    episode_id=episode_id,
+                    derived_from_research_state_id=raw.get(
+                        "derived_from_research_state_id"
+                    ),
+                    transformation_id=raw.get("transformation_id"),
+                    working_model=raw["working_model"],
+                    evidence_refs=tuple(raw.get("evidence_refs", ())),
+                    created_at=float(raw.get("created_at", now)),
+                ))
+
+            for raw in proposal_rows:
+                proposal_id = raw.get("proposal_id")
+                if reserved is not None and proposal_id not in reserved:
+                    raise ValueError(
+                        f"proposal_id {proposal_id} not in reserved pool"
+                    )
+                state_id = raw.get("research_state_id")
+                state = tx.get_research_state(state_id) if state_id else None
+                if state is None:
+                    raise ValueError(f"unknown research_state_id: {state_id}")
+                if state.node_id != node_id or state.episode_id != episode_id:
+                    raise ValueError(
+                        "proposal research state belongs to another node or episode"
+                    )
+                proposal = tx.create_proposal(Proposal(
+                    proposal_id=proposal_id,
+                    node_id=node_id,
+                    episode_id=episode_id,
+                    instruction=raw["instruction"],
+                    rationale=raw.get("rationale", {}),
+                    status="queued",
+                    created_at=now,
+                    research_state_id=state_id,
+                ))
+                created.append(proposal)
+            tx.update_episode_last_active(episode_id, now)
+        return created
+
+    @staticmethod
+    def _validate_unique_ids(values: list[Any], field: str) -> None:
+        if any(not isinstance(value, str) or not value for value in values):
+            raise ValueError(f"missing {field}")
+        if len(values) != len(set(values)):
+            raise ValueError(f"duplicate {field}")
+
     def allocate_proposer(
         self,
         *,

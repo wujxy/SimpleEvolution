@@ -5,6 +5,7 @@ import json
 import tempfile
 from pathlib import Path
 
+from simpleevo.db.queries import ResearchQueries
 from simpleevo.db.store import GateDecision, GateResult, Proposal, ResearchStore
 from simpleevo.scheduler.frontier import FrontierConfig
 from simpleevo.scheduler.loop import Scheduler, SchedulerConfig
@@ -322,6 +323,76 @@ def test_proposer_infra_failed_result_does_not_block_next_attempt():
         assert len(attempts) == 2
         assert attempts[0].status == "failed"
         assert attempts[1].status == "running"
+
+
+def test_invalid_cognitive_payload_fails_attempt_without_partial_rows():
+    with tempfile.TemporaryDirectory() as tmp:
+        run_dir = Path(tmp)
+        store = ResearchStore(run_dir / "simpleevo.db")
+        with store.transaction() as tx:
+            root = tx.create_node(
+                parent_node_id=None,
+                experiment_id=None,
+                sha="sha-root",
+                metrics={},
+                gate_result=GateDecision({}, True),
+                depth=0,
+                status="active",
+            )
+            episode = tx.create_episode(node_id=root.node_id)
+        allocation = store.allocate_proposer(
+            node_id=root.node_id,
+            episode_id=episode.episode_id,
+            proposal_slots=1,
+        )
+        attempt = store.record_attempt(
+            logical_work_id=allocation.allocation_id,
+            kind="proposer",
+            status="running",
+            started_at=1.0,
+        )
+        result_path = (
+            run_dir / "proposer_allocations" / allocation.allocation_id
+            / "result.json"
+        )
+        state_id = f"rs-{episode.episode_id}-001"
+        _write_json(result_path, {
+            "status": "completed",
+            "result": {
+                "episode_id": episode.episode_id,
+                "node_id": root.node_id,
+                "outcome": "abstain",
+                "transformations": [],
+                "research_states": [{
+                    "research_state_id": state_id,
+                    "node_id": root.node_id,
+                    "episode_id": episode.episode_id,
+                    "derived_from_research_state_id": None,
+                    "transformation_id": "ct-missing",
+                    "working_model": "A model with a broken reference.",
+                    "evidence_refs": [],
+                    "created_at": 1.0,
+                }],
+                "proposals": [],
+            },
+        })
+        scheduler = Scheduler(
+            store,
+            run_dir,
+            SchedulerConfig(max_proposer_inflight=0, max_experiment_inflight=0),
+        )
+
+        scheduler.step()
+
+        assert store.attempts_for_work(
+            allocation.allocation_id, "proposer"
+        )[-1].status == "failed"
+        assert store.get_allocation(allocation.allocation_id).finished_at is None
+        assert ResearchQueries(store.path).get_research_state(state_id) is None
+        assert not result_path.exists()
+        assert attempt.attempt_id in next(
+            result_path.parent.glob("result.json.*.ingested")
+        ).name
 
 
 def test_episode_is_single_use():

@@ -112,6 +112,17 @@ class ResearchQueries:
             ).fetchone()
             return None if row is None else _transformation_from_row(row)
 
+    def transformations_for_episode(
+        self, episode_id: str,
+    ) -> list[CognitiveTransformation]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM cognitive_transformations WHERE episode_id = ? "
+                "ORDER BY created_at, transformation_id",
+                (episode_id,),
+            ).fetchall()
+            return [_transformation_from_row(row) for row in rows]
+
     def list_nodes(self, status: str | None = None) -> list[Node]:
         with self._connect() as conn:
             if status is None:

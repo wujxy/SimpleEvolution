@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from simpleevo.db.store import GateDecision, GateResult, ResearchStore
+from simpleevo.db.queries import ResearchQueries
 from simpleevo.scheduler.frontier import FrontierConfig
 from simpleevo.scheduler.loop import Scheduler, SchedulerConfig
 
@@ -52,6 +53,7 @@ def test_scheduler_closes_proposer_experiment_loop(env):
     )
 
     def submit_proposer(allocation_id: str, payload: dict) -> None:
+        state_id = f"rs-{episode.episode_id}-001"
         _write_json(
             run_dir / "proposer_allocations" / allocation_id / "result.json",
             {
@@ -63,11 +65,23 @@ def test_scheduler_closes_proposer_experiment_loop(env):
                     "episode_id": episode.episode_id,
                     "node_id": root.node_id,
                     "outcome": "submit",
+                    "transformations": [],
+                    "research_states": [{
+                        "research_state_id": state_id,
+                        "node_id": root.node_id,
+                        "episode_id": episode.episode_id,
+                        "derived_from_research_state_id": None,
+                        "transformation_id": None,
+                        "working_model": "Repeated setup crosses the call boundary.",
+                        "evidence_refs": ["source:src/fcn.cc:FCN"],
+                        "created_at": 1.0,
+                    }],
                     "proposals": [
                         {
                             "proposal_id": payload["proposal_ids"][0],
+                            "research_state_id": state_id,
                             "instruction": "inline a small helper to reduce total_ms",
-                            "rationale": {"why": "expected faster"},
+                            "rationale": {"expectation": "total_ms decreases"},
                         }
                     ],
                 },
@@ -123,3 +137,7 @@ def test_scheduler_closes_proposer_experiment_loop(env):
     assert len(children) == 1
     assert children[0]["sha"] == "sha-child"
     assert children[0]["metrics"] == '{"total_ms": 90.0}'
+    queries = ResearchQueries(store.path)
+    states = queries.research_states_for_episode(episode.episode_id)
+    assert len(states) == 1
+    assert queries.get_proposal(next(iter(experiment_results.values()))["proposal_id"]).research_state_id == states[0].research_state_id
