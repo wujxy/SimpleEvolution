@@ -1,7 +1,7 @@
 """L2-backed memory service for SimpleEvolution proposers.
 
 Replaces the SimpleLoop MemoryService's experiment ledger (history.jsonl keyed by
-round) with queries against the SimpleEvolution SQLite L2 store.  Findings remain
+round) with queries against the SimpleEvolution SQLite L2 store. Findings remain
 a proposer-local concept stored under the episode's session directory.
 """
 from __future__ import annotations
@@ -24,29 +24,42 @@ class L2MemoryService:
         self.db_path = db_path or (self.run_dir / "simpleevo.db")
         self.queries = ResearchQueries(self.db_path)
 
-    # ------------------------------------------------------------------
-    # Coverage pack (L2-backed, minimal MVP)
-    # ------------------------------------------------------------------
-
     def build_coverage_pack(self, *, current_round: int = 0) -> str:
-        """Return a minimal coverage text from L2 experiments."""
-        nodes = self.queries.list_nodes()
+        """Return aggregate cross-branch coverage without direction text."""
+        by_path: dict[str, dict[str, int]] = {}
+        for experiment in self.queries.list_experiments():
+            for path in experiment.changed_paths:
+                row = by_path.setdefault(
+                    path,
+                    {"experiments": 0, "gate_passed": 0, "gate_failed": 0},
+                )
+                row["experiments"] += 1
+                key = (
+                    "gate_passed"
+                    if experiment.gate_result.passed
+                    else "gate_failed"
+                )
+                row[key] += 1
         lines = [
-            f"- {n.node_id}: sha={n.sha[:10]} depth={n.depth} "
-            f"gate={n.gate_result.passed} metrics={dict(n.metrics)}"
-            for n in nodes
+            "Coverage map — global experiment coverage, not a direction ranking:",
         ]
-        return "Coverage map (authoritative L2 facts):\n" + "\n".join(lines)
-
-    # ------------------------------------------------------------------
-    # Experiment tools (L2-backed)
-    # ------------------------------------------------------------------
+        for path in sorted(by_path):
+            row = by_path[path]
+            lines.append(
+                f"- {path}: experiments={row['experiments']} "
+                f"gate_passed={row['gate_passed']} "
+                f"gate_failed={row['gate_failed']}"
+            )
+        if not by_path:
+            lines.append("- no completed experiment paths recorded")
+        return "\n".join(lines)
 
     def inspect_experiment(self, experiment_id: str) -> dict:
-        """Return one experiment by its experiment_id."""
+        """Return one world-scoped experiment record."""
         experiment = self.queries.get_experiment(experiment_id)
         if experiment is None:
             return {"ok": False, "error": f"experiment not found: {experiment_id}"}
+        proposal = self.queries.get_proposal(experiment.proposal_id)
         parent = self.queries.get_node(experiment.parent_node_id)
         child = (
             self.queries.get_node(experiment.child_node_id)
@@ -54,22 +67,72 @@ class L2MemoryService:
         )
         return {
             "experiment_id": experiment.experiment_id,
-            "proposal_id": experiment.proposal_id,
-            "parent_node_id": experiment.parent_node_id,
-            "parent_sha": parent.sha if parent else None,
-            "result_sha": experiment.result_sha,
-            "child_node_id": experiment.child_node_id,
-            "child_sha": child.sha if child else None,
-            "metrics": dict(experiment.metrics),
-            "gate": {
-                "passed": experiment.gate_result.passed,
-                "results": {
-                    name: {"passed": gr.passed, "detail": gr.detail}
-                    for name, gr in experiment.gate_result.results.items()
-                },
+            "source_world": {
+                "node_id": experiment.parent_node_id,
+                "sha": parent.sha if parent else None,
+                "metrics": dict(parent.metrics) if parent else {},
             },
-            "status": experiment.status,
-            "parent_metrics": parent.metrics if parent else {},
+            "intervention": {
+                "proposal_id": experiment.proposal_id,
+                "instruction": proposal.instruction if proposal else None,
+                "changed_paths": list(experiment.changed_paths),
+            },
+            "condition": {
+                "recorded_gates": sorted(experiment.gate_result.results),
+            },
+            "observation": {
+                "result_sha": experiment.result_sha,
+                "child_node_id": experiment.child_node_id,
+                "child_sha": child.sha if child else None,
+                "metrics": dict(experiment.metrics),
+                "gate": {
+                    "passed": experiment.gate_result.passed,
+                    "results": {
+                        name: {"passed": result.passed, "detail": result.detail}
+                        for name, result in experiment.gate_result.results.items()
+                    },
+                },
+                "status": experiment.status,
+            },
+        }
+
+    def inspect_originating_research_state(self, experiment_id: str) -> dict:
+        """Return the attributed memo behind one concrete experiment."""
+        experiment = self.queries.get_experiment(experiment_id)
+        if experiment is None:
+            return {"ok": False, "error": f"experiment not found: {experiment_id}"}
+        proposal = self.queries.get_proposal(experiment.proposal_id)
+        if proposal is None:
+            return {
+                "ok": False,
+                "error": f"proposal missing for experiment: {experiment_id}",
+            }
+        if not proposal.research_state_id:
+            return {
+                "ok": False,
+                "error": f"research memo unavailable for experiment: {experiment_id}",
+            }
+        state = self.queries.get_research_state(proposal.research_state_id)
+        if state is None:
+            return {
+                "ok": False,
+                "error": f"research state missing: {proposal.research_state_id}",
+            }
+        source_node = self.queries.get_node(state.node_id)
+        return {
+            "ok": True,
+            "kind": "SUBJECTIVE_RESEARCH_MEMO",
+            "experiment_id": experiment_id,
+            "research_state_id": state.research_state_id,
+            "source_episode_id": state.episode_id,
+            "source_world": {
+                "node_id": state.node_id,
+                "sha": source_node.sha if source_node else None,
+            },
+            "working_model": state.working_model,
+            "evidence_refs": list(state.evidence_refs),
+            "derived_from_research_state_id": state.derived_from_research_state_id,
+            "transformation_id": state.transformation_id,
         }
 
     def inspect_node(self, node_id: str) -> dict:
@@ -89,8 +152,8 @@ class L2MemoryService:
             "gate": {
                 "passed": node.gate_result.passed,
                 "results": {
-                    name: {"passed": gr.passed, "detail": gr.detail}
-                    for name, gr in node.gate_result.results.items()
+                    name: {"passed": result.passed, "detail": result.detail}
+                    for name, result in node.gate_result.results.items()
                 },
             },
             "depth": node.depth,
@@ -100,7 +163,7 @@ class L2MemoryService:
 
     def compare_nodes(self, node_ids: list[str]) -> dict:
         """Return a side-by-side comparison of the requested nodes."""
-        nodes = [self.queries.get_node(nid) for nid in node_ids]
+        nodes = [self.queries.get_node(node_id) for node_id in node_ids]
         rows = []
         for node in nodes:
             if node is None:
@@ -123,13 +186,13 @@ class L2MemoryService:
             "node_id": node_id,
             "path": [
                 {
-                    "node_id": n.node_id,
-                    "sha": n.sha,
-                    "depth": n.depth,
-                    "metrics": dict(n.metrics),
-                    "gate_passed": n.gate_result.passed,
+                    "node_id": node.node_id,
+                    "sha": node.sha,
+                    "depth": node.depth,
+                    "metrics": dict(node.metrics),
+                    "gate_passed": node.gate_result.passed,
                 }
-                for n in path
+                for node in path
             ],
         }
 
@@ -140,53 +203,49 @@ class L2MemoryService:
         limit: int = 10,
         buckets: bool = True,
     ) -> dict:
-        """Coverage query over experiments.
-
-        ``query`` matches against a proposal's instruction / rationale text and
-        the changed paths (case-insensitive substring).  Filters stack as AND.
-        """
+        """Coverage query over experiments without returning direction text."""
         query_terms = _query_terms(query)
-        experiments = self.queries.list_experiments()
         rows = []
-        for exp in experiments:
+        for experiment in self.queries.list_experiments():
             if filters:
-                if "gate_passed" in filters and exp.gate_result.passed != filters["gate_passed"]:
+                if (
+                    "gate_passed" in filters
+                    and experiment.gate_result.passed != filters["gate_passed"]
+                ):
                     continue
-                if "status" in filters and exp.status != filters["status"]:
+                if "status" in filters and experiment.status != filters["status"]:
                     continue
                 if "changed_path" in filters:
                     prefix = filters["changed_path"]
-                    if not any(p.startswith(prefix) for p in exp.changed_paths):
+                    if not any(
+                        path.startswith(prefix)
+                        for path in experiment.changed_paths
+                    ):
                         continue
-            proposal = self.queries.get_proposal(exp.proposal_id)
-            haystack = " ".join(
-                [proposal.instruction if proposal else "", *list(exp.changed_paths)]
-            ).lower()
+            proposal = self.queries.get_proposal(experiment.proposal_id)
+            haystack = " ".join([
+                proposal.instruction if proposal else "",
+                *list(experiment.changed_paths),
+            ]).lower()
             if not all(term in haystack for term in query_terms):
                 continue
-            node = self.queries.get_node(exp.child_node_id or exp.parent_node_id)
+            node = self.queries.get_node(
+                experiment.child_node_id or experiment.parent_node_id
+            )
             rows.append({
-                "experiment_id": exp.experiment_id,
-                "parent_node_id": exp.parent_node_id,
-                "child_node_id": exp.child_node_id,
-                "status": exp.status,
-                "gate_passed": exp.gate_result.passed,
-                "metrics": dict(exp.metrics),
-                "changed_paths": list(exp.changed_paths),
+                "experiment_id": experiment.experiment_id,
+                "parent_node_id": experiment.parent_node_id,
+                "child_node_id": experiment.child_node_id,
+                "status": experiment.status,
+                "gate_passed": experiment.gate_result.passed,
+                "metrics": dict(experiment.metrics),
+                "changed_paths": list(experiment.changed_paths),
                 "sha": node.sha if node else None,
             })
         rows = rows[:limit]
         if buckets:
-            return {
-                "relevant": rows,
-                "contrasting": [],
-                "diverse": [],
-            }
+            return {"relevant": rows, "contrasting": [], "diverse": []}
         return {"results": rows}
-
-    # ------------------------------------------------------------------
-    # Finding tools (stubbed: findings are proposer-local, not in L2 MVP)
-    # ------------------------------------------------------------------
 
     def list_findings(self, state: str = "active", limit: int = 20, **_) -> dict:
         return {"findings": []}
