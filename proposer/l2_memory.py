@@ -26,12 +26,17 @@ class L2MemoryService:
 
     def build_coverage_pack(self, *, current_round: int = 0) -> str:
         """Return aggregate cross-branch coverage without direction text."""
-        by_path: dict[str, dict[str, int]] = {}
+        by_path: dict[str, dict] = {}
         for experiment in self.queries.list_experiments():
             for path in experiment.changed_paths:
                 row = by_path.setdefault(
                     path,
-                    {"experiments": 0, "gate_passed": 0, "gate_failed": 0},
+                    {
+                        "experiments": 0,
+                        "gate_passed": 0,
+                        "gate_failed": 0,
+                        "examples": [],
+                    },
                 )
                 row["experiments"] += 1
                 key = (
@@ -40,15 +45,19 @@ class L2MemoryService:
                     else "gate_failed"
                 )
                 row[key] += 1
+                row["examples"].append(
+                    f"{experiment.experiment_id}@{experiment.parent_node_id}"
+                )
         lines = [
             "Coverage map — global experiment coverage, not a direction ranking:",
         ]
         for path in sorted(by_path):
             row = by_path[path]
+            examples = ",".join(sorted(row["examples"])[:3])
             lines.append(
                 f"- {path}: experiments={row['experiments']} "
                 f"gate_passed={row['gate_passed']} "
-                f"gate_failed={row['gate_failed']}"
+                f"gate_failed={row['gate_failed']} examples={examples}"
             )
         if not by_path:
             lines.append("- no completed experiment paths recorded")
@@ -229,23 +238,43 @@ class L2MemoryService:
             ]).lower()
             if not all(term in haystack for term in query_terms):
                 continue
-            node = self.queries.get_node(
-                experiment.child_node_id or experiment.parent_node_id
-            )
+            parent = self.queries.get_node(experiment.parent_node_id)
             rows.append({
                 "experiment_id": experiment.experiment_id,
-                "parent_node_id": experiment.parent_node_id,
+                "source_world": {
+                    "node_id": experiment.parent_node_id,
+                    "sha": parent.sha if parent else None,
+                },
                 "child_node_id": experiment.child_node_id,
                 "status": experiment.status,
                 "gate_passed": experiment.gate_result.passed,
                 "metrics": dict(experiment.metrics),
                 "changed_paths": list(experiment.changed_paths),
-                "sha": node.sha if node else None,
             })
-        rows = rows[:limit]
-        if buckets:
-            return {"relevant": rows, "contrasting": [], "diverse": []}
-        return {"results": rows}
+        rows.sort(key=lambda row: row["experiment_id"])
+        relevant = rows[:limit]
+        if not buckets:
+            return {"results": relevant}
+        anchor_gate = relevant[0]["gate_passed"] if relevant else None
+        contrasting = [
+            row for row in rows
+            if anchor_gate is not None and row["gate_passed"] != anchor_gate
+        ][:limit]
+        diverse = []
+        seen_paths: set[tuple[str, ...]] = set()
+        for row in rows:
+            signature = tuple(row["changed_paths"])
+            if signature in seen_paths:
+                continue
+            seen_paths.add(signature)
+            diverse.append(row)
+            if len(diverse) >= limit:
+                break
+        return {
+            "relevant": relevant,
+            "contrasting": contrasting,
+            "diverse": diverse,
+        }
 
     def list_findings(self, state: str = "active", limit: int = 20, **_) -> dict:
         return {"findings": []}

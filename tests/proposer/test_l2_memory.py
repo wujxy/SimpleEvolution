@@ -217,3 +217,38 @@ def test_search_experiments(store: ResearchStore):
         "", limit=10, buckets=False,
     )
     assert len(result["results"]) == 2
+
+
+def test_bucketed_search_surfaces_contrasting_and_path_diverse_evidence(
+    store: ResearchStore,
+):
+    ids = _seed_sibling_experiments(store)
+    result = L2MemoryService(store.path.parent).search_experiments(
+        "lookup", limit=10, buckets=True,
+    )
+
+    all_rows = [
+        *result["relevant"],
+        *result["contrasting"],
+        *result["diverse"],
+    ]
+    assert {row["experiment_id"] for row in result["relevant"]} == {
+        "exp-layout", "exp-cache",
+    }
+    assert result["contrasting"]
+    assert {row["experiment_id"] for row in result["diverse"]} == {
+        "exp-layout", "exp-cache",
+    }
+    assert all(row["source_world"] == {
+        "node_id": ids["root_node_id"], "sha": "sha-root",
+    } for row in all_rows)
+    assert all("instruction" not in row for row in all_rows)
+
+
+def test_coverage_pack_exposes_neutral_evidence_locator(
+    store: ResearchStore,
+):
+    ids = _seed_sibling_experiments(store)
+    text = L2MemoryService(store.path.parent).build_coverage_pack()
+    assert f"examples=exp-layout@{ids['root_node_id']}" in text
+    assert f"examples=exp-cache@{ids['root_node_id']}" in text
