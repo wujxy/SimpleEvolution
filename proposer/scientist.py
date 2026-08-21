@@ -511,6 +511,23 @@ _COLD_START = (
     "you must rush through; take the time your judgment needs."
 )
 
+def _build_research_start_messages(
+    *,
+    first_round: bool,
+    seed_pack: str | None,
+    coverage_pack: str | None,
+) -> list[dict]:
+    messages = (
+        [{"role": "user", "content": _COLD_START}]
+        if first_round else []
+    )
+    if first_round and seed_pack:
+        messages.append({"role": "user", "content": seed_pack})
+    if coverage_pack:
+        messages.append({"role": "user", "content": coverage_pack})
+    return messages
+
+
 _BUDGET_NUDGE = (
     "Your research turn is nearing its computation budget. If you have "
     "directions you currently believe are worth an experiment, submit them now "
@@ -2097,38 +2114,33 @@ class ScientistAgent(ResearchAgent):
         )
 
         # --- assemble the live context (cold start vs resume) ---
-        if session.is_first_round():
-            messages: list[dict] = [{"role": "user", "content": _COLD_START}]
+        coverage_pack = None
+        if memory_service is not None:
+            try:
+                coverage_pack = memory_service.build_coverage_pack(
+                    current_round=current_round,
+                )
+            except Exception as exc:
+                print(
+                    f"[scientist] coverage pack build failed: {exc}",
+                    flush=True,
+                )
+        first_round = session.is_first_round()
+        messages = _build_research_start_messages(
+            first_round=first_round,
+            seed_pack=seed_pack,
+            coverage_pack=coverage_pack,
+        )
+        if first_round:
             if seed_pack:
-                messages.append({"role": "user", "content": seed_pack})
                 session.append_message(
                     "user", seed_pack, round_id=current_round,
                 )
             print("[scientist] cold start — first round of this Scientist",
                   flush=True)
         else:
-            # Cross-round continuity = coverage map + autobiographical notebook
-            # + world-transition outcomes. The coverage map orients the
-            # Scientist to what is already covered (so it does not re-mine
-            # ground); the world event reports last round's OUTCOMES (not the
-            # direction texts); the notebook carries its own running
-            # understanding. The previous round's raw trajectory is NOT
-            # re-injected: it is lived history about a world that may no longer
-            # exist, and carrying it hot would let the old world dominate the
-            # resumed Scientist's attention.
-            messages: list[dict] = []
-            if memory_service is not None:
-                try:
-                    coverage = memory_service.build_coverage_pack(
-                        current_round=current_round)
-                    if coverage:
-                        messages.append(
-                            {"role": "user", "content": coverage})
-                except Exception as exc:
-                    print(
-                        f"[scientist] coverage pack build failed: {exc}",
-                        flush=True,
-                    )
+            # Resume from aggregate coverage plus authoritative world outcomes;
+            # raw prior trajectories and old seeds stay out of hot context.
             world_event = _build_world_event(
                 memory_service, current_round, base_sha,
                 expectations=read_expectations(run_dir),

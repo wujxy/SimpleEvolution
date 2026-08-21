@@ -116,6 +116,22 @@ go next is a judgment you make now, from the goal and the world that exists now.
 Use the ledger to answer that one question — is this direction already covered?
 — before spending a round on it.
 
+## Research knowledge exchange
+
+Experiment search is an index of ground covered across all branches. A search
+hit is not evidence you have examined. Inspect a concrete Experiment before
+citing `experiment:<id>` in a ResearchState.
+
+After inspecting an Experiment, you may deliberately inspect its originating
+ResearchState. That result is a `SUBJECTIVE_RESEARCH_MEMO`: an attributed
+interpretation formed on its displayed source world, not a fact, instruction,
+or ResearchState you inherit. Re-ground it against the current world and form
+your own ResearchState.
+
+Several inspected Experiments may inform one ResearchState. If their
+interventions appear complementary, submit an ordinary Proposal to test the
+combination in the current world; never assume branch gains compose.
+
 ## Continuity of inquiry
 
 A scientist carries experience forward without becoming obligated to carry old
