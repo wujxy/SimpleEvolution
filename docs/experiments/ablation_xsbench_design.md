@@ -159,7 +159,11 @@ init → baseline（1.28M lps）→ trivial proposer → executor agent
 
 **修复 B**：driver `run_all` 按 run 分配 `BENCH_PIN=9+run_index`（3 run 用 9/10/11，128 核充足）；`experiment/apptainer.py` 的 `_FORWARDED_ENV` 增加 `BENCH_PIN` 透传，使每个 run 的 baseline 与改进节点都在**同核、同并发条件**下测量。残余注意：并发 run 仍共享内存带宽/末级缓存，单核 pin 已消除主导的 DVFS/核竞争失真。
 
-> 结论纪律：本轮仍是单 seed 大测试，不做三臂结论。`runs/ablation-v2` 数据因发现 B 的 baseline 失真 + 发现 A 的 topk 作弊段，不作为正式结果；正式 3-seed 实验用修复后配置另起 runs-root。
+**发现 C — frontier 方向 bug（最根本，单独修复）**。`simpleevo/scheduler/frontier.py::_axis_direction` 从 `metrics_schema[axis]` 读方向（默认 lower-is-better），但真实配置把方向声明在 `metrics_schema.objective.lower_is_better`——两处形式不一致，xsbench（higher-better）全程被当成 lower-better。**frontier 选出的是 lps 最低的节点**（root 377k、2.10M、1.76M），74M 作弊节点反而不上 frontier、**从未被研究（0 次研究、0 个孩子）**。topk 树视图里的"〇/仅讨论"作弊节点全是这个原因。且此 bug 影响**所有臂**：k=1 时永远研究最差节点（root），改进从不结构化地复利——链测 loop 7.37× 实为"从 root 反复独立开火 + prompt 里 current-best 引导"，不是真正的迭代链。
+
+**修复 C**：`_axis_direction` + reporting 镜像 `_axis_lower` 同时支持两种 schema 形式——**objective block 优先**（与 reporting/ablation/proposer 一致），per-axis key 兜底（测试旧形式）。已对 topk run 验证：frontier 现在正确选出最高值三个。93 测试过（含 3 个新回归测试锁定 objective-block 形式，即真实 task.yaml 的形状）。
+
+> 结论纪律：本轮仍是单 seed 大测试，不做三臂结论。`runs/ablation-v2` 数据因发现 B 的 baseline 失真 + 发现 A 的 topk 作弊段 + 发现 C 的方向 bug（三臂 frontier 全选错节点），不作为正式结果；正式 3-seed 实验用修复后配置另起 runs-root。
 
 ## 7. 待定决策与正式实验配置
 

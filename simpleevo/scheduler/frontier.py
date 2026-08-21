@@ -66,11 +66,25 @@ class Frontier:
 
 
 def _axis_direction(axis: str, schema: dict[str, Any] | None) -> bool:
-    """Return True if lower is better for the axis."""
+    """Return True if lower is better for the axis.
+
+    Resolves from ``metrics_schema`` in one of two forms, matching every other
+    direction reader in the codebase (reporting, ablation, proposer):
+      1. ``metrics_schema.objective`` block — the canonical declaration. If
+         ``objective.key == axis``, use ``objective.lower_is_better``.
+      2. Per-axis key ``metrics_schema[axis].lower_is_better`` — the legacy /
+         test form used by the scheduler unit tests.
+    The old code read only form 2 and defaulted to True, so any higher-better
+    objective declared in the ``objective`` block (e.g. xsbench lookups_per_sec)
+    was treated as lower-better and the frontier kept the WORST nodes as winners.
+    """
     if schema is None:
         return True
+    objective = schema.get("objective") or {}
+    if objective.get("key") == axis:
+        return bool(objective.get("lower_is_better", True))
     axis_schema = schema.get(axis, {})
-    return axis_schema.get("lower_is_better", True)
+    return bool(axis_schema.get("lower_is_better", True))
 
 
 def compute_frontier(

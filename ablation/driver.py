@@ -232,8 +232,16 @@ def run_one(
     seed: int = 1,
     max_evals: int = 10,
     budget_usd: float = 4.0,
+    no_arm_override: bool = False,
 ) -> int:
-    """Run one arm instance to completion under eval/budget caps."""
+    """Run one arm instance to completion under eval/budget caps.
+
+    ``no_arm_override`` runs the config AS-IS (skipping ``arm_config``'s
+    ``_COMMON_ARM_KNOBS`` / ``_ARM_TOP_K``), so a config that already declares
+    its own tree-shape knobs (e.g. ``task-fractal.yaml``: proposal_slots=3,
+    max_research_per_node=1) takes effect. The ``arm`` value still picks the
+    proposer lane (real researcher vs the coding-agent no-op).
+    """
     from simpleevo.cli import (
         _build_scheduler_config,
         _ensure_baseline_measured,
@@ -242,7 +250,7 @@ def run_one(
 
     random.seed(seed)
     base = load_config(config_path)
-    config = arm_config(base, arm)
+    config = base if no_arm_override else arm_config(base, arm)
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -425,6 +433,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         seed=args.seed,
         max_evals=args.max_evals,
         budget_usd=args.budget_usd,
+        no_arm_override=args.no_arm_override,
     )
 
 
@@ -468,6 +477,12 @@ def main(argv: list[str] | None = None) -> int:
     run_p.add_argument("--seed", type=int, default=1)
     run_p.add_argument("--max-evals", type=int, default=10)
     run_p.add_argument("--budget-usd", type=float, default=4.0)
+    run_p.add_argument(
+        "--no-arm-override", action="store_true",
+        help="use the config as-is, skipping _COMMON_ARM_KNOBS / _ARM_TOP_K "
+             "(for configs that declare their own tree-shape knobs, e.g. "
+             "task-fractal.yaml)",
+    )
     run_p.set_defaults(func=_cmd_run)
 
     all_p = sub.add_parser("all", help="spawn all arm x seed runs in parallel")

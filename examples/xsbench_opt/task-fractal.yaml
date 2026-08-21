@@ -1,0 +1,117 @@
+# SimpleEvolution task: XSBench — fractal-tree evolution demo.
+#
+# Identical to task.yaml except for the tree-shape knobs, so each frontier node
+# is studied exactly once and a single study emits 3 proposals — the classic
+# self-similar branching tree (root -> 3 children -> top-3 frontier -> 3
+# children each -> ...). No ablation-control knobs (those live in
+# ablation/driver.py _COMMON_ARM_KNOBS and only apply to the ablation `run`);
+# run this config with `--no-arm-override` so the knobs here take effect.
+#
+#   python -m ablation.driver run --config examples/xsbench_opt/task-fractal.yaml \
+#     --arm topk --run-dir runs/fractal/seed-1 --seed 1 \
+#     --max-evals 30 --budget-usd 4.0 --no-arm-override
+#
+#   python -m simpleevo --run-dir runs/fractal/seed-1 tree   # ASCII tree
+#   python -m simpleevo --run-dir runs/fractal/seed-1 tree-graph   # Graphviz
+
+goal: >
+  Optimize the XSBench macroscopic cross-section lookup kernel in src/ for
+  speed — higher lookups_per_sec (single-threaded, event-based, H-M small,
+  unionized grid; see scripts/config.sh) — while keeping results bit-identical:
+  the verification checksum printed by the binary must equal the frozen
+  reference in benchmarks/reference_hash.txt. Edit only src/. The evaluation
+  scripts (scripts/) and the frozen reference numbers (benchmarks/) are fixed
+  by the harness.
+
+repo_path: repo
+runtime_image: apptainer.sif
+
+editable_paths:
+  - src
+frozen_paths: []
+
+eval_commands:
+  - bash scripts/check_verify.sh && echo VERIFY=PASS || echo VERIFY=FAIL
+  - bash scripts/bench.sh
+
+metrics_schema:
+  objective:
+    key: lookups_per_sec
+    lower_is_better: false
+  gates:
+    - key: VERIFY
+      description: >
+        The binary's verification checksum matches the frozen reference
+        (benchmarks/reference_hash.txt). The checksum is a deterministic
+        function of every sampled cross-section lookup, so any change to the
+        computed cross sections, interpolation, search, or sampling that alters
+        a result fails. It is invariant to threading but not to arithmetic.
+    - key: RATE_PLAUSIBLE
+      description: >
+        lookups_per_sec is within a plausible single-threaded bound (<=8M,
+        ~3x the author-optimized kernel). Rejects precompute-in-init cheats
+        that move the whole per-lookup computation into untimed init and stream
+        the results from RAM in the timed loop — bit-identical, so VERIFY
+        passes, but the timed loop is no longer doing the lookup work (measured
+        cheat: 22-74M lps). The author-optimized kernel measures 2.56M lps;
+        8M leaves 3x headroom for genuine optimizations.
+
+axes:
+  - lookups_per_sec
+
+gate_block: |
+  Only modify files under src/. The harness runs, in order:
+    - bash scripts/check_verify.sh   (VERIFY gate: checksum == reference)
+    - bash scripts/bench.sh          (objective: lookups_per_sec; also emits the
+                                      RATE_PLAUSIBLE gate token)
+  A change is accepted only if VERIFY=PASS and RATE_PLAUSIBLE=PASS; among
+  accepted changes, higher lookups_per_sec is better. scripts/config.sh fixes
+  the benchmark run (-m event -s small -G unionized -t 1 -l 2000000).
+  RATE_PLAUSIBLE caps lookups_per_sec at 8M to reject timing cheats (moving the
+  lookup work into untimed init and streaming precomputed results in the timed
+  loop) that would otherwise keep VERIFY bit-identical.
+
+# Proposer (Scientist) chat-model configuration.
+researcher:
+  api: openai
+  model: deepseek-v4-flash
+  base_url: https://api.deepseek.com
+  command_timeout_seconds: 360
+  command_output_cap_chars: 12000
+  reasoning_effort: low  # thinking-depth valve (low|medium|high); None = provider default
+executor:
+  api: anthropic
+  model: deepseek-v4-flash
+  base_url: https://api.deepseek.com/anthropic
+  effort: low  # claude CLI --effort (low|medium|high|xhigh|max) for the executor agent
+
+# LLM token pricing for budget accounting (USD per 1M tokens). 1 $ = 6.7 CNY
+pricing:
+  input_usd_per_1m: 0.67
+  output_usd_per_1m: 2.02
+  cache_read_usd_per_1m: 0.02
+  cache_creation_usd_per_1m: 0.0
+
+# Scheduling / episode budgets.
+proposal_slots: 3          # every study emits 3 proposals -> 3 children
+scientist_steps: 200
+agent_timeout_seconds: 3600
+eval_timeout_seconds: 600
+max_proposer_inflight: 1
+max_experiment_inflight: 1
+poll_seconds: 2.0
+queue_max_size: 10
+quiescence_window_proposals: 2
+
+# Frontier selection policy.
+frontier_policy: topk  # gepa or topk
+# Width for the "topk" policy.
+frontier_top_k: 3
+# Total proposer allocations a single frontier node may receive over its
+# lifetime. =1 means each node is studied exactly once: its 3 children enter
+# the pool, the frontier keeps the top 3, and the next generation starts. This
+# is the knob that makes the tree fractal instead of a deep chain.
+max_research_per_node: 1
+# Variation-factor directives on reseeded episodes. Inert here (max_research=1
+# means no reseed happens); kept at the shipped default.
+generator_reseed: true
