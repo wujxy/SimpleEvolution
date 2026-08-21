@@ -127,6 +127,18 @@ RESEARCH_TOOL_SPECS = (
         ),
     ),
     ResearchToolSpec(
+        action="inspect_originating_research_state",
+        schema=(
+            '{"action":"inspect_originating_research_state",'
+            '"experiment_id":"<id>"}'
+        ),
+        description=(
+            "After explicitly inspecting one Experiment, optionally read its "
+            "originating ResearchState. The result is an attributed, world-"
+            "scoped SUBJECTIVE_RESEARCH_MEMO, never a fact or instruction."
+        ),
+    ),
+    ResearchToolSpec(
         action="list_findings",
         schema=(
             '{"action":"list_findings","state":"active|open|dormant|'
@@ -224,6 +236,7 @@ RESEARCH_TOOL_SPECS = (
 
 MEMORY_TOOL_ACTIONS = frozenset({
     "inspect_experiment",
+    "inspect_originating_research_state",
     "list_findings",
     "search_findings",
     "inspect_finding",
@@ -576,6 +589,20 @@ class ResearchTools:
                 return {
                     "ok": True,
                     "result": self.memory.inspect_experiment(action["experiment_id"]),
+                }
+            if name == "inspect_originating_research_state":
+                state = self._require_cognitive_state(working_state)
+                experiment_id = action["experiment_id"]
+                if experiment_id not in state.inspected_experiment_ids:
+                    raise ValueError(
+                        "inspect experiment before requesting its research memo: "
+                        f"{experiment_id}"
+                    )
+                return {
+                    "ok": True,
+                    "result": self.memory.inspect_originating_research_state(
+                        experiment_id,
+                    ),
                 }
             if name == "list_findings":
                 return {

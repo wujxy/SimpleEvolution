@@ -1559,6 +1559,15 @@ def _dispatch(action: dict, proposal_slots: int) -> dict:
         if not isinstance(ref, str) or not ref.strip():
             raise ProposerError("episode ref must be non-empty")
         return {"action": name, "ref": ref.strip()}
+    if name in {
+        "inspect_experiment", "inspect_originating_research_state",
+    }:
+        _require_keys(action, {"action", "experiment_id"})
+        experiment_id = action["experiment_id"]
+        if not isinstance(experiment_id, str) or not experiment_id.strip():
+            raise ProposerError(f"{name}.experiment_id must be non-empty")
+        return {"action": name, "experiment_id": experiment_id.strip()}
+
     if name == "list_findings":
         _require_keys(action, {"action"}, {"state", "limit"})
         state = action.get("state", "active")

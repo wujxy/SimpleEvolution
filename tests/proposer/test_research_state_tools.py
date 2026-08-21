@@ -10,7 +10,9 @@ import pytest
 from proposer.cognitive_transformer import CognitiveTransformer
 from proposer.cli import _proposal_to_dict, _result_to_dict
 from proposer.model import ModelReply
-from proposer.research_agent import WorkingState, _build_telemetry, _build_trace
+from proposer.research_agent import (
+    WorkingState, _build_telemetry, _build_trace, _register_evidence,
+)
 from proposer.research_tools import ResearchTools
 from proposer.research_skills import render_research_skill_catalog
 from proposer.runtime import MountMap
@@ -34,7 +36,28 @@ class FakeModel:
 
 
 class FakeMemory:
-    pass
+    def inspect_experiment(self, experiment_id: str) -> dict:
+        return {
+            "experiment_id": experiment_id,
+            "source_world": {"node_id": "node-sibling", "sha": "sha-sibling"},
+            "intervention": {"proposal_id": "p-sibling", "changed_paths": []},
+            "condition": {"recorded_gates": []},
+            "observation": {"metrics": {"total_ms": 80.0}},
+        }
+
+    def inspect_originating_research_state(self, experiment_id: str) -> dict:
+        return {
+            "ok": True,
+            "kind": "SUBJECTIVE_RESEARCH_MEMO",
+            "experiment_id": experiment_id,
+            "research_state_id": "rs-sibling-001",
+            "source_episode_id": "ep-sibling",
+            "source_world": {"node_id": "node-sibling", "sha": "sha-sibling"},
+            "working_model": "Sibling interpretation, not a fact.",
+            "evidence_refs": [],
+            "derived_from_research_state_id": None,
+            "transformation_id": None,
+        }
 
 
 def _tools(
@@ -401,3 +424,106 @@ def test_cognitive_telemetry_and_trace_include_ids_not_working_model(tmp_path):
     assert trace["research_state_ids"] == [registered["research_state_id"]]
     assert trace["transformation_ids"] == [transformed["transformation_id"]]
     assert "working_model" not in json.dumps(trace)
+
+
+def test_parser_accepts_experiment_and_memo_inspection_actions():
+    experiment = parse_response(
+        '{"action":"inspect_experiment","experiment_id":"exp-1"}',
+        proposal_slots=1,
+    )
+    memo = parse_response(
+        '{"action":"inspect_originating_research_state",'
+        '"experiment_id":"exp-1"}',
+        proposal_slots=1,
+    )
+    assert experiment == {
+        "action": "inspect_experiment", "experiment_id": "exp-1",
+    }
+    assert memo == {
+        "action": "inspect_originating_research_state",
+        "experiment_id": "exp-1",
+    }
+
+
+def test_research_memo_requires_explicit_experiment_inspection(tmp_path):
+    result = _tools(tmp_path).execute(
+        {
+            "action": "inspect_originating_research_state",
+            "experiment_id": "exp-1",
+        },
+        deadline=time.monotonic() + 10,
+        working_state=WorkingState(),
+    )
+    assert result == {
+        "ok": False,
+        "error": "inspect experiment before requesting its research memo: exp-1",
+    }
+
+
+def test_explicit_inspection_unlocks_memo_and_citable_evidence(tmp_path):
+    state = WorkingState()
+    tools = _tools(tmp_path)
+    action = {"action": "inspect_experiment", "experiment_id": "exp-1"}
+    observation = tools.execute(
+        action,
+        deadline=time.monotonic() + 10,
+        working_state=state,
+    )
+    _register_evidence(state, action, observation)
+    memo = tools.execute(
+        {
+            "action": "inspect_originating_research_state",
+            "experiment_id": "exp-1",
+        },
+        deadline=time.monotonic() + 10,
+        working_state=state,
+    )
+    assert memo["ok"] is True
+    assert memo["result"]["kind"] == "SUBJECTIVE_RESEARCH_MEMO"
+    assert state.inspected_experiment_ids == {"exp-1"}
+    assert "experiment:exp-1" in state.session_evidence
+
+
+def test_search_hit_does_not_become_citable_evidence():
+    state = WorkingState()
+    _register_evidence(
+        state,
+        {"action": "search_experiments", "query": "lookup"},
+        {
+            "ok": True,
+            "result": {
+                "relevant": [{"experiment_id": "exp-1"}],
+                "contrasting": [],
+                "diverse": [],
+            },
+        },
+    )
+    assert state.session_evidence == set()
+    assert state.inspected_experiment_ids == set()
+
+
+def test_research_state_can_cite_two_inspected_experiments(tmp_path):
+    state = WorkingState()
+    tools = _tools(tmp_path)
+    for experiment_id in ("exp-a", "exp-b"):
+        action = {
+            "action": "inspect_experiment", "experiment_id": experiment_id,
+        }
+        observation = tools.execute(
+            action,
+            deadline=time.monotonic() + 10,
+            working_state=state,
+        )
+        _register_evidence(state, action, observation)
+    registered = tools.execute(
+        {
+            "action": "register_research_state",
+            "working_model": "A and B may be compatible but need one experiment.",
+            "evidence_refs": ["experiment:exp-a", "experiment:exp-b"],
+        },
+        deadline=time.monotonic() + 10,
+        working_state=state,
+    )
+    assert registered["ok"] is True
+    record = state.research_states[registered["research_state_id"]]
+    assert record.evidence_refs == ("experiment:exp-a", "experiment:exp-b")

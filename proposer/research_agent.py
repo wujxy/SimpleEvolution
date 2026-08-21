@@ -52,6 +52,7 @@ class WorkingState:
     last_tool_fingerprint: str | None = None
     research_states: dict[str, ResearchState] = field(default_factory=dict)
     transformations: dict[str, CognitiveTransformation] = field(default_factory=dict)
+    inspected_experiment_ids: set[str] = field(default_factory=set)
 
 
 # --- Shared tunables -------------------------------------------------------
@@ -124,6 +125,8 @@ def _fingerprint(action: dict) -> str:
         return f"{name}:{action['path']}:{digest}"
     if name == "inspect_episode":
         return f"{name}:{action['ref']}"
+    if name in {"inspect_experiment", "inspect_originating_research_state"}:
+        return f"{name}:{action['experiment_id']}"
     if name == "inspect_finding":
         return f"{name}:{action['finding_id']}"
     if name == "register_research_state":
@@ -183,13 +186,13 @@ def _register_evidence(state: WorkingState, action: dict, observation: dict) -> 
                 ref = f"finding:{fid}"
                 state.session_evidence.add(ref)
                 state.new_evidence.add(ref)
-    elif name == "search_experiments":
-        for exp in _iter_experiment_hits(result):
-            eid = exp.get("experiment_id") if isinstance(exp, dict) else None
-            if eid:
-                ref = f"experiment:{eid}"
-                state.session_evidence.add(ref)
-                state.new_evidence.add(ref)
+    elif name == "inspect_experiment":
+        eid = (result or {}).get("experiment_id")
+        if eid:
+            ref = f"experiment:{eid}"
+            state.inspected_experiment_ids.add(eid)
+            state.session_evidence.add(ref)
+            state.new_evidence.add(ref)
 
 
 def _source_path_exists(relpath: str, source_root: Path) -> bool:
@@ -269,6 +272,8 @@ def _action_summary(action: dict) -> str:
         )
     if name == "inspect_episode":
         return f"action={name} ref_chars={len(action['ref'])}"
+    if name in {"inspect_experiment", "inspect_originating_research_state"}:
+        return f"action={name} experiment_id={action.get('experiment_id', '')}"
     if name in ("list_findings", "search_findings", "inspect_finding",
                 "search_experiments"):
         extra = ""
