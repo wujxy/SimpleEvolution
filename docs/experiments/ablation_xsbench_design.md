@@ -165,6 +165,26 @@ init → baseline（1.28M lps）→ trivial proposer → executor agent
 
 > 结论纪律：本轮仍是单 seed 大测试，不做三臂结论。`runs/ablation-v2` 数据因发现 B 的 baseline 失真 + 发现 A 的 topk 作弊段 + 发现 C 的方向 bug（三臂 frontier 全选错节点），不作为正式结果；正式 3-seed 实验用修复后配置另起 runs-root。
 
+## 6d. 方向修复后单 seed 正式轮（3 臂 × 1 seed，API 余额耗尽停止）
+
+方向 bug 修复（`0d94094`）后的第一次正式消融跑：`runs/ablation-v3` 在启动后不久因余额问题中止；随后启动 `runs/ablation-v4`（fresh，同一修复后配置），三臂因 API 余额耗尽分别在 `$2.31 / $2.97 / $3.08` 处自然停住（未触 $4 cap）。这是目前唯一一组 **frontier 方向正确 + RATE_PLAUSIBLE gate 生效 + BENCH_PIN 独立** 的数据。
+
+| arm | completed evals | gate_rejected | stopped spend | best lps | vs REF 1.47M | vs own baseline |
+| --- | --- | --- | --- | --- | --- | --- |
+| coding-agent | 6 | 0 | $2.31 | 2,985,075 | **2.03×** | 3.63× |
+| loop | 9 | 0 | $2.97 | 2,207,506 | **1.50×** | 1.89× |
+| topk | 9 | 2 | $3.08 | 6,289,308 | **4.27×** | 5.37× |
+
+图：[ablation-v4.png](../../ablation-v4.png)。
+
+**关键实证**：
+
+- **方向修复生效**：topk 的 frontier 选出了 best 节点（6.29M），topk 曲线单调爬升并大幅领先——与之前"选最差节点"完全不同。
+- **RATE_PLAUSIBLE gate 生效**：topk 有一个 8.13M 的尝试被 gate_rejected（`RATE_PLAUSIBLE: FAIL`），说明 cap 真的在拦预计算作弊；其余 5–6M 节点通过了 gate（当前形态是单调游标优化，合法）。
+- **BENCH_PIN 基本生效**：coding-agent baseline 822k 偏低（DVFS/负载波动），loop/topk ~1.17M，仍比旧 377k 干净得多。
+
+**解读纪律**：仍是单 seed，且 budget 提前耗尽（未跑满 $4）——**不做三臂结论**。但它首次证明修复后的 harness 能跑通有效的树演化（topk 找到 author kernel 2.7× 的算法级优化），正式 3-seed 实验只需保证余额充足即可。
+
 ## 7. 待定决策与正式实验配置
 
 **测试轮规模（已定）**：3 臂 × 1 seed × $2 链测已跑（见 §6b）。**正式消融实验待 API 余额充足后跑**，配置如下（已落地到 `ablation/driver.py` `_COMMON_ARM_KNOBS` 与 README）：
