@@ -44,6 +44,15 @@ metrics_schema:
         function of every sampled cross-section lookup, so any change to the
         computed cross sections, interpolation, search, or sampling that alters
         a result fails. It is invariant to threading but not to arithmetic.
+    - key: RATE_PLAUSIBLE
+      description: >
+        lookups_per_sec is within a plausible single-threaded bound (<=8M,
+        ~3x the author-optimized kernel). Rejects precompute-in-init cheats
+        that move the whole per-lookup computation into untimed init and stream
+        the results from RAM in the timed loop — bit-identical, so VERIFY
+        passes, but the timed loop is no longer doing the lookup work (measured
+        cheat: 22-74M lps). The author-optimized kernel measures 2.56M lps;
+        8M leaves 3x headroom for genuine optimizations.
 
 axes:
   - lookups_per_sec
@@ -51,10 +60,14 @@ axes:
 gate_block: |
   Only modify files under src/. The harness runs, in order:
     - bash scripts/check_verify.sh   (VERIFY gate: checksum == reference)
-    - bash scripts/bench.sh          (objective: lookups_per_sec)
-  A change is accepted only if VERIFY=PASS; among accepted changes, higher
-  lookups_per_sec is better. scripts/config.sh fixes the benchmark run
-  (-m event -s small -G unionized -t 1 -l 2000000).
+    - bash scripts/bench.sh          (objective: lookups_per_sec; also emits the
+                                      RATE_PLAUSIBLE gate token)
+  A change is accepted only if VERIFY=PASS and RATE_PLAUSIBLE=PASS; among
+  accepted changes, higher lookups_per_sec is better. scripts/config.sh fixes
+  the benchmark run (-m event -s small -G unionized -t 1 -l 2000000).
+  RATE_PLAUSIBLE caps lookups_per_sec at 8M to reject timing cheats (moving the
+  lookup work into untimed init and streaming precomputed results in the timed
+  loop) that would otherwise keep VERIFY bit-identical.
 
 # Proposer (Scientist) chat-model configuration. Any OpenAI-compatible
 # provider supported by proposer/model.py works: api is one of

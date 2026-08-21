@@ -58,3 +58,21 @@ more evals — whether that pays off in performance is what the figure answers.
 The eval cap counts *terminal* experiments (completed / gate-rejected /
 no-change); an experiment already in flight when the cap trips is drained, so a
 run lands on `max_evals` or `max_evals + 1`.
+
+## Measurement guards (xsbench_opt)
+
+Two harness-level measurement guards, both triggered by the 2026-08-21 big-test
+round (3 arms × 1 seed, `runs/ablation-v2`):
+
+- **`RATE_PLAUSIBLE` gate**: the frozen `scripts/bench.sh` emits a
+  `RATE_PLAUSIBLE=PASS/FAIL` token — `lookups_per_sec` must be ≤ 8M (~3× the
+  author-optimized kernel). Rejects the precompute-in-init cheat the topk arm
+  found (22-74M lps with VERIFY still bit-identical: the executor moved all
+  per-lookup work into untimed init and streamed precomputed values in the
+  timed loop). Declared in `task.yaml` `metrics_schema.gates`; cheats land
+  `gate_rejected` and never join the frontier.
+- **per-run `BENCH_PIN`**: `run_all` assigns each run its own benchmark core
+  (9 + run index), forwarded to the eval sandbox via `_FORWARDED_ENV` so
+  `scripts/bench.sh` pins there instead of the default core 9. Concurrent runs
+  previously all fought over core 9 — all three baselines measured ~377k vs the
+  true pinned-alone ~1.47M (a 4× distortion that inflated every ×speedup).

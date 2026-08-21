@@ -82,6 +82,12 @@ _COMMON_ARM_KNOBS = dict(
 
 _ARM_TOP_K = {"coding-agent": 1, "loop": 1, "topk": 3}
 
+# bench.sh pins each benchmark to one logical core (BENCH_PIN, default 9).
+# Concurrent runs must NOT share that core — the big-test round measured all
+# three baselines simultaneously on core 9 and got ~377k lps each (vs the true
+# ~1.47M pinned-alone baseline), a 4x distortion. Give each run its own core.
+_BENCH_PIN_BASE = 9
+
 
 def arm_config(base: EvolutionConfig, arm: str) -> EvolutionConfig:
     """The arm's variant of a base task config."""
@@ -350,6 +356,7 @@ def run_all(
         )
 
     jobs = []
+    run_index = 0
     for arm in arms:
         for i in range(seeds):
             seed = i + 1
@@ -358,6 +365,19 @@ def run_all(
             env = os.environ.copy()
             env["OPENAI_API_KEY"] = openai_pool[i % len(openai_pool)]
             env["ANTHROPIC_AUTH_TOKEN"] = anthropic_pool[i % len(anthropic_pool)]
+            # Each run benchmarks on its own core so concurrent baselines/evals
+            # don't starve each other on bench.sh's default core 9.
+            pin = _BENCH_PIN_BASE + run_index
+            n_cpus = os.cpu_count() or 1
+            if pin >= n_cpus:
+                print(
+                    f"warning: BENCH_PIN {pin} >= nproc {n_cpus}; "
+                    f"run will fall back to bench.sh default core 9 "
+                    f"(cross-run contention possible)",
+                    flush=True,
+                )
+            env["BENCH_PIN"] = str(pin)
+            run_index += 1
             cmd = [
                 sys.executable, "-m", "ablation.driver", "run",
                 "--config", str(config_path),
