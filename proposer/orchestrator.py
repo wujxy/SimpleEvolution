@@ -249,6 +249,7 @@ class ProposerOrchestrator:
         run_dir: Path,
         gate_block: str,
         prompt_dir: Path | None,
+        research_state_seed: dict | None = None,
         world_transition: dict | None = None,
         hints: list[str] | None = None,
         proposal_slots: int = 1,
@@ -272,6 +273,7 @@ class ProposerOrchestrator:
                 prompt_dir=prompt_dir, proposal_slots=proposal_slots,
                 hints=hints, session=session, max_steps=scientist_steps,
                 world_transition=transition_text,
+                research_state_seed=research_state_seed,
                 node_id=node_id, episode_id=episode_id,
             )
         except (ProposerError, Exception) as exc:

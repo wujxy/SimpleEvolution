@@ -1,7 +1,29 @@
 """Context assembly helpers for SimpleEvolution proposer episodes."""
 from __future__ import annotations
 
+import json
 from typing import Any
+
+
+def build_research_state_seed_pack(seed: dict[str, Any]) -> str:
+    """Render a Child's proposal-specific cognitive starting point."""
+    if not seed:
+        return ""
+    state = seed.get("originating_research_state", {})
+    proposal = seed.get("proposal", {})
+    experiment = seed.get("experiment", {})
+    child = seed.get("child_node", {})
+    return "\n".join([
+        "Originating working model — Scientist judgment, not an established fact:",
+        str(state.get("working_model", "")),
+        "Proposal expectation — Scientist judgment:",
+        str(proposal.get("expectation", "")),
+        "Experiment outcome — authoritative Harness facts:",
+        json.dumps(experiment, ensure_ascii=False, sort_keys=True),
+        "Current Child Node — authoritative Harness facts:",
+        json.dumps(child, ensure_ascii=False, sort_keys=True),
+        "Re-ground in the current Child world before registering a revised ResearchState.",
+    ])
 
 
 def build_world_transition_pack(transition: dict[str, Any]) -> str:

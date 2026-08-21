@@ -12,6 +12,7 @@ from simpleevo.db.store import FrontierAxis, GateDecision, GateResult, ResearchS
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.generator import Generator, load_generator_basis, sample_generators
 from simpleevo.jobs.base import BaseSubmitter
+from simpleevo.research_state import research_state_to_dict
 
 from .frontier import (
     FrontierConfig,
@@ -351,7 +352,8 @@ class Scheduler:
         self, allocation, node, episode, attempt_id: str, attempt: int,
     ) -> dict[str, Any]:
         """Assemble the proposer job payload from L2 (also used on re-submit)."""
-        return {
+        seed = self._research_state_seed_for(node)
+        payload = {
             "allocation_id": allocation.allocation_id,
             "node_id": node.node_id,
             "node_sha": node.sha,
@@ -359,10 +361,14 @@ class Scheduler:
             "inherited_from_episode_id": episode.inherited_from_episode_id,
             "variation_operators": self._variation_operators_payload(episode),
             "proposal_ids": list(allocation.reserved_proposal_ids),
-            "world_transition": self._world_transition_for(node),
             "attempt_id": attempt_id,
             "attempt": attempt,
         }
+        if seed:
+            payload["research_state_seed"] = seed
+        else:
+            payload["world_transition"] = self._world_transition_for(node)
+        return payload
 
     def _variation_operators_payload(self, episode) -> list[dict[str, str]]:
         """Resolve the episode's stored generator ids to full directives.
@@ -415,6 +421,52 @@ class Scheduler:
             },
             "diff": list(experiment.changed_paths),
             "parent_metrics": dict(parent.metrics) if parent else {},
+        }
+
+    def _research_state_seed_for(self, node) -> dict[str, Any]:
+        """Join the one State/Proposal/Experiment path that produced a Child."""
+        if node.experiment_id is None:
+            return {}
+        experiment = self._queries.get_experiment(node.experiment_id)
+        if experiment is None:
+            return {}
+        proposal = self._queries.get_proposal(experiment.proposal_id)
+        if proposal is None or not proposal.research_state_id:
+            return {}
+        state = self._queries.get_research_state(proposal.research_state_id)
+        if state is None:
+            return {}
+        facts = self._world_transition_for(node)
+        return {
+            "child_node": {
+                "node_id": node.node_id,
+                "sha": node.sha,
+                "metrics": dict(node.metrics),
+                "gate": {
+                    "passed": node.gate_result.passed,
+                    "results": {
+                        name: {"passed": result.passed, "detail": result.detail}
+                        for name, result in node.gate_result.results.items()
+                    },
+                },
+            },
+            "originating_research_state": research_state_to_dict(state),
+            "proposal": {
+                "proposal_id": proposal.proposal_id,
+                "instruction": proposal.instruction,
+                "expectation": proposal.rationale.get("expectation"),
+                "material_difference": proposal.rationale.get(
+                    "material_difference"
+                ),
+            },
+            "experiment": {
+                "experiment_id": experiment.experiment_id,
+                "parent_node_id": experiment.parent_node_id,
+                "metrics": facts.get("metrics", {}),
+                "gate": facts.get("gate", {}),
+                "changed_paths": facts.get("diff", []),
+                "parent_metrics": facts.get("parent_metrics", {}),
+            },
         }
 
     # ------------------------------------------------------------------

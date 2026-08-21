@@ -216,9 +216,9 @@ class ResearchStore:
                 )
                 tx.link_experiment_child(experiment_id, child.node_id)
 
-                # Seed the child's Scientist Episode, inheriting the parent
-                # episode's final cognition (the child episode copies the
-                # parent's session dir at start, keyed by the inheritance link).
+                # Preserve Episode lineage. Runtime cognition for a Child is
+                # seeded proposal-specifically from ResearchState + outcome;
+                # inherited_from remains provenance, not session-copy policy.
                 proposal = tx.get_proposal(exp.proposal_id)
                 if proposal is not None:
                     tx.create_episode(

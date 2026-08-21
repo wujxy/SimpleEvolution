@@ -34,15 +34,20 @@ def _inherit_parent_session(
     run_dir: Path,
     inherited_from_episode_id: str | None,
     session_dir: Path,
+    *,
+    research_state_seed: dict | None = None,
 ) -> None:
     """Copy the parent episode's final cognition into this episode's session.
 
-    One Node = one Episode; a child episode starts from the parent episode's
-    persisted session dir (its final cognition) rather than a repacked
-    snapshot tarball.  Only run on first entry — a crash-retry resumes the
-    already-persisted session instead of re-inheriting (Resume ≠ Evolution).
+    Same-Node reseeds may start from the parent episode's persisted session.
+    Proposal-produced Child Nodes instead use ``research_state_seed`` and skip
+    this copy so sibling trajectory cannot leak in. Only run on first entry —
+    a crash retry resumes the current Episode (Resume ≠ Evolution).
     """
-    if not inherited_from_episode_id:
+    if (
+        not inherited_from_episode_id
+        or (research_state_seed or {}).get("originating_research_state")
+    ):
         return
     parent_session_dir = run_dir / "episodes" / inherited_from_episode_id / "session"
     if not parent_session_dir.is_dir():
@@ -185,6 +190,7 @@ def main(argv: list[str] | None = None) -> int:
     inherited_from_episode_id = payload.get("inherited_from_episode_id") or None
     variation_operators = payload.get("variation_operators") or []
     hints = _variation_hints(variation_operators)
+    research_state_seed = payload.get("research_state_seed") or {}
     world_transition = payload.get("world_transition") or {}
     goal = payload["goal"]
     editable = list(payload.get("editable_paths", []))
@@ -211,7 +217,12 @@ def main(argv: list[str] | None = None) -> int:
     session_dir = run_dir / "episodes" / episode_id / "session"
     session_dir.mkdir(parents=True, exist_ok=True)
     if not (session_dir / "session.jsonl").exists():
-        _inherit_parent_session(run_dir, inherited_from_episode_id, session_dir)
+        _inherit_parent_session(
+            run_dir,
+            inherited_from_episode_id,
+            session_dir,
+            research_state_seed=research_state_seed,
+        )
 
     memory_service = L2MemoryService(run_dir)
     runtime = ApptainerRuntime(
@@ -259,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
             run_dir=run_dir,
             gate_block=gate_block,
             prompt_dir=Path(payload["prompt_dir"]) if payload.get("prompt_dir") else None,
+            research_state_seed=research_state_seed,
             world_transition=world_transition,
             hints=hints,
             proposal_slots=proposal_slots,

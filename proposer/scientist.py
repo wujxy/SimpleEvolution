@@ -38,6 +38,7 @@ from tempfile import TemporaryDirectory
 
 from .model import ChatModel
 from .cognitive_transformer import CognitiveTransformer
+from .context import build_research_state_seed_pack
 from simpleevo.generator import load_generator_basis
 from simpleevo.research_state import CognitiveTransformation, ResearchState
 
@@ -2012,6 +2013,7 @@ class ScientistAgent(ResearchAgent):
         session: ScientistSession,
         max_steps: int | None = None,
         world_transition: str | None = None,
+        research_state_seed: dict | None = None,
         node_id: str | None = None,
         episode_id: str | None = None,
     ) -> ScientistRound:
@@ -2022,8 +2024,17 @@ class ScientistAgent(ResearchAgent):
         resolved_episode_id = episode_id or (
             f"{session.scientist_id}-r{current_round}"
         )
+        seed = research_state_seed or {}
+        seed_pack = build_research_state_seed_pack(seed) or None
+        world_context = seed_pack or world_transition
+        originating_state = seed.get("originating_research_state") or {}
+        inherited_research_states = {}
+        inherited_id = originating_state.get("research_state_id")
+        inherited_model = originating_state.get("working_model")
+        if inherited_id and inherited_model:
+            inherited_research_states[inherited_id] = inherited_model
         generators = {item.id: item for item in load_generator_basis()}
-        episode_seed = world_transition or (
+        episode_seed = world_context or (
             f"Goal: {goal}\nAccepted revision: {base_sha}"
         )
         charter = load_semantic("proposer", prompt_dir)
@@ -2036,6 +2047,11 @@ class ScientistAgent(ResearchAgent):
         # --- assemble the live context (cold start vs resume) ---
         if session.is_first_round():
             messages: list[dict] = [{"role": "user", "content": _COLD_START}]
+            if seed_pack:
+                messages.append({"role": "user", "content": seed_pack})
+                session.append_message(
+                    "user", seed_pack, round_id=current_round,
+                )
             print("[scientist] cold start — first round of this Scientist",
                   flush=True)
         else:
@@ -2064,7 +2080,7 @@ class ScientistAgent(ResearchAgent):
             world_event = _build_world_event(
                 memory_service, current_round, base_sha,
                 expectations=read_expectations(run_dir),
-                injected_transition=world_transition,
+                injected_transition=world_context,
             )
             if world_event is None:
                 world_event = (
@@ -2144,6 +2160,7 @@ class ScientistAgent(ResearchAgent):
                     generators=generators,
                     episode_seed=episode_seed,
                 ),
+                inherited_research_states=inherited_research_states,
             )
 
         def make_result(action, state, usages, step, outcome):

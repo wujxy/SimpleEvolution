@@ -42,6 +42,7 @@ def _tools(
     model: FakeModel | None = None,
     episode_id: str = "ep-1",
     node_id: str = "node-1",
+    inherited_research_states: dict[str, str] | None = None,
 ) -> ResearchTools:
     workspace = tmp_path / "work"
     repo = tmp_path / "repo"
@@ -72,6 +73,7 @@ def _tools(
             generators=generators,
             episode_seed="The current world has repeated FCN work.",
         ),
+        inherited_research_states=inherited_research_states,
     )
 
 
@@ -174,6 +176,39 @@ def test_transform_rejects_state_owned_by_another_episode(tmp_path):
     )
     assert result["ok"] is False
     assert "another episode" in result["error"]
+
+
+def test_child_can_transform_and_derive_from_inherited_state(tmp_path):
+    parent_id = "rs-parent-001"
+    parent_model = "The parent boundary loses reusable state."
+    model = FakeModel("Reconsider the lifetime boundary.")
+    tools = _tools(
+        tmp_path,
+        model=model,
+        inherited_research_states={parent_id: parent_model},
+    )
+    state = WorkingState()
+    transformed = tools.execute(
+        {
+            "action": "transform_worldview",
+            "source_research_state_id": parent_id,
+            "operator_id": "G2",
+        },
+        deadline=time.monotonic() + 10,
+        working_state=state,
+    )
+    registered = tools.execute(
+        {
+            "action": "register_research_state",
+            "working_model": "The Child should own state at event lifetime.",
+            "derived_from_research_state_id": parent_id,
+            "transformation_id": transformed["transformation_id"],
+        },
+        deadline=time.monotonic() + 10,
+        working_state=state,
+    )
+    assert registered["ok"] is True
+    assert parent_model in model.calls[0]["messages"][0]["content"]
 
 
 def _proposal_payload(research_state_id: str, instruction: str) -> dict:

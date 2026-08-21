@@ -4,6 +4,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+from proposer.cli import _inherit_parent_session
 from proposer.scientist_session import ScientistSession
 
 
@@ -33,3 +34,23 @@ def test_save_meta_with_node_info():
         session.save_meta(node_id="node-1", node_sha="sha123")
         assert session.meta["node_id"] == "node-1"
         assert session.meta["node_sha"] == "sha123"
+
+
+def test_child_seed_prevents_parent_session_copy():
+    with tempfile.TemporaryDirectory() as tmp:
+        run_dir = Path(tmp)
+        parent = run_dir / "episodes" / "parent" / "session"
+        parent.mkdir(parents=True)
+        (parent / "session.jsonl").write_text("sibling history", encoding="utf-8")
+        child = run_dir / "episodes" / "child" / "session"
+        _inherit_parent_session(
+            run_dir,
+            "parent",
+            child,
+            research_state_seed={
+                "originating_research_state": {
+                    "research_state_id": "rs-parent-001",
+                },
+            },
+        )
+        assert not (child / "session.jsonl").exists()
