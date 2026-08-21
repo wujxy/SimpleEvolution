@@ -32,6 +32,7 @@ from .scientist import (
     _SELF_REVIEW_DEFAULT_DEFER,
 )
 from .scientist_session import ScientistSession
+from simpleevo.research_state import CognitiveTransformation, ResearchState
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,8 @@ class EpisodeResult:
     abstain_reason: str | None = None
     deliberation_telemetry: dict = field(default_factory=dict)
     trace: dict = field(default_factory=dict)
+    research_states: tuple[ResearchState, ...] = ()
+    transformations: tuple[CognitiveTransformation, ...] = ()
 
 
 def _safe_save_meta(
@@ -269,6 +272,7 @@ class ProposerOrchestrator:
                 prompt_dir=prompt_dir, proposal_slots=proposal_slots,
                 hints=hints, session=session, max_steps=scientist_steps,
                 world_transition=transition_text,
+                node_id=node_id, episode_id=episode_id,
             )
         except (ProposerError, Exception) as exc:
             print(f"[orchestrator] episode {episode_id} research failed: {exc}", flush=True)
@@ -297,6 +301,8 @@ class ProposerOrchestrator:
             abstain_reason=result.abstain_reason,
             deliberation_telemetry=result.deliberation_telemetry,
             trace=result.trace,
+            research_states=result.research_states,
+            transformations=result.transformations,
         )
 
     def _run_lane(

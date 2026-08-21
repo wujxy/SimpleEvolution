@@ -12,6 +12,10 @@ import socket
 from pathlib import Path
 
 from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
+from simpleevo.research_state import (
+    research_state_to_dict,
+    transformation_to_dict,
+)
 
 from experiment.git_worktree import GitWorkspaceProvider, WorkspaceSpec
 
@@ -78,6 +82,14 @@ def _result_to_dict(result, proposals_with_meta) -> dict:
         "node_id": result.node_id,
         "outcome": result.outcome,
         "proposals": proposals_with_meta,
+        "research_states": [
+            research_state_to_dict(item)
+            for item in getattr(result, "research_states", ())
+        ],
+        "transformations": [
+            transformation_to_dict(item)
+            for item in getattr(result, "transformations", ())
+        ],
         "abstain_reason": result.abstain_reason,
         "telemetry": result.deliberation_telemetry,
         "trace": result.trace,
@@ -99,9 +111,11 @@ def _proposal_to_dict(proposal, proposal_id: str) -> dict:
         }
     return {
         "proposal_id": proposal_id,
+        "research_state_id": proposal.research_state_id,
         "instruction": proposal.instruction,
         "rationale": {
             "research_target": target,
+            "expectation": proposal.expectation,
             "material_difference": proposal.material_difference,
         },
         "expectations": [],

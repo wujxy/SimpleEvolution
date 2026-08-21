@@ -214,6 +214,11 @@ def _build_telemetry(
         "steps": steps,
         "tool_calls": state.counts.get("tool", 0),
         "source_reads": state.counts.get("source_read", 0),
+        "research_states_registered": len(state.research_states),
+        "transformations_requested": len(state.transformations),
+        "proposed_research_states": state.counts.get(
+            "proposed_research_states", 0,
+        ),
         "protocol_repairs": state.protocol_repairs,
         "compactions": state.counts.get("compact", 0),
         "outcome": outcome,
@@ -233,6 +238,8 @@ def _build_trace(
         "outcome": outcome,
         "reason_kind": reason_kind,
         "evidence_refs": list(evidence_refs),
+        "research_state_ids": list(state.research_states),
+        "transformation_ids": list(state.transformations),
         "last_raw_reply": state.last_raw_reply[:400],
     }
 

@@ -37,6 +37,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from .model import ChatModel
+from .cognitive_transformer import CognitiveTransformer
+from simpleevo.generator import load_generator_basis
+from simpleevo.research_state import CognitiveTransformation, ResearchState
 
 from .memory.reflection_views import (
     NOT_PERFORMED_STATUSES,
@@ -107,6 +110,8 @@ class ScientistRound:
     usage: object = None
     deliberation_telemetry: dict = field(default_factory=dict)
     trace: dict = field(default_factory=dict)
+    research_states: tuple[ResearchState, ...] = ()
+    transformations: tuple[CognitiveTransformation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1378,13 +1383,20 @@ def _parse_proposal(value) -> ResearchProposal:
     if not isinstance(value, dict):
         raise ProposerError("proposal must be an object")
     allowed = {
-        "instruction", "research_target", "evidence_refs", "material_difference",
+        "research_state_id", "instruction", "expectation", "research_target",
+        "evidence_refs", "material_difference",
     }
     if set(value) - allowed:
         raise ProposerError(f"proposal has unexpected keys: {sorted(value)}")
+    research_state_id = value.get("research_state_id")
+    if not isinstance(research_state_id, str) or not research_state_id.strip():
+        raise ProposerError("proposal.research_state_id must be non-empty")
     instruction = value.get("instruction")
     if not isinstance(instruction, str) or not instruction.strip():
         raise ProposerError("proposal.instruction must be non-empty")
+    expectation = value.get("expectation")
+    if not isinstance(expectation, str) or not expectation.strip():
+        raise ProposerError("proposal.expectation must be non-empty")
     target = _parse_research_target(value.get("research_target"))
     evidence_refs = tuple(_require_string_list(
         value.get("evidence_refs", []),
@@ -1396,7 +1408,9 @@ def _parse_proposal(value) -> ResearchProposal:
             "proposal.material_difference must be a non-empty string when present"
         )
     return ResearchProposal(
+        research_state_id=research_state_id.strip(),
         instruction=instruction.strip(),
+        expectation=expectation.strip(),
         research_target=target,
         evidence_refs=evidence_refs,
         material_difference=(md.strip() if isinstance(md, str) else None),
@@ -1890,6 +1904,13 @@ def _validate_action_guard(
     with the pipeline."""
     previous = state.last_tool_fingerprint
     for action in actions:
+        if action["action"] == "submit_proposals":
+            state_ids = {
+                proposal.research_state_id for proposal in action["proposals"]
+            }
+            if not state_ids.issubset(state.research_states):
+                return "unknown_research_state"
+            state.counts["proposed_research_states"] = len(state_ids)
         if action["action"] not in _RESEARCH_TOOL_ACTIONS:
             continue
         fingerprint = _fingerprint(action)
@@ -1991,10 +2012,20 @@ class ScientistAgent(ResearchAgent):
         session: ScientistSession,
         max_steps: int | None = None,
         world_transition: str | None = None,
+        node_id: str | None = None,
+        episode_id: str | None = None,
     ) -> ScientistRound:
         """Run one round of this Scientist's research, persisting its lived
         trajectory and notebook into ``session`` as it goes."""
         self._proposal_slots = proposal_slots
+        resolved_node_id = node_id or base_sha
+        resolved_episode_id = episode_id or (
+            f"{session.scientist_id}-r{current_round}"
+        )
+        generators = {item.id: item for item in load_generator_basis()}
+        episode_seed = world_transition or (
+            f"Goal: {goal}\nAccepted revision: {base_sha}"
+        )
         charter = load_semantic("proposer", prompt_dir)
         system_prompt = _build_system_prompt(
             charter=charter, goal=goal, editable=editable, base_sha=base_sha,
@@ -2106,6 +2137,13 @@ class ScientistAgent(ResearchAgent):
                 command_timeout_seconds=self.command_timeout_seconds,
                 command_output_cap_chars=self.command_output_cap_chars,
                 current_round=current_round,
+                node_id=resolved_node_id,
+                episode_id=resolved_episode_id,
+                cognitive_transformer=CognitiveTransformer(
+                    model=self.model,
+                    generators=generators,
+                    episode_seed=episode_seed,
+                ),
             )
 
         def make_result(action, state, usages, step, outcome):
@@ -2124,6 +2162,8 @@ class ScientistAgent(ResearchAgent):
                         state, steps=step, outcome="submit"),
                     trace=_build_trace(
                         state, round_id=current_round, outcome="submit"),
+                    research_states=tuple(state.research_states.values()),
+                    transformations=tuple(state.transformations.values()),
                 )
             abstain_reason = (
                 "research budget exhausted before the Scientist submitted "
@@ -2138,6 +2178,8 @@ class ScientistAgent(ResearchAgent):
                     state, steps=step, outcome="abstain"),
                 trace=_build_trace(
                     state, round_id=current_round, outcome="abstain"),
+                research_states=tuple(state.research_states.values()),
+                transformations=tuple(state.transformations.values()),
             )
 
         return self._deliberate(

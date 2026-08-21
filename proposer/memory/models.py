@@ -50,7 +50,9 @@ class ResearchProposal:
     records them only in the non-authoritative proposer trace.
     """
 
+    research_state_id: str
     instruction: str
+    expectation: str
     research_target: ResearchTarget
     evidence_refs: tuple[str, ...] = ()
     material_difference: str | None = None
