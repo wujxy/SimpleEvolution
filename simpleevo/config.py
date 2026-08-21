@@ -14,6 +14,124 @@ import yaml
 
 
 @dataclass(frozen=True)
+class JobConfig:
+    """Which job backend the Scheduler submits workers through, and its knobs.
+
+    ``backend`` selects the submitter: ``local`` (subprocess) or ``condor``.
+    The remaining fields are condor-only and ignored when ``backend ==
+    ``local``.  ``collector``/``schedd_name`` select the JUNO production pool
+    (cm01.ihep.ac.cn) — required on login nodes whose default collector sees
+    the wrong 4-machine pool.
+    """
+
+    backend: str = "local"
+    collector: str | None = None
+    schedd_name: str | None = None
+    accounting_group: str = "JUNO.juno.default"
+    accounting_group_user: str = ""
+    ihep_group: str | None = None
+    request_os: str = "AlmaLinux9"
+    cpu_model: str | None = None
+    machine_constraint: str | None = None
+    memory_mb: int = 4096
+    cpus: int = 1
+    python_executable: str = ""
+    # Forward proxy for the worker's outbound model/API traffic. JUNO execute
+    # nodes have no external internet, so external providers must be reached
+    # through a jump host's HTTP CONNECT proxy (e.g. 192.168.237.165:3128).
+    # These are authoritative for condor jobs — independent of the submit
+    # host's own proxy env. ``no_proxy`` keeps internal endpoints (e.g.
+    # aiapi.ihep.ac.cn) off the proxy; when any proxy is set it defaults to
+    # localhost-only.
+    http_proxy: str = ""
+    https_proxy: str = ""
+    no_proxy: str = ""
+    submit_cmd: str = "condor_submit"
+    query_cmd: str = "condor_q"
+    remove_cmd: str = "condor_rm"
+    poll_seconds: float = 15.0
+    run_timeout_seconds: int = 7200
+    idle_warn_seconds: int = 7200
+    disappearance_grace_seconds: int = 120
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "backend": self.backend,
+            "collector": self.collector,
+            "schedd_name": self.schedd_name,
+            "accounting_group": self.accounting_group,
+            "accounting_group_user": self.accounting_group_user,
+            "ihep_group": self.ihep_group,
+            "request_os": self.request_os,
+            "cpu_model": self.cpu_model,
+            "machine_constraint": self.machine_constraint,
+            "memory_mb": self.memory_mb,
+            "cpus": self.cpus,
+            "python_executable": self.python_executable,
+            "http_proxy": self.http_proxy,
+            "https_proxy": self.https_proxy,
+            "no_proxy": self.no_proxy,
+            "submit_cmd": self.submit_cmd,
+            "query_cmd": self.query_cmd,
+            "remove_cmd": self.remove_cmd,
+            "poll_seconds": self.poll_seconds,
+            "run_timeout_seconds": self.run_timeout_seconds,
+            "idle_warn_seconds": self.idle_warn_seconds,
+            "disappearance_grace_seconds": self.disappearance_grace_seconds,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: Mapping[str, Any]) -> JobConfig:
+        return cls(
+            backend=str(raw.get("backend", "local")),
+            collector=raw.get("collector"),
+            schedd_name=raw.get("schedd_name"),
+            accounting_group=str(raw.get("accounting_group", "JUNO.juno.default")),
+            accounting_group_user=str(raw.get("accounting_group_user", "")),
+            ihep_group=raw.get("ihep_group"),
+            request_os=str(raw.get("request_os", "AlmaLinux9")),
+            cpu_model=raw.get("cpu_model"),
+            machine_constraint=raw.get("machine_constraint"),
+            memory_mb=int(raw.get("memory_mb", 4096)),
+            cpus=int(raw.get("cpus", 1)),
+            python_executable=str(raw.get("python_executable", "")),
+            http_proxy=str(raw.get("http_proxy", "")),
+            https_proxy=str(raw.get("https_proxy", "")),
+            no_proxy=str(raw.get("no_proxy", "")),
+            submit_cmd=str(raw.get("submit_cmd", "condor_submit")),
+            query_cmd=str(raw.get("query_cmd", "condor_q")),
+            remove_cmd=str(raw.get("remove_cmd", "condor_rm")),
+            poll_seconds=float(raw.get("poll_seconds", 15.0)),
+            run_timeout_seconds=int(raw.get("run_timeout_seconds", 7200)),
+            idle_warn_seconds=int(raw.get("idle_warn_seconds", 7200)),
+            disappearance_grace_seconds=int(raw.get("disappearance_grace_seconds", 120)),
+        )
+
+    def proxy_env(self) -> dict[str, str]:
+        """Env-var overlay routing worker traffic through the configured proxy.
+
+        Emits both upper- and lower-case proxy vars, because different HTTP
+        clients read different key names (httpx/requests read the upper-case
+        forms; some CLIs read the lower-case ones). ``no_proxy`` defaults to
+        localhost-only when any proxy is configured, so loopback never goes
+        through the proxy; set it explicitly to keep internal endpoints (e.g.
+        aiapi.ihep.ac.cn) off the proxy. Returns ``{}`` when nothing is
+        configured — the caller then forwards the submit host's env unchanged.
+        """
+        overlay: dict[str, str] = {}
+        for key, value in (("HTTP_PROXY", self.http_proxy),
+                           ("HTTPS_PROXY", self.https_proxy)):
+            if value:
+                overlay[key] = value
+                overlay[key.lower()] = value
+        no_proxy = self.no_proxy or ("localhost,127.0.0.1" if overlay else "")
+        if no_proxy:
+            overlay["NO_PROXY"] = no_proxy
+            overlay["no_proxy"] = no_proxy
+        return overlay
+
+
+@dataclass(frozen=True)
 class EvolutionConfig:
     """Full task configuration shared by the CLI, Scheduler, and workers."""
 
@@ -34,6 +152,7 @@ class EvolutionConfig:
     context: Mapping[str, Any] = field(default_factory=dict)
     pricing: Mapping[str, Any] = field(default_factory=dict)
     prompt_dir: Path | None = None
+    jobs: JobConfig = field(default_factory=JobConfig)
     proposal_slots: int = 3
     scientist_steps: int = 200
     agent_timeout_seconds: int = 3600
@@ -71,6 +190,7 @@ class EvolutionConfig:
             "context": dict(self.context),
             "pricing": dict(self.pricing),
             "prompt_dir": str(self.prompt_dir) if self.prompt_dir else None,
+            "jobs": self.jobs.to_dict(),
             "proposal_slots": self.proposal_slots,
             "scientist_steps": self.scientist_steps,
             "agent_timeout_seconds": self.agent_timeout_seconds,
@@ -113,6 +233,7 @@ class EvolutionConfig:
             context=dict(raw.get("context", {})),
             pricing=dict(raw.get("pricing", {})),
             prompt_dir=Path(prompt_dir) if prompt_dir else None,
+            jobs=JobConfig.from_dict(raw.get("jobs", {})),
             proposal_slots=int(raw.get("proposal_slots", 3)),
             scientist_steps=int(raw.get("scientist_steps", 200)),
             agent_timeout_seconds=int(raw.get("agent_timeout_seconds", 3600)),

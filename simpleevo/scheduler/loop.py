@@ -11,6 +11,7 @@ from simpleevo.config import EvolutionConfig
 from simpleevo.db.store import FrontierAxis, GateDecision, GateResult, ResearchStore
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.generator import Generator, load_generator_basis, sample_generators
+from simpleevo.jobs.base import BaseSubmitter
 
 from .frontier import (
     FrontierConfig,
@@ -61,6 +62,7 @@ class Scheduler:
         config: SchedulerConfig,
         *,
         evolution_config: EvolutionConfig | None = None,
+        submitter: BaseSubmitter | None = None,
         submit_proposer: Callable[[str, dict[str, Any]], str] | None = None,
         submit_experiment: Callable[[str, dict[str, Any]], str] | None = None,
         clock: Callable[[], float] = time.time,
@@ -70,8 +72,17 @@ class Scheduler:
         self.run_dir = Path(run_dir)
         self.config = config
         self.evolution_config = evolution_config
-        self.submit_proposer = submit_proposer or (lambda _aid, _p: "")
-        self.submit_experiment = submit_experiment or (lambda _eid, _p: "")
+        # A submitter object (Local or Condor) is the preferred wiring: it
+        # provides both submit callables AND the live-probe hooks the
+        # Reconciler needs.  Bare callables are kept for backward compatibility
+        # (tests) — no probe, backend-unaware reconciliation.
+        self._submitter = submitter
+        if submitter is not None:
+            self.submit_proposer = submitter.submit_proposer
+            self.submit_experiment = submitter.submit_experiment
+        else:
+            self.submit_proposer = submit_proposer or (lambda _aid, _p: "")
+            self.submit_experiment = submit_experiment or (lambda _eid, _p: "")
         self.clock = clock
         self._allocations_counter: dict[str, int] = {}
         self._queries = ResearchQueries(store.path)
@@ -84,14 +95,19 @@ class Scheduler:
 
         # Local subprocesses do not survive their parent; anything left
         # ``running`` by a previous process is dead and re-submittable (§18).
-        self.store.mark_running_attempts_lost()
+        # Condor jobs DO survive the scheduler, so the submitter keeps running
+        # attempts and the Reconciler reconciles each against the live queue.
+        if self._submitter is None or self._submitter.presumes_dead_on_startup:
+            self.store.mark_running_attempts_lost()
 
     def step(self) -> dict[str, Any]:
         """Run one scheduler iteration.  Returns telemetry for the step."""
         self._step_count += 1
 
-        # 1. Reconcile offline results + re-submit dead work.
-        reconciler = Reconciler(self.store, self.run_dir)
+        # 1. Reconcile offline results + re-submit dead work.  The submitter
+        # hook lets a condor backend tell the reconciler which missing-result
+        # jobs are still alive vs HELD/gone (which get retried).
+        reconciler = Reconciler(self.store, self.run_dir, submitter=self._submitter)
         reconcile_actions = reconciler.reconcile()
         self._execute_reconcile_actions(reconcile_actions)
 

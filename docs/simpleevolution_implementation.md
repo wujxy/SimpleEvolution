@@ -85,6 +85,7 @@ experiment/      # 共享 package：executor + gate + eval + worktree + Apptaine
 | `simpleevo` console script（`pip install -e .` → `simpleevo` 命令） | `pyproject.toml`, `README.md` | — |
 | Root Node / Thread 自动播种 | `simpleevo/cli.py` | `tests/test_cli.py` |
 | 本地子进程 submitter + manifest 形状对齐 | `simpleevo/jobs/local.py` | 集成测试 + CLI smoke |
+| HTCondor submitter（同一 BaseSubmitter 接口）+ 运行期 job 探活/reconcile | `simpleevo/jobs/base.py`, `simpleevo/jobs/condor.py`, `simpleevo/jobs/job_env.py`, `simpleevo/scheduler/reconcile.py` | `tests/jobs/` + 真机 condor 冒烟（submit→跑→result.json→poll 闭环） |
 | Frontier 持久化 + 原子 ingest | `simpleevo/db/store.py`, `simpleevo/scheduler/loop.py` | `tests/scheduler/test_frontier_persistence.py` |
 | Reconcile（离线 result.json ingest） | `simpleevo/scheduler/reconcile.py`, `simpleevo/scheduler/loop.py` | `tests/scheduler/test_reconcile.py` |
 | Per-proposal L3 snapshot + Child Thread fork | `proposer/cli.py`, `simpleevo/db/store.py` | `tests/scheduler/test_frontier_persistence.py` |
@@ -100,9 +101,13 @@ experiment/      # 共享 package：executor + gate + eval + worktree + Apptaine
    - 当前 `examples/smoke_task.yaml` 使用假 `runtime_image` 且未填 `researcher` 块，proposer worker 启动后会失败。
    - 真实任务需在 YAML 中提供 `researcher.base_url`、`api_key`、`model` 等字段。
 
-2. **HTCondor 适配器缺失**
-   - 当前只有 `LocalSubmitter`（本地子进程）。
-   - 后续应新增 `simpleevo/jobs/htcondor.py`，复用同样的 manifest/result 路径约定，将 `Scheduler` 的 `submit_proposer`/`submit_experiment` 替换为 condor 提交。
+2. ~~HTCondor 适配器缺失~~ **已实现（2026-08-20）**
+   - `simpleevo/jobs/base.py` 定义统一 `BaseSubmitter` 接口；`LocalSubmitter` 与 `HTCondorSubmitter` 只差一个 `_launch` seam（子进程 vs condor_submit），manifest/result 路径约定完全一致。
+   - `simpleevo/jobs/condor.py`：job.sh/job.sub 生成、`condor_submit -pool/-name`、`run_dir/jobs.json` ledger、`probe_job`（condor_q 实时状态）+ `remove_job`（condor_rm）。
+   - `simpleevo/jobs/job_env.py`：运行期 job 环境（PYTHONPATH 指向包 + 转发 API-key/proxy env）→ `job_env.sh` 由 condor job.sh source；本地子进程用同一 `worker_environment()`。
+   - `simpleevo/scheduler/reconcile.py`：接 `submitter.probe_job`，HELD/gone 的 job 标记 infra-failed 后走既有重试（§18）；condor backend 下启动不再 `mark_running_attempts_lost`（condor job 存活于 scheduler 之外）。
+   - 配置：`config.jobs`（`backend: local | condor` + collector/schedd/accounting_group 等），CLI 按 backend 构造 submitter。
+   - 真机验证：schedd12（cm01 池）提交→jnws043 执行→worker 在 execute 节点用 job_env 的 PYTHONPATH 成功 import 并写回 result.json→poll/probe 闭环。envelope `usage` 缺失的兼容修复 + worker 上报 `--job-id`/`--backend`/host。
 
 3. **L1 Trace 完全接线未做完**
    - `simpleevo/trace/`（envelope + store）已创建，但 `experiment/agent.py` 尚未切到 `claude -p --output-format stream-json --verbose` 并写入 trace 文件。

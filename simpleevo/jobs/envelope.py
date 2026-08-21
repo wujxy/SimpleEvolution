@@ -138,6 +138,11 @@ def read_result(
     except ValueError as exc:
         raise ProtocolError(f"invalid worker status: {raw.get('status')!r}") from exc
     usage = raw.get("usage")
+    if usage is None:
+        # Workers written before usage landed in the wire format, or writers
+        # that have no telemetry records, may omit the field entirely.  Default
+        # to empty rather than rejecting a valid result.
+        usage = []
     if not isinstance(usage, list) or not all(isinstance(item, dict) for item in usage):
         raise ProtocolError("usage must be a list of objects")
     error = raw.get("error")

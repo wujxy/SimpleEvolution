@@ -8,8 +8,10 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-import sys
+import socket
 from pathlib import Path
+
+from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
 
 from experiment.git_worktree import GitWorkspaceProvider, WorkspaceSpec
 
@@ -43,13 +45,6 @@ def _inherit_parent_session(
         return
     session_dir.mkdir(parents=True, exist_ok=True)
     shutil.copytree(parent_session_dir, session_dir, dirs_exist_ok=True)
-
-
-def _atomic_write(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(path)
 
 
 def _write_l1_trace(
@@ -157,6 +152,10 @@ def _enrich_proposals(proposals: tuple, proposal_ids: list[str]) -> list[dict]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="proposer")
     parser.add_argument("--manifest", required=True, type=Path)
+    parser.add_argument("--job-id", default=None,
+                        help="backend job id (condor cluster.proc); None for local")
+    parser.add_argument("--backend", default="local",
+                        help="scheduler backend: local | condor")
     args = parser.parse_args(argv)
 
     manifest = _load_manifest(args.manifest)
@@ -291,22 +290,23 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     result_path = Path(manifest.get("result_path", "result.json"))
-    _atomic_write(
+    execution = {
+        "scheduler": args.backend,
+        "job_id": args.job_id,
+        "attempt": attempt,
+        "host": socket.gethostname(),
+    }
+    write_result(
         result_path,
-        {
-            "protocol": manifest.get("protocol", "simpleevo.worker.v1"),
-            "kind": "proposer",
-            "request_id": manifest.get("request_id", episode_id),
-            "status": status,
-            "result": _result_to_dict(result, proposals_with_meta),
-            "error": error,
-            "execution": {
-                "scheduler": "local",
-                "job_id": None,
-                "attempt": attempt,
-                "host": "",
-            },
-        },
+        WorkerResult(
+            kind="proposer",
+            request_id=manifest.get("request_id", episode_id),
+            status=WorkerStatus.COMPLETED if status == "completed" else WorkerStatus.FAILED,
+            result=_result_to_dict(result, proposals_with_meta),
+            usage=(),
+            error=error,
+            execution=execution,
+        ),
     )
     return 0 if status == "completed" else 1
 

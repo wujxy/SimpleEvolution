@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
 from pathlib import Path
+
+from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
 
 from .contracts import ExperimentRequest, ExperimentResult
 from .runner import ExperimentRunner, InfraFailure
@@ -72,49 +75,54 @@ def _result_to_dict(result: ExperimentResult) -> dict:
     }
 
 
-def _atomic_write(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(path)
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="experiment")
     parser.add_argument("--manifest", required=True, type=Path)
+    parser.add_argument("--job-id", default=None,
+                        help="backend job id (condor cluster.proc); None for local")
+    parser.add_argument("--backend", default="local",
+                        help="scheduler backend: local | condor")
     args = parser.parse_args(argv)
 
     manifest = _load_manifest(args.manifest)
     request = _build_request(manifest.get("payload", manifest))
 
+    result_path = Path(manifest.get("result_path", "result.json"))
+    execution = {
+        "scheduler": args.backend,
+        "job_id": args.job_id,
+        "attempt": request.attempt,
+        "host": socket.gethostname(),
+    }
+    base = {
+        "request_id": manifest.get("request_id", request.experiment_id),
+        "execution": execution,
+    }
+
     try:
         runner = ExperimentRunner(request)
         result = runner.run()
-        envelope = {
-            "protocol": manifest.get("protocol", "simpleevo.worker.v1"),
-            "kind": "experiment",
-            "request_id": manifest.get("request_id", request.experiment_id),
-            "status": "completed",
-            "result": _result_to_dict(result),
-            "error": None,
-            "execution": {
-                "scheduler": "local",
-                "job_id": None,
-                "attempt": request.attempt,
-                "host": "",
-            },
-        }
-        _atomic_write(Path(manifest.get("result_path", "result.json")), envelope)
+        write_result(
+            result_path,
+            WorkerResult(
+                kind="experiment",
+                request_id=base["request_id"],
+                status=WorkerStatus.COMPLETED,
+                result=_result_to_dict(result),
+                usage=(),
+                error=None,
+                execution=execution,
+            ),
+        )
         return 0
     except InfraFailure as exc:
-        _atomic_write(
-            Path(manifest.get("result_path", "result.json")),
-            {
-                "protocol": manifest.get("protocol", "simpleevo.worker.v1"),
-                "kind": "experiment",
-                "request_id": manifest.get("request_id", request.experiment_id),
-                "status": "failed",
-                "result": {
+        write_result(
+            result_path,
+            WorkerResult(
+                kind="experiment",
+                request_id=base["request_id"],
+                status=WorkerStatus.FAILED,
+                result={
                     "experiment_id": request.experiment_id,
                     "proposal_id": request.proposal_id,
                     "parent_node_id": request.parent_node_id,
@@ -122,25 +130,20 @@ def main(argv: list[str] | None = None) -> int:
                     "outcome": "infra_failed",
                     "reason": str(exc),
                 },
-                "error": str(exc),
-                "execution": {
-                    "scheduler": "local",
-                    "job_id": None,
-                    "attempt": request.attempt,
-                    "host": "",
-                },
-            },
+                usage=(),
+                error=str(exc),
+                execution=execution,
+            ),
         )
         return 1
     except Exception as exc:  # unexpected harness bug — also infra, never scientific
-        _atomic_write(
-            Path(manifest.get("result_path", "result.json")),
-            {
-                "protocol": manifest.get("protocol", "simpleevo.worker.v1"),
-                "kind": "experiment",
-                "request_id": manifest.get("request_id", request.experiment_id),
-                "status": "failed",
-                "result": {
+        write_result(
+            result_path,
+            WorkerResult(
+                kind="experiment",
+                request_id=base["request_id"],
+                status=WorkerStatus.FAILED,
+                result={
                     "experiment_id": request.experiment_id,
                     "proposal_id": request.proposal_id,
                     "parent_node_id": request.parent_node_id,
@@ -148,14 +151,10 @@ def main(argv: list[str] | None = None) -> int:
                     "outcome": "infra_failed",
                     "reason": str(exc),
                 },
-                "error": str(exc),
-                "execution": {
-                    "scheduler": "local",
-                    "job_id": None,
-                    "attempt": request.attempt,
-                    "host": "",
-                },
-            },
+                usage=(),
+                error=str(exc),
+                execution=execution,
+            ),
         )
         return 1
 

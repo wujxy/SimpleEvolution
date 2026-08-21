@@ -1,0 +1,141 @@
+# SimpleEvolution task: optimize tinyalgo.count_pairs for speed — HTCondor
+# backend variant (worker jobs run on the JUNO pool via cm01 collector).
+#
+# Same task as task.yaml; differences:
+#   - jobs.backend = condor: proposer AND experiment workers are submitted as
+#     vanilla condor jobs (job.sh/job.sub + run_dir/jobs.json ledger) instead
+#     of local subprocesses.
+#   - researcher + executor reach the model through IHEP's internal HEPAI
+#     gateway (aiapi.ihep.ac.cn), because JUNO execute nodes have NO external
+#     internet: api.deepseek.com / open.bigmodel.cn time out from worker nodes,
+#     while aiapi.ihep.ac.cn (and its Anthropic-compatible /apiv2/anthropic
+#     route) is reachable. The proposer uses the HEPAI OpenAI-compatible API;
+#     the executor's `claude` CLI uses HEPAI's Anthropic-compatible endpoint.
+#     Keys: HEPAI_API_KEY must be set; ANTHROPIC_API_KEY should carry the same
+#     value (claude CLI sends it as x-api-key). Launch with
+#     ANTHROPIC_AUTH_TOKEN=$HEPAI_API_KEY so the claude CLI's Bearer auth also
+#     matches.
+#
+#   python -m simpleevo --run-dir runs/tiny-condor-001 \
+#     init --config examples/tiny_algo_opt/task.condor.yaml
+#   python -m simpleevo --run-dir runs/tiny-condor-001 \
+#     run --config examples/tiny_algo_opt/task.condor.yaml
+
+goal: >
+  Optimize the tinyalgo pair-counting implementation in tinyalgo/__init__.py
+  for speed (lower ms_per_call) while keeping results exactly correct: the
+  pytest suite and scripts/check_drift.py must still pass. Edit only tinyalgo.
+
+repo_path: repo
+runtime_image: apptainer.sif
+
+editable_paths:
+  - tinyalgo
+frozen_paths: []
+
+eval_commands:
+  - PYTHONPATH=. python -m pytest tests/ -q && echo CORRECTNESS=PASS || echo CORRECTNESS=FAIL
+  - PYTHONPATH=. python scripts/check_drift.py && echo DRIFT=PASS || echo DRIFT=FAIL
+  - PYTHONPATH=. python scripts/bench.py
+
+metrics_schema:
+  objective:
+    key: ms_per_call
+    lower_is_better: true
+  gates:
+    - key: CORRECTNESS
+      description: >
+        The pytest suite passes. Pair counts must be exactly correct; a change
+        that alters any computed count fails.
+    - key: DRIFT
+      description: >
+        Per-call output is identical to the frozen reference. Any change to
+        operation order, accumulation, or control flow that shifts it fails.
+
+axes:
+  - ms_per_call
+
+gate_block: |
+  Only modify files under tinyalgo/. The harness runs, in order:
+    - PYTHONPATH=. python -m pytest tests/ -q   (CORRECTNESS gate)
+    - PYTHONPATH=. python scripts/check_drift.py (DRIFT gate)
+    - PYTHONPATH=. python scripts/bench.py      (objective: ms_per_call)
+  A change is accepted only if CORRECTNESS=PASS and DRIFT=PASS; among
+  accepted changes, lower ms_per_call is better.
+
+# Job backend: HTCondor. collector/schedd_name target the JUNO production pool
+# (cm01 owns schedd06/07/10/11/12). python_executable must be reachable from
+# execute nodes (shared Lustre). API keys are forwarded via run_dir/job_env.sh.
+#
+# To use an EXTERNAL model provider (deepseek/zhipu/anthropic/openai) instead
+# of the internal HEPAI gateway, route the worker's API traffic through a jump
+# host that has internet (see proxy/): uncomment the proxy fields, set
+# no_proxy to keep internal endpoints off the proxy, and point
+# researcher/executor at the third-party base_url.
+jobs:
+  backend: condor
+  collector: cm01.ihep.ac.cn
+  schedd_name: scheduler@schedd12.ihep.ac.cn
+  accounting_group: JUNO.juno.default
+  accounting_group_user: lidian
+  request_os: AlmaLinux9
+  memory_mb: 4096
+  cpus: 1
+  python_executable: /lustrefs/juno26/users/lidian/py_venv/miniconda3/bin/python3
+  poll_seconds: 15.0
+  run_timeout_seconds: 3600
+  idle_warn_seconds: 3600
+  disappearance_grace_seconds: 120
+  # http_proxy: http://192.168.237.165:3128
+  # https_proxy: http://192.168.237.165:3128
+  # no_proxy: localhost,127.0.0.1,aiapi.ihep.ac.cn
+
+# Proposer (Scientist) chat-model configuration. api: hepai uses IHEP's
+# internal OpenAI-compatible gateway (HEPAI_API_KEY from the environment).
+# hepai/deepseek-v4-flash is the same deepseek model family served in-house,
+# so it works from execute nodes that have no external internet.
+researcher:
+  api: hepai
+  model: hepai/deepseek-v4-flash
+  base_url: https://aiapi.ihep.ac.cn/apiv2
+  command_timeout_seconds: 360
+  command_output_cap_chars: 12000
+executor:
+  api: anthropic
+  model: hepai/deepseek-v4-flash
+  base_url: https://aiapi.ihep.ac.cn/apiv2/anthropic
+
+# LLM token pricing for budget accounting (USD per 1M tokens). 1 $ = 6.7 CNY
+pricing:
+  input_usd_per_1m: 0.67
+  output_usd_per_1m: 2.02
+  cache_read_usd_per_1m: 0.02
+  cache_creation_usd_per_1m: 0.0
+
+# Scheduling / episode budgets (condor test defaults; raise for real runs).
+proposal_slots: 3
+scientist_steps: 40
+agent_timeout_seconds: 3600
+eval_timeout_seconds: 600
+max_proposer_inflight: 1
+max_experiment_inflight: 1
+poll_seconds: 10.0
+queue_max_size: 10
+quiescence_window_proposals: 2
+
+# Frontier selection policy: "gepa" = per-axis best + dominated pruning of
+# strictly-dominated nodes (GEPA, arXiv:2507.19457); "topk" = keep the
+# frontier_top_k best nodes per axis and union them.
+frontier_policy: topk
+# Width for the "topk" policy.
+frontier_top_k: 3
+# Total proposer allocations a single frontier node may receive over its
+# lifetime. A frontier node whose fresh episodes are exhausted is
+# programmatically reseeded (fresh episode inheriting its most recent one)
+# until this budget is spent.
+max_research_per_node: 3
+# Inject variation-factor directives (G1..G10 from generator.json) into
+# reseeded episodes: each re-study is pointed at 1-2 generators not yet tried
+# on that node, sampled by the harness. Set false for the pure
+# cognition-fork-reseed control arm.
+generator_reseed: true

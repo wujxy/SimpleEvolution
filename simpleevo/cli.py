@@ -12,6 +12,8 @@ from pathlib import Path, PurePosixPath
 from .config import EvolutionConfig, load_config, save_config
 from .db.queries import ResearchQueries
 from .db.store import GateDecision, ResearchStore
+from .jobs.base import BaseSubmitter
+from .jobs.condor import HTCondorSubmitter
 from .jobs.local import LocalSubmitter
 from .scheduler.loop import Scheduler, SchedulerConfig
 from .scheduler.queue import QueueConfig
@@ -248,6 +250,20 @@ def _build_scheduler_config(config: EvolutionConfig) -> SchedulerConfig:
     )
 
 
+def _build_submitter(
+    config: EvolutionConfig,
+    run_dir: Path,
+) -> BaseSubmitter:
+    """Construct the job backend selected by ``config.jobs.backend``.
+
+    Local and Condor implement the same BaseSubmitter interface; swapping the
+    backend is a config change, not a code change (§13).
+    """
+    if config.jobs.backend == "condor":
+        return HTCondorSubmitter(run_dir, config)
+    return LocalSubmitter(run_dir, config)
+
+
 def _run_scheduler(
     config: EvolutionConfig,
     run_dir: Path,
@@ -256,14 +272,13 @@ def _run_scheduler(
     store = ResearchStore(run_dir / "simpleevo.db")
     _ensure_baseline_measured(config, run_dir, store)
     scheduler_config = _build_scheduler_config(config)
-    submitter = LocalSubmitter(run_dir, config)
+    submitter = _build_submitter(config, run_dir)
     scheduler = Scheduler(
         store,
         run_dir,
         scheduler_config,
         evolution_config=config,
-        submit_proposer=submitter.submit_proposer,
-        submit_experiment=submitter.submit_experiment,
+        submitter=submitter,
     )
     summary = scheduler.run(max_steps=max_steps)
     print(json.dumps(summary, indent=2))
