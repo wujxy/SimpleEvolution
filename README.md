@@ -2,14 +2,19 @@
 
 Event-driven Research Tree evolution: **Node → Scientist → Proposal →
 Experiment → New Node**. Scientists independently choose EXPLORE or SYNTHESIZE;
-an Executor implements proposals and the Harness measures them. A stateless
-Supervisor allocates attention across all eligible branches, using the old
-Frontier only for telemetry and when its decision worker fails. A legal
-Scientist lease admits its proposals once; the bounded FIFO Executor queue
-does not apply a second Frontier veto.
+an Executor implements proposals and the Harness measures them. A persistent
+Supervisor is the tree's growth gate: woken only by evidence-change events, it
+investigates the public research environment with read-only tools and decides
+whether a Node receives one more proposer lease. It never falls back to
+Frontier — a failing decision worker retries the same session, bounded, and
+exhaustion parks the run visibly. A legal Scientist lease admits its proposals
+once; the bounded FIFO Executor queue does not apply a second veto. Frontier
+allocation remains only as the explicit baseline mode for non-Supervisor
+(ablation/GEPA) runs.
 
 When several branches have mature, compatible evidence, the Supervisor may
-open one integration request. A fresh request-scoped, synthesis-only Scientist
+open one integration request on its own turn — never bundled with a growth
+decision. A fresh request-scoped, synthesis-only Scientist
 acts as Integrator and writes exactly one synthesis proposal (or abstains);
 that proposal passes through the normal Executor and Gate. A gate-passed
 candidate can then become a new logical epoch root. Promotion appends a shared

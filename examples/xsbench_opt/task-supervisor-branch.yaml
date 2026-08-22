@@ -1,0 +1,127 @@
+# SimpleEvolution task: XSBench — Supervisor + Integrator branching test.
+#
+# Goal: produce a genuinely BRANCHING tree so the Supervisor has multiple
+# distinct lineages to allocate across and (when they mature) to consider for
+# an integration request -> Integrator -> epoch promotion.
+#
+# The chain run (task-supervisor.yaml) stayed a single lineage because
+# max_proposer_inflight=1 -> supervisor capacity=1 -> it granted 1 lease of
+# proposal_slots=1 per round.  Here the parallelism/proposal knobs are raised:
+# proposal_slots=4 (one scientist fills up to 4 proposals -> 4 children per
+# node) and max_proposer_inflight=6 (supervisor can fund up to 6 leases ->
+# up to 6 nodes under study in parallel).  Either lever alone branches the
+# tree; both together give a wide landscape.
+#
+# Run (bounded driver):
+#   unset APPTAINER_BIND
+#   BENCH_PIN=9 python scripts/run_supervisor_test.py \
+#     --config examples/xsbench_opt/task-supervisor-branch.yaml \
+#     --run-dir runs/supervisor-int-branch \
+#     --max-evals 24 --budget-usd 12.0
+
+goal: >
+  Optimize the XSBench macroscopic cross-section lookup kernel in src/ for
+  speed — higher lookups_per_sec (single-threaded, event-based, H-M small,
+  unionized grid; see scripts/config.sh) — while keeping results bit-identical:
+  the verification checksum printed by the binary must equal the frozen
+  reference in benchmarks/reference_hash.txt. Edit only src/. The evaluation
+  scripts (scripts/) and the frozen reference numbers (benchmarks/) are fixed
+  by the harness.
+
+repo_path: repo
+runtime_image: apptainer.sif
+
+editable_paths:
+  - src
+frozen_paths: []
+
+eval_commands:
+  - bash scripts/check_verify.sh && echo VERIFY=PASS || echo VERIFY=FAIL
+  - bash scripts/bench.sh
+
+metrics_schema:
+  objective:
+    key: lookups_per_sec
+    lower_is_better: false
+  gates:
+    - key: VERIFY
+      description: >
+        The binary's verification checksum matches the frozen reference
+        (benchmarks/reference_hash.txt). The checksum is a deterministic
+        function of every sampled cross-section lookup, so any change to the
+        computed cross sections, interpolation, search, or sampling that alters
+        a result fails. It is invariant to threading but not to arithmetic.
+    - key: RATE_PLAUSIBLE
+      description: >
+        lookups_per_sec is within a plausible single-threaded bound (<=8M,
+        ~3x the author-optimized kernel). Rejects precompute-in-init cheats
+        that move the whole per-lookup computation into untimed init and stream
+        the results from RAM in the timed loop — bit-identical, so VERIFY
+        passes, but the timed loop is no longer doing the lookup work (measured
+        cheat: 22-74M lps). The author-optimized kernel measures 2.56M lps;
+        8M leaves 3x headroom for genuine optimizations.
+
+axes:
+  - lookups_per_sec
+
+gate_block: |
+  Only modify files under src/. The harness runs, in order:
+    - bash scripts/check_verify.sh   (VERIFY gate: checksum == reference)
+    - bash scripts/bench.sh          (objective: lookups_per_sec; also emits the
+                                      RATE_PLAUSIBLE gate token)
+  A change is accepted only if VERIFY=PASS and RATE_PLAUSIBLE=PASS; among
+  accepted changes, higher lookups_per_sec is better. scripts/config.sh fixes
+  the benchmark run (-m event -s small -G unionized -t 1 -l 2000000).
+  RATE_PLAUSIBLE caps lookups_per_sec at 8M to reject timing cheats (moving the
+  lookup work into untimed init and streaming precomputed results in the timed
+  loop) that would otherwise keep VERIFY bit-identical.
+
+# Proposer (Scientist) chat-model configuration.
+researcher:
+  api: openai
+  model: deepseek-v4-flash
+  base_url: https://api.deepseek.com
+  command_timeout_seconds: 360
+  command_output_cap_chars: 12000
+  reasoning_effort: low  # thinking-depth valve (low|medium|high); None = provider default
+executor:
+  api: anthropic
+  model: deepseek-v4-flash
+  base_url: https://api.deepseek.com/anthropic
+  effort: low  # claude CLI --effort (low|medium|high|xhigh|max) for the executor agent
+
+# LLM token pricing for budget accounting (USD per 1M tokens). 1 $ = 6.7 CNY
+pricing:
+  input_usd_per_1m: 0.67
+  output_usd_per_1m: 2.02
+  cache_read_usd_per_1m: 0.02
+  cache_creation_usd_per_1m: 0.0
+
+# Scheduling / episode budgets.  Parallelism raised to 4 so the tree branches.
+proposal_slots: 4          # one scientist fills up to 4 proposals -> 4 children
+scientist_steps: 80
+agent_timeout_seconds: 3600
+eval_timeout_seconds: 600
+max_proposer_inflight: 6
+max_experiment_inflight: 4
+poll_seconds: 2.0
+queue_max_size: 16
+quiescence_window_proposals: 2
+
+# Frontier selection policy.
+frontier_policy: topk  # gepa or topk
+# Width for the "topk" policy (match the new breadth).
+frontier_top_k: 4
+# Total proposer allocations a single node may receive over its lifetime.
+# >=2 is the reliable branching lever: a node stays eligible after its first
+# study, so the eligible set grows past one node and the Supervisor can fund
+# several nodes in parallel -> the tree widens instead of chaining.
+max_research_per_node: 2
+# Lifetime cap on proposals emitted from one node (proposal_slots * max_research).
+max_proposals_per_node: 8
+# Variation-factor directives on reseeded episodes. Inert here (max_research=1
+# means no reseed happens); kept at the shipped default.
+generator_reseed: true
+# Persistent growth-gate runtime (see task-supervisor.yaml).
+supervisor_steps: 40
+supervisor_max_retries: 3

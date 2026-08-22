@@ -52,6 +52,23 @@ def test_frontier_fields_defaults():
     assert config.generator_reseed is False
 
 
+def test_supervisor_runtime_knobs_round_trip():
+    config = EvolutionConfig.from_dict(_minimal_raw(
+        supervisor_steps=64,
+        supervisor_max_retries=5,
+    ))
+    assert config.supervisor_steps == 64
+    assert config.supervisor_max_retries == 5
+
+    loaded = EvolutionConfig.from_dict(config.to_dict())
+    assert loaded.supervisor_steps == 64
+    assert loaded.supervisor_max_retries == 5
+
+    defaults = EvolutionConfig.from_dict(_minimal_raw())
+    assert defaults.supervisor_steps == 40
+    assert defaults.supervisor_max_retries == 3
+
+
 def test_example_config_new_fields():
     config = load_config(_EXAMPLE_DIR / "task.yaml")
     assert config.frontier_policy == "topk"

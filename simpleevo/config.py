@@ -170,6 +170,8 @@ class EvolutionConfig:
     max_research_per_node: int = 3
     max_proposals_per_node: int = 9
     generator_reseed: bool = False
+    supervisor_steps: int = 40
+    supervisor_max_retries: int = 3
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict (safe for YAML/JSON)."""
@@ -209,6 +211,8 @@ class EvolutionConfig:
             "max_research_per_node": self.max_research_per_node,
             "max_proposals_per_node": self.max_proposals_per_node,
             "generator_reseed": self.generator_reseed,
+            "supervisor_steps": self.supervisor_steps,
+            "supervisor_max_retries": self.supervisor_max_retries,
         }
 
     @classmethod
@@ -253,6 +257,8 @@ class EvolutionConfig:
             max_research_per_node=int(raw.get("max_research_per_node", 3)),
             max_proposals_per_node=int(raw.get("max_proposals_per_node", 9)),
             generator_reseed=bool(raw.get("generator_reseed", False)),
+            supervisor_steps=int(raw.get("supervisor_steps", 40)),
+            supervisor_max_retries=int(raw.get("supervisor_max_retries", 3)),
         )
 
 
