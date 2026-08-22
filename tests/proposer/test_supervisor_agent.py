@@ -193,3 +193,37 @@ def test_step_budget_exhaustion_is_an_error_not_a_default(tmp_path: Path):
             session=load_supervisor_session(tmp_path), tools=_tools(),
             batch=_batch(),
         )
+
+
+def test_live_context_compaction_keeps_archive_complete(tmp_path: Path):
+    from proposer.scientist import ContextPolicy
+
+    session = load_supervisor_session(tmp_path)
+    agent = SupervisorAgent(
+        model=FakeModel([
+            {"action": "list_nodes"},
+            {"action": "submit_growth_decision", "node_ids": [],
+             "rationale": "wait."},
+            {"notebook": "compacted turn survives in the archive."},
+        ]),
+        timeout_seconds=30,
+        max_steps=8,
+        # A threshold of one token forces compaction after every step.
+        context_policy=ContextPolicy(
+            emergency_threshold_tokens=1, window_pairs=2,
+            window_max_chars=2000),
+    )
+
+    result = agent.resume(
+        session=session, tools=_tools(), batch=_batch())
+
+    assert result.decision_kind == "growth"
+    archive = (
+        tmp_path / "supervisor" / "session" / "session.jsonl").read_text()
+    # The append-only archive still holds every turn, including the tool
+    # observation that compaction shed from the live context.
+    lines = [json.loads(line) for line in archive.splitlines()]
+    assert any("tool_results" in item["content"] for item in lines)
+    assert any(item["role"] == "assistant" for item in lines)
+    assert (tmp_path / "supervisor" / "session" / "notebook.md").read_text()\
+        .startswith("compacted turn survives")

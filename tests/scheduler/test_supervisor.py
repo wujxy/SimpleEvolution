@@ -389,3 +389,46 @@ def test_baseline_frontier_mode_still_allocates_without_supervisor(
     # supervisor runs only).
     (allocation,) = store.open_allocations()
     assert allocation.decision_id is None
+
+
+class _DeadOnStartupSubmitter(Submitter):
+    presumes_dead_on_startup = True
+
+
+def test_restart_redelivers_unconsumed_batch_to_same_work(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    root, _, _ = _seed(store)
+    submitter = _DeadOnStartupSubmitter(tmp_path)
+    first = _scheduler(store, tmp_path, submitter)
+    first.step()
+    assert [work_id for work_id, _ in submitter.supervisor] == [
+        "supervisor-1"]
+
+    # Process death: a fresh scheduler presumes the running attempt lost.
+    second = _scheduler(store, tmp_path, submitter)
+    second.step()
+    assert [work_id for work_id, _ in submitter.supervisor] == [
+        "supervisor-1", "supervisor-1"]
+
+    # The redelivered batch commits exactly once.
+    submitter.write_decision("supervisor-1", {
+        "decision_id": "d-restart", "decision_kind": "growth",
+        "node_ids": [root.node_id], "rationale": "second delivery decides.",
+        "detail": {}, "event_cursor_to": 1,
+    })
+    second.step()
+    assert store.supervisor_event_cursor() == 1
+    assert len(store.open_allocations()) == 1
+
+
+def test_pending_events_block_quiescence(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    _seed(store)
+    submitter = Submitter(tmp_path)
+    scheduler = _scheduler(store, tmp_path, submitter)
+    scheduler.stop_allocating = True
+
+    store.emit_supervisor_event("budget_changed", {"remaining_usd": 0.0})
+
+    assert store.pending_supervisor_events()
+    assert scheduler._quiescent() is False
