@@ -105,14 +105,23 @@ the Supervisor's scientific responsibility.
 
 ### 3.1 Supervisor
 
-The Supervisor:
+The Supervisor makes three kinds of global judgment, each on its own turn and
+never bundled:
+
+- **growth** — chooses zero, one, or several currently allocatable Nodes and
+  records a natural-language reason for every allocation decision;
+- **integration request** — when distinct branches hold mature, compatible,
+  gate-passed results, names the target Node and donor Experiments with a
+  selection rationale;
+- **epoch review** — judges a completed integration candidate (promote or
+  retain) by naming the request under review.
+
+It also:
 
 - maintains the global research view across the whole run;
 - investigates public Node, Proposal, Experiment, ResearchState, allocation,
   and budget facts;
-- compares new and historical Nodes as investment opportunities;
-- chooses zero, one, or several currently allocatable Nodes;
-- records a natural-language reason for every allocation decision.
+- compares new and historical Nodes as investment opportunities.
 
 The Supervisor does not invent optimization proposals, direct a Scientist's
 implementation, modify source, execute experiments, or keep capacity busy for
@@ -155,6 +164,12 @@ allocation changes:
 3. a proposer lease terminates without creating any Experiment, including
    abstention, failure, or timeout;
 4. the user changes the research goal or budget.
+
+Budget changes have a reliable source: the driver's limits (terminal-eval cap,
+USD budget) are durable in the run's database and rebuilt from the same run
+configuration on restart, so constructing or restarting a run with unchanged
+limits emits nothing, while a resumed run with different limits emits a
+durable `budget_changed` event.
 
 Scheduler ticks, telemetry updates, free capacity by itself, and work starting
 do not resume the Supervisor.
@@ -221,8 +236,12 @@ It adds only the missing global and resource views:
   eligibility;
 - `inspect_node_allocations` to read proposer investment and resulting public
   outcomes for one Node;
-- `inspect_run_status` to read current budget, available capacity, queued or
-  in-flight work, and quiescence-relevant facts.
+- `inspect_run_status` to read available capacity, queued or in-flight work,
+  quiescence-relevant facts, and — when the driver set budget policy — the
+  `budget` block: terminal evals against the eval cap, USD spend against the
+  budget, remaining amounts, and whether the run is already capped. Spend is
+  priced from the same shared token-usage ledger the driver's cap reads, so
+  the Supervisor's budget facts and the driver's policy never diverge.
 
 The Supervisor has no source-writing or general command tool. Proposal intent,
 ResearchState, changed paths, gates, metrics, and outcomes are the appropriate
@@ -254,7 +273,10 @@ reasoning intact.
 
 ## 8. Minimal output
 
-The semantic decision contains only selected Node IDs and one reason:
+Every field the model returns is semantic judgment; all mechanical identity is
+harness state. Each terminal carries only its own minimal semantics:
+
+**Growth** — selected Node IDs and one reason:
 
 ```json
 {
@@ -272,25 +294,56 @@ Waiting or stopping uses an empty selection:
 }
 ```
 
+**Integration request** — target, donors, and one reason. The request id is
+not model output: the harness assigns `ir-<work_id>` after parsing the
+terminal, which keeps it stable across retries of the same batch (idempotent
+redelivery) and changes exactly when a stale batch grows and the judgment is
+re-made:
+
+```json
+{
+  "target_node_id": "node-a",
+  "donor_experiment_ids": ["exp-1", "exp-2"],
+  "selection_rationale": "Independent validated wins on the same bottleneck."
+}
+```
+
+**Epoch review** — the existing request under review (naming an object, not
+inventing state), the verdict, and one reason:
+
+```json
+{
+  "integration_request_id": "ir-supervisor-7",
+  "review": "promote",
+  "rationale": "The candidate covers every donor's validated result."
+}
+```
+
 The Harness supplies decision identity, session identity, event cursor,
-timestamps, and allocation IDs. Tool traces already record what the Supervisor
-inspected, so the model does not repeat evidence references. Proposal-slot and
-Scientist-step limits remain standard lease configuration rather than
-Supervisor output.
+timestamps, allocation IDs, and integration request IDs. Tool traces already
+record what the Supervisor inspected, so the model does not repeat evidence
+references. Proposal-slot and Scientist-step limits remain standard lease
+configuration rather than Supervisor output.
 
 The Supervisor may select fewer Nodes than available proposer capacity. It is
 never required to fill capacity.
 
 ## 9. Scheduler application
 
-The Scheduler applies one decision transactionally:
+The Scheduler applies one decision transactionally, for every terminal kind.
+One database transaction covers the event-cursor compare-and-swap, the decision
+row, every side effect of the decision's kind, the cursor advance, and the
+audit event:
 
 1. reject duplicate Node IDs;
 2. require every selected Node to exist and remain mechanically allocatable;
 3. require the selection count not to exceed free proposer capacity;
-4. create one standard proposer lease for each selected Node;
-5. persist the decision, rationale, triggering event cursor, and allocation
-   links atomically;
+4. growth: create one standard proposer lease for each selected Node;
+   integration request: create the request row; epoch review: promote the
+   epoch or close the request — via explicit transaction-level operations
+   dispatched on the decision kind, never an open-ended callback;
+5. persist the decision, rationale, triggering event cursor, and links
+   atomically;
 6. leave all unused capacity idle.
 
 An empty selection means:
@@ -299,12 +352,26 @@ An empty selection means:
 - quiesce when no work remains that can produce new evidence.
 
 If the world changes before the transaction commits, the decision is not
-partially applied. The new evidence is delivered back to the same Supervisor
-session for reconsideration. A stale decision does not invoke Frontier.
+partially applied — for growth, integration, and epoch review alike: no lease,
+no request row, no promotion survives a stale rejection. The new evidence is
+delivered back to the same Supervisor session for reconsideration. A stale
+decision does not invoke Frontier.
 
 Supervisor/model failure leaves the durable event batch unconsumed and retries
 the same logical session. Existing work may finish, but the Scheduler issues no
 new automatic allocation while the Supervisor is unavailable.
+
+### 9.1 Capped runs: harvest, never derive
+
+When the driver declares the run capped (eval or budget limit reached), the
+scheduler initiates no new logical work: no new gate turns, no new integrator
+jobs, no new proposer or experiment jobs. Work already in flight is drained
+and harvested — including a Supervisor result that lands after the cap, which
+closes its attempt and is archived unapplied (`supervisor_decision_discarded`)
+because it was formed under a budget state that no longer holds. The batch
+stays unconsumed for a resumed run; the discard is neither a failure nor a
+retry. A capped run ends with status `capped` once in-flight work drains,
+even with unconsumed evidence pending.
 
 ## 10. Required invariants and acceptance tests
 
@@ -330,7 +397,14 @@ The implementation must demonstrate:
 12. stale or failed Supervisor work never silently falls back to Frontier;
 13. context compaction preserves the immutable archive and resumes from the
     Supervisor-authored notebook plus new events;
-14. the semantic model output contains only `node_ids` and `rationale`.
+14. every field of the semantic model output is judgment: growth returns only
+    `node_ids` and `rationale`; an integration request only target, donors,
+    and rationale (the request id is harness-assigned); an epoch review only
+    the request under review, the verdict, and rationale;
+15. a stale decision leaves zero side effects for all three terminals — no
+    lease, no integration request, no epoch promotion survives it;
+16. a capped run harvests results of work already started but derives no new
+    work from them, and terminates visibly instead of hanging or spinning.
 
 ## 11. Explicit non-goals
 

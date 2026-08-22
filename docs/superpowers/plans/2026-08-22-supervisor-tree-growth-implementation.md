@@ -135,3 +135,41 @@ python -m pytest -q --deselect tests/test_example_config.py::test_example_eval_c
 ```
 
 Then check the 14-invariant matrix task-by-task. An optional real smoke run via `scripts/run_supervisor_test.py` (API cost; nested-apptainer: unset `APPTAINER_BIND`, `--userns`) verifies wake counts equal terminal-event batches, no fallback, waiting on empty selections, and a distinguishable stalled state.
+
+---
+
+## Acceptance fixes (2026-08-22, review round 2)
+
+Four defects found by the review round after Tasks 1–9 landed, fixed in order:
+
+- [x] **Fix 1 — atomic integration/epoch side effects.** Stale decisions
+  partially applied: the integration request (or epoch promotion) was written
+  before the cursor CAS. `commit_supervisor_decision` now dispatches on
+  `decision_kind` to explicit tx-level helpers
+  (`_create_integration_request_on_tx` / `_apply_epoch_review_on_tx` /
+  `_allocate_on_tx`) inside the one transaction — no generic `apply(tx)`
+  callback. Tests: stale integration/epoch leave zero side effects; mixed
+  payloads rejected up front. (`718e521`)
+- [x] **Fix 2 — capped runs harvest without deriving.** `stop_allocating`
+  skipped supervisor result ingestion, wedging the bounded driver. The gate
+  now always harvests; under the cap a result closes its attempt and is
+  archived unapplied (`supervisor_decision_discarded`, cursor unconsumed, not
+  a failure/retry). No new gate turns, integrator jobs, or resubmissions
+  after the cap; in-flight integrators still drain; `run()` ends `capped`.
+  Tests: harvest-and-exit, no new work, integrator drain, baseline cap.
+  (`56fc87e`)
+- [x] **Fix 3 — durable budget facts.** Driver limits live in a `run_limits`
+  table (SchedulerConfig `max_terminal_evals`/`budget_usd`, rebuilt from the
+  same command on restart); only a change to an installed limit emits a
+  durable `budget_changed`. `inspect_run_status` gains a `budget` block
+  (limit/used/remaining/capped) priced by a shared `spend_usd` over the
+  telemetry usage ledger. (`8b5de65`)
+- [x] **Fix 4 — harness-assigned integration request ids.** The terminal
+  contract is target/donors/rationale; supplying an id is rejected. The
+  scheduler assigns `ir-<work_id>` — stable across same-batch retries,
+  re-keyed when a stale batch grows. Epoch review still names an existing
+  request. Tests: contract rejection, retry idempotence. (`abd8d78`)
+- [x] **Fix 5 — spec sync.** §3.1 three terminals; §4 budget_changed source;
+  §6 budget block; §8 minimal semantic output per terminal; §9 atomic side
+  effects for all kinds + §9.1 capped-run semantics; invariants 14 reworded,
+  15 (stale zero side effects) and 16 (capped harvest-only) added.

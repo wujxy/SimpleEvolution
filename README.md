@@ -7,7 +7,10 @@ Supervisor is the tree's growth gate: woken only by evidence-change events, it
 investigates the public research environment with read-only tools and decides
 whether a Node receives one more proposer lease. It never falls back to
 Frontier — a failing decision worker retries the same session, bounded, and
-exhaustion parks the run visibly. A legal Scientist lease admits its proposals
+exhaustion parks the run visibly. Driver budget limits (eval cap, USD budget)
+are durable and visible to the Supervisor's `inspect_run_status`; once a run
+is capped it only drains in-flight work — a late Supervisor result is closed
+unapplied, never turned into new work. A legal Scientist lease admits its proposals
 once; the bounded FIFO Executor queue does not apply a second veto. Frontier
 allocation remains only as the explicit baseline mode for non-Supervisor
 (ablation/GEPA) runs.
