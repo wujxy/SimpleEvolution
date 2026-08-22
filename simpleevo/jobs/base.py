@@ -87,7 +87,7 @@ class BaseSubmitter(ABC):
         return self._submit("experiment", experiment_id, payload, self._experiment_defaults())
 
     def submit_supervisor(self, decision_id: str, payload: Mapping[str, Any]) -> str:
-        """Stage one stateless group-allocation decision worker."""
+        """Stage one persistent Supervisor wake-up turn (growth gate)."""
         return self._submit("supervisor", decision_id, payload, self._proposer_defaults())
 
     def submit_integrator(self, request_id: str, payload: Mapping[str, Any]) -> str:

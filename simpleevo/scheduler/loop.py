@@ -3,22 +3,25 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from simpleevo.config import EvolutionConfig
-from simpleevo.db.store import FrontierAxis, GateDecision, GateResult, ResearchStore
+from simpleevo.db.store import (
+    FrontierAxis,
+    GateDecision,
+    GateResult,
+    LeaseSpec,
+    ResearchStore,
+    StaleSupervisorDecision,
+)
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.generator import Generator, load_generator_basis, select_one_generator
 from simpleevo.jobs.base import BaseSubmitter
 from simpleevo.research_state import research_state_to_dict
-from proposer.supervisor import (
-    build_group_snapshot,
-    decision_from_dict,
-    validate_decision,
-    validate_integration_request,
-)
+from proposer.supervisor import validate_integration_request
 
 from .frontier import (
     FrontierConfig,
@@ -52,8 +55,6 @@ _EXPERIMENT_SCI_STATUS = {
     "NO_CHANGE": "no_change",
 }
 
-_SUPERVISOR_WAITING = object()
-
 
 class Scheduler:
     """Event-driven scheduler for the Research Tree.
@@ -74,7 +75,6 @@ class Scheduler:
         submitter: BaseSubmitter | None = None,
         submit_proposer: Callable[[str, dict[str, Any]], str] | None = None,
         submit_experiment: Callable[[str, dict[str, Any]], str] | None = None,
-        supervisor_decider: Callable[[Any, int], Any] | None = None,
         clock: Callable[[], float] = time.time,
         generator_basis: list[Generator] | None = None,
         stop_allocating: bool = False,
@@ -99,7 +99,6 @@ class Scheduler:
             self.submit_supervisor = None
             self.submit_integrator = None
         self.clock = clock
-        self.supervisor_decider = supervisor_decider
         # When True, ``step()`` stops allocating new proposers; in-flight work
         # (running proposers/experiments and queued proposals) is still drained
         # until the scheduler reaches quiescence.  Used by the ablation driver
@@ -184,6 +183,10 @@ class Scheduler:
         return {
             "frontier_size": len(frontier.node_ids),
             "proposer_jobs": len(proposer_jobs),
+            "supervisor_pending": (
+                len(self.store.pending_supervisor_events())
+                if self.submit_supervisor is not None else 0
+            ),
             "published": len(published),
             "integrator_jobs": len(integrator_jobs),
             "integrated": len(integrated),
@@ -193,17 +196,29 @@ class Scheduler:
         }
 
     def run(self, *, max_steps: int | None = None) -> dict[str, Any]:
-        """Run the scheduler until quiescence or max_steps."""
+        """Run the scheduler until quiescence, stall, or max_steps.
+
+        ``stalled`` means the growth gate exhausted its bounded retries with
+        an unconsumed batch: the run parks instead of silently quiescing or
+        falling back to Frontier.
+        """
         telemetry: list[dict[str, Any]] = []
+        status = "quiesced"
         while True:
             if max_steps is not None and self._step_count >= max_steps:
+                status = "max_steps"
                 break
             step_telemetry = self.step()
             telemetry.append(step_telemetry)
+            if self._supervisor_stalled() and not self._in_flight():
+                status = "stalled"
+                break
             if self._quiescent():
                 break
             time.sleep(self.config.poll_seconds)
-        return {"steps": self._step_count, "telemetry": telemetry}
+        return {
+            "steps": self._step_count, "status": status, "telemetry": telemetry,
+        }
 
     # ------------------------------------------------------------------
     # Frontier
@@ -252,74 +267,38 @@ class Scheduler:
         return self.config.max_proposer_inflight - self.store.count_running_attempts("proposer")
 
     def _allocate_proposers(self, frontier):
-        """Create proposer leases from Supervisor, or Frontier on failure."""
+        """Create proposer leases from the Supervisor growth gate, or from
+        the explicit Frontier baseline when no supervisor is configured."""
+        if self.submit_supervisor is not None:
+            return self._run_supervisor_gate()
+        return self._allocate_frontier_baseline(frontier)
+
+    def _allocate_frontier_baseline(self, frontier):
+        """Non-Supervisor baseline mode (ablation / GEPA runs)."""
         capacity = self._proposer_capacity()
         if capacity <= 0:
             return []
+        if not frontier.node_ids:
+            return []
+        directives = [
+            (node_id, self.config.proposal_slots)
+            for node_id in sample_proposer_nodes(
+                frontier,
+                self._allocations_counter,
+                capacity,
+                self._frontier_config(),
+            )
+        ]
+        return self._create_leases(directives)
 
-        directives = None
-        if self.supervisor_decider is not None:
-            try:
-                snapshot = build_group_snapshot(
-                    self.store,
-                    max_research_per_node=self._max_research_per_node(),
-                    max_proposals_per_node=self._max_proposals_per_node(),
-                )
-                decision = validate_decision(
-                    snapshot,
-                    self.supervisor_decider(snapshot, capacity),
-                    proposer_capacity=capacity,
-                )
-                self._accept_integration_request(
-                    snapshot, decision.integration_request,
-                )
-                self._apply_epoch_review(decision.epoch_review)
-                directives = [
-                    (item.node_id, item.proposal_slots)
-                    for item in decision.allocations
-                ]
-                self.store.record_scheduler_event(
-                    "supervisor_decision_accepted",
-                    {
-                        "decision_id": decision.decision_id,
-                        "snapshot_watermark": snapshot.watermark,
-                        "allocations": [
-                            {"node_id": node_id, "proposal_slots": slots}
-                            for node_id, slots in directives
-                        ],
-                    },
-                )
-            except Exception as exc:
-                self.store.record_scheduler_event(
-                    "supervisor_fallback",
-                    {"error": str(exc)},
-                )
-                directives = None
-        elif self.submit_supervisor is not None:
-            outcome = self._supervisor_job_directives(capacity)
-            if outcome is _SUPERVISOR_WAITING:
-                return []
-            directives = outcome
-
-        if directives is None:
-            if not frontier.node_ids:
-                return []
-            directives = [
-                (node_id, self.config.proposal_slots)
-                for node_id in sample_proposer_nodes(
-                    frontier,
-                    self._allocations_counter,
-                    capacity,
-                    self._frontier_config(),
-                )
-            ]
-
+    def _create_leases(self, directives) -> list[str]:
+        """Turn (node_id, proposal_slots) directives into submitted leases."""
         jobs = []
         for node_id, proposal_slots in directives:
             episode = self._idle_episode_for_node(node_id)
             if episode is None:
-                # Frontier node whose episodes are all terminal: re-study it
-                # by reseeding a fresh episode (GEPA pool semantics), bounded
+                # Node whose episodes are all terminal: re-study it by
+                # reseeding a fresh episode (GEPA pool semantics), bounded
                 # by max_research_per_node. Skip when the budget is spent.
                 episode = self._reseed_episode(node_id)
                 if episode is None:
@@ -335,42 +314,39 @@ class Scheduler:
             )
             if allocation is None:
                 continue
-            attempt = self.store.record_attempt(
-                logical_work_id=allocation.allocation_id,
-                kind="proposer",
-                status="running",
-                started_at=self.clock(),
-            )
-            ordinal = len(self.store.attempts_for_work(
-                allocation.allocation_id, "proposer"))
-            self.submit_proposer(
-                allocation.allocation_id,
-                self._proposer_payload(
-                    allocation, node, episode, attempt.attempt_id, ordinal),
-            )
+            self._launch_lease(allocation, node, episode)
             jobs.append(allocation.allocation_id)
         return jobs
 
-    def _supervisor_job_directives(self, capacity: int):
-        """Submit or ingest one stateless Supervisor worker.
+    def _launch_lease(self, allocation, node, episode) -> None:
+        attempt = self.store.record_attempt(
+            logical_work_id=allocation.allocation_id,
+            kind="proposer",
+            status="running",
+            started_at=self.clock(),
+        )
+        ordinal = len(self.store.attempts_for_work(
+            allocation.allocation_id, "proposer"))
+        self.submit_proposer(
+            allocation.allocation_id,
+            self._proposer_payload(
+                allocation, node, episode, attempt.attempt_id, ordinal),
+        )
 
-        While the worker is live no Frontier allocation competes with it.
-        Frontier becomes eligible only when that worker fails or its artifact
-        is invalid, preserving the designed primary/fallback relationship.
+    # ------------------------------------------------------------------
+    # Supervisor growth gate (tree-growth design §7/§9)
+    # ------------------------------------------------------------------
+
+    def _run_supervisor_gate(self) -> list[str]:
+        """Wake the growth gate on pending evidence; apply one decision.
+
+        Never falls back to Frontier: a failed or invalid worker result
+        keeps the batch unconsumed and retries the same logical session,
+        bounded by ``supervisor_max_retries``; exhaustion records
+        ``supervisor_stalled`` and parks allocation visibly.
         """
-        snapshot = build_group_snapshot(
-            self.store,
-            max_research_per_node=self._max_research_per_node(),
-            max_proposals_per_node=self._max_proposals_per_node(),
-        )
-        previous = self.store.latest_scheduler_event(
-            "supervisor_decision_accepted",
-        )
-        if (
-            previous is not None
-            and previous.get("snapshot_watermark") == snapshot.watermark
-            and not previous.get("allocations")
-        ):
+        pending = self.store.pending_supervisor_events()
+        if not pending:
             return []
         running = self.store.running_attempts("supervisor")
         if running:
@@ -380,66 +356,270 @@ class Scheduler:
                 / attempt.logical_work_id / "result.json"
             )
             if not result_path.exists():
-                return _SUPERVISOR_WAITING
-            try:
-                raw = json.loads(result_path.read_text(encoding="utf-8"))
-                if raw.get("status") != "completed":
-                    raise ValueError(raw.get("error") or "supervisor worker failed")
-                decision = validate_decision(
-                    snapshot,
-                    decision_from_dict(raw.get("result", {})),
-                    proposer_capacity=capacity,
-                )
-                self._accept_integration_request(
-                    snapshot, decision.integration_request,
-                )
-                self._apply_epoch_review(decision.epoch_review)
-            except Exception as exc:
-                self.store.mark_attempt_failed(attempt.attempt_id)
-                self.store.record_scheduler_event(
-                    "supervisor_fallback",
-                    {"decision_id": attempt.logical_work_id, "error": str(exc)},
-                )
-                self._archive_result(result_path, attempt.attempt_id)
-                return None
-            self.store.mark_attempt_succeeded(attempt.attempt_id)
-            directives = [
-                (item.node_id, item.proposal_slots)
-                for item in decision.allocations
-            ]
-            self.store.record_scheduler_event(
-                "supervisor_decision_accepted",
-                {
-                    "decision_id": decision.decision_id,
-                    "snapshot_watermark": snapshot.watermark,
-                    "allocations": [
-                        {"node_id": node_id, "proposal_slots": slots}
-                        for node_id, slots in directives
-                    ],
-                },
-            )
-            self._archive_result(result_path, attempt.attempt_id)
-            return directives
+                return []
+            return self._ingest_supervisor_result(attempt, result_path)
 
-        work_id = f"supervisor-{snapshot.watermark[:24]}"
+        head = pending[-1].event_id
+        work_id = f"supervisor-{head}"
+        if self._supervisor_exhausted(work_id):
+            self._record_supervisor_stall(work_id)
+            return []
         attempt = self.store.record_attempt(
             logical_work_id=work_id,
             kind="supervisor",
             status="running",
             started_at=self.clock(),
         )
-        self.submit_supervisor(work_id, {
-            "snapshot": asdict(snapshot),
-            "proposer_capacity": capacity,
-            "attempt_id": attempt.attempt_id,
-        })
-        return _SUPERVISOR_WAITING
+        self.submit_supervisor(
+            work_id, self._supervisor_payload(pending, attempt))
+        return []
 
-    def _accept_integration_request(self, snapshot, raw) -> None:
+    def _ingest_supervisor_result(self, attempt, result_path) -> list[str]:
+        try:
+            raw = json.loads(result_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            self._reject_supervisor_result(
+                attempt, result_path, f"unreadable result: {exc}")
+            return []
+        if raw.get("status") != "completed":
+            self._reject_supervisor_result(
+                attempt, result_path,
+                str(raw.get("error") or "supervisor worker failed"))
+            return []
+        result = raw.get("result", {})
+        try:
+            jobs = self._apply_supervisor_decision(attempt, result)
+        except StaleSupervisorDecision as exc:
+            # New evidence arrived mid-turn.  The decision is not partially
+            # applied; the batch stays unconsumed and the same session is
+            # re-woken with the larger incremental batch.
+            self.store.mark_attempt_succeeded(attempt.attempt_id)
+            self.store.record_scheduler_event(
+                "supervisor_decision_stale",
+                {
+                    "work_id": attempt.logical_work_id,
+                    "decision_id": result.get("decision_id"),
+                    "event_head": exc.head,
+                },
+            )
+            self._archive_result(result_path, attempt.attempt_id)
+            return []
+        except Exception as exc:
+            self._reject_supervisor_result(attempt, result_path, str(exc))
+            return []
+        self.store.mark_attempt_succeeded(attempt.attempt_id)
+        self._archive_result(result_path, attempt.attempt_id)
+        return jobs
+
+    def _reject_supervisor_result(self, attempt, result_path, reason) -> None:
+        self.store.mark_attempt_failed(attempt.attempt_id)
+        self.store.record_scheduler_event(
+            "supervisor_decision_rejected",
+            {"work_id": attempt.logical_work_id, "error": reason},
+        )
+        self._archive_result(result_path, attempt.attempt_id)
+
+    def _apply_supervisor_decision(self, attempt, result) -> list[str]:
+        decision_id = str(result.get("decision_id") or "")
+        if not decision_id:
+            raise ValueError("supervisor result missing decision_id")
+        cursor_to = int(result.get("event_cursor_to", -1))
+        decision_kind = str(result.get("decision_kind") or "growth")
+        rationale = str(result.get("rationale", ""))
+        node_ids = [str(item) for item in result.get("node_ids", [])]
+        detail = dict(result.get("detail") or {})
+
+        if decision_kind == "growth":
+            leases = self._growth_leases(node_ids)
+            commit = self.store.commit_supervisor_decision(
+                decision_id=decision_id,
+                work_id=attempt.logical_work_id,
+                decision_kind="growth",
+                node_ids=node_ids,
+                rationale=rationale,
+                cursor_to=cursor_to,
+                leases=[
+                    LeaseSpec(
+                        node_id=node_id,
+                        episode_id=episode_id,
+                        proposal_slots=self.config.proposal_slots,
+                    )
+                    for node_id, episode_id in leases
+                ],
+                max_proposals_per_node=self._max_proposals_per_node(),
+            )
+            return self._launch_decision_leases(commit.allocations)
+        if decision_kind == "integration_request":
+            epoch = self.store.current_epoch()
+            if epoch is None:
+                raise ValueError("cannot accept integration without an epoch")
+            normalized = validate_integration_request(
+                self.store, epoch.epoch_id, detail)
+            # Idempotent on integration_request_id; created before the
+            # commit so a stale rejection cannot lose a real request.
+            self._accept_integration_request(epoch.epoch_id, normalized)
+            self.store.commit_supervisor_decision(
+                decision_id=decision_id,
+                work_id=attempt.logical_work_id,
+                decision_kind="integration_request",
+                node_ids=[],
+                rationale=rationale,
+                detail=normalized,
+                cursor_to=cursor_to,
+            )
+            return []
+        if decision_kind == "epoch_review":
+            review = detail.get("review")
+            self._apply_epoch_review({
+                "integration_request_id": detail.get(
+                    "integration_request_id"),
+                "action": review,
+                "rationale": rationale,
+                "evidence_refs": detail.get("evidence_refs", ()),
+            })
+            self.store.commit_supervisor_decision(
+                decision_id=decision_id,
+                work_id=attempt.logical_work_id,
+                decision_kind="epoch_review",
+                node_ids=[],
+                rationale=rationale,
+                detail=dict(detail),
+                cursor_to=cursor_to,
+            )
+            return []
+        raise ValueError(f"unknown decision kind: {decision_kind}")
+
+    def _growth_leases(self, node_ids) -> list[tuple[str, str]]:
+        """Mechanical allocatability for every selected node (design §9).
+
+        Whole-decision validation: any violation rejects the decision, it is
+        never partially applied.
+        """
+        capacity = self._proposer_capacity()
+        if len(node_ids) > capacity:
+            raise ValueError("supervisor decision exceeds proposer capacity")
+        open_nodes = {
+            item.node_id for item in self.store.open_allocations()}
+        leases: list[tuple[str, str]] = []
+        for node_id in node_ids:
+            node = self._queries.get_node(node_id)
+            if node is None or node.status == "dead":
+                raise ValueError(f"selected node is not allocatable: {node_id}")
+            if node_id in open_nodes:
+                raise ValueError(
+                    f"selected node already holds an open lease: {node_id}")
+            if (self.store.count_allocations_for_node(node_id)
+                    >= self._max_research_per_node()):
+                raise ValueError(
+                    f"selected node exhausted its research budget: {node_id}")
+            if (self._queries.proposal_count_for_node(node_id)
+                    >= self._max_proposals_per_node()):
+                raise ValueError(
+                    f"selected node exhausted its proposal budget: {node_id}")
+            episode = self._idle_episode_for_node(node_id)
+            if episode is None:
+                episode = self._reseed_episode(node_id)
+            if episode is None:
+                raise ValueError(
+                    f"no episode available for selected node: {node_id}")
+            leases.append((node_id, episode.episode_id))
+        return leases
+
+    def _launch_decision_leases(self, allocations) -> list[str]:
+        jobs = []
+        for allocation in allocations:
+            node = self._queries.get_node(allocation.node_id)
+            episode = self._queries.get_episode(allocation.episode_id)
+            if node is None or episode is None:
+                continue
+            self._launch_lease(allocation, node, episode)
+            jobs.append(allocation.allocation_id)
+        return jobs
+
+    def _supervisor_payload(self, pending, attempt) -> dict[str, Any]:
+        head = pending[-1].event_id
+        epoch = self.store.current_epoch()
+        cfg = self.evolution_config
+        supervisor_steps = (
+            int(getattr(cfg, "supervisor_steps", 40)) if cfg is not None
+            else 40
+        )
+        return {
+            "batch": {
+                "event_batch": {
+                    "cursor_from": self.store.supervisor_event_cursor(),
+                    "cursor_to": head,
+                    "events": [
+                        {
+                            "event_id": item.event_id,
+                            "type": item.type,
+                            "payload": item.payload,
+                        }
+                        for item in pending
+                    ],
+                },
+                "epoch": None if epoch is None else {
+                    "epoch_id": epoch.epoch_id,
+                    "root_node_id": epoch.root_node_id,
+                },
+            },
+            "decision_id": uuid.uuid4().hex,
+            "attempt_id": attempt.attempt_id,
+            "supervisor_steps": supervisor_steps,
+            "runtime_facts": {
+                "max_proposer_inflight": self.config.max_proposer_inflight,
+                "max_experiment_inflight": self.config.max_experiment_inflight,
+                "proposal_slots": self.config.proposal_slots,
+                "max_research_per_node": self._max_research_per_node(),
+                "max_proposals_per_node": self._max_proposals_per_node(),
+            },
+            "run_context": {"goal": cfg.goal} if cfg is not None else {},
+        }
+
+    def _supervisor_max_retries(self) -> int:
+        if self.evolution_config is not None:
+            value = getattr(self.evolution_config, "supervisor_max_retries", 3)
+            return int(value or 3)
+        return 3
+
+    def _supervisor_exhausted(self, work_id: str) -> bool:
+        attempts = self.store.attempts_for_work(work_id, "supervisor")
+        failures = [
+            item for item in attempts
+            if item.status in {"failed", "lost"}
+        ]
+        return len(failures) >= self._supervisor_max_retries()
+
+    def _record_supervisor_stall(self, work_id: str) -> None:
+        latest = self.store.latest_scheduler_event("supervisor_stalled")
+        if latest is not None and latest.get("work_id") == work_id:
+            return
+        self.store.record_scheduler_event(
+            "supervisor_stalled",
+            {
+                "work_id": work_id,
+                "attempts": len(
+                    self.store.attempts_for_work(work_id, "supervisor")),
+            },
+        )
+
+    def _supervisor_stalled(self) -> bool:
+        """True when the gate is parked on the current pending head."""
+        if self.submit_supervisor is None:
+            return False
+        latest = self.store.latest_scheduler_event("supervisor_stalled")
+        if latest is None:
+            return False
+        pending = self.store.pending_supervisor_events()
+        if not pending:
+            return False
+        return latest.get("work_id") == f"supervisor-{pending[-1].event_id}"
+
+    def _accept_integration_request(self, epoch_id, raw) -> None:
         if raw is None:
             return
         normalized = validate_integration_request(
-            self.store, snapshot.epoch_id, raw,
+            self.store, epoch_id, raw,
         )
         open_requests = self.store.integration_requests("open")
         if open_requests and all(
@@ -1122,6 +1302,9 @@ class Scheduler:
     def _resubmit_supervisor(self, work_id: str) -> None:
         if self.submit_supervisor is None or self.store.running_attempts("supervisor"):
             return
+        if self._supervisor_exhausted(work_id):
+            self._record_supervisor_stall(work_id)
+            return
         manifest_path = (
             self.run_dir / "supervisor_decisions" / work_id / "manifest.json"
         )
@@ -1242,6 +1425,13 @@ class Scheduler:
 
     def _quiescent(self) -> bool:
         """True when there is nothing left to do."""
+        if self.submit_supervisor is not None:
+            # Evidence changes must be judged before the run may rest.  A
+            # stalled gate parks the run visibly (run() reports "stalled"),
+            # so it does not keep quiescence blocked here.
+            if (self.store.pending_supervisor_events()
+                    and not self._supervisor_stalled()):
+                return False
         if self.store.running_attempts("proposer"):
             return False
         if self.store.running_attempts("experiment"):

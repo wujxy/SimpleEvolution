@@ -11,10 +11,6 @@ from simpleevo.db.store import GateDecision, GateResult, Proposal, ResearchStore
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.scheduler.frontier import FrontierConfig
 from simpleevo.scheduler.loop import Scheduler, SchedulerConfig
-from simpleevo.scheduler.frontier import Frontier
-from proposer.supervisor import (
-    AllocationDirective, SupervisorDecision, build_group_snapshot,
-)
 
 
 @pytest.fixture
@@ -28,6 +24,50 @@ def env():
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+class _GateSubmitter:
+    """Records submissions; supervisor decisions are hand-written."""
+
+    presumes_dead_on_startup = False
+
+    def __init__(self, run_dir: Path):
+        self.run_dir = run_dir
+        self.supervisor: list[tuple[str, dict]] = []
+        self.proposer: list[tuple[str, dict]] = []
+        self.experiments: list[tuple[str, dict]] = []
+
+    def submit_supervisor(self, work_id: str, payload: dict) -> str:
+        self.supervisor.append((work_id, payload))
+        return str(self.run_dir / "supervisor_decisions" / work_id / "result.json")
+
+    def submit_proposer(self, allocation_id: str, payload: dict) -> str:
+        self.proposer.append((allocation_id, payload))
+        return str(self.run_dir / "proposer_allocations" / allocation_id / "result.json")
+
+    def submit_experiment(self, experiment_id: str, payload: dict) -> str:
+        self.experiments.append((experiment_id, payload))
+        return str(self.run_dir / "experiments" / experiment_id / "result.json")
+
+    def submit_integrator(self, request_id: str, payload: dict) -> str:
+        return str(self.run_dir / "integration_requests" / request_id / "result.json")
+
+    def decide(self, *, node_ids=(), rationale="", decision_id="d",
+               decision_kind="growth", detail=None):
+        work_id, payload = self.supervisor[-1]
+        _write_json(self.run_dir / "supervisor_decisions" / work_id / "result.json", {
+            "kind": "supervisor", "request_id": work_id,
+            "status": "completed",
+            "result": {
+                "decision_id": decision_id, "work_id": work_id,
+                "decision_kind": decision_kind,
+                "node_ids": list(node_ids), "rationale": rationale,
+                "detail": detail or {},
+                "event_cursor_to": payload["batch"]["event_batch"]["cursor_to"],
+            },
+            "error": None, "execution": {},
+        })
+        return work_id
 
 
 def test_scheduler_closes_proposer_experiment_loop(env):
@@ -55,8 +95,11 @@ def test_scheduler_closes_proposer_experiment_loop(env):
         frontier=FrontierConfig(axes=("total_ms",)),
         poll_seconds=0.0,
     )
+    submitter = _GateSubmitter(run_dir)
 
-    def submit_proposer(allocation_id: str, payload: dict) -> None:
+    scheduler = Scheduler(store, run_dir, config, submitter=submitter)
+
+    def write_proposer_result(allocation_id: str, payload: dict) -> None:
         state_id = f"rs-{episode.episode_id}-001"
         transformation_id = f"ct-{episode.episode_id}-001"
         _write_json(
@@ -110,9 +153,7 @@ def test_scheduler_closes_proposer_experiment_loop(env):
             },
         )
 
-    experiment_results: dict[str, dict] = {}
-
-    def submit_experiment(experiment_id: str, payload: dict) -> None:
+    def write_experiment_result(experiment_id: str) -> None:
         _write_json(
             run_dir / "experiments" / experiment_id / "result.json",
             {
@@ -136,20 +177,34 @@ def test_scheduler_closes_proposer_experiment_loop(env):
                 },
             },
         )
-        experiment_results[experiment_id] = payload
 
-    scheduler = Scheduler(
-        store, run_dir, config,
-        submit_proposer=submit_proposer,
-        submit_experiment=submit_experiment,
-    )
-
-    # Step 1: allocate proposer, poll result, publish proposals, drain queue,
-    # and ingest the synchronous experiment result.
+    # Step 1: root_ready wakes the gate; the worker is submitted.
     t1 = scheduler.step()
-    assert t1["proposer_jobs"] == 1
-    assert t1["published"] == 1
-    assert t1["experiment_jobs"] == 1
+    assert t1["proposer_jobs"] == 0
+    submitter.decide(
+        node_ids=[root.node_id], rationale="root deserves growth.",
+        decision_id="decision-1")
+
+    # Step 2: the decision commits and the proposer lease is launched.
+    t2 = scheduler.step()
+    assert t2["proposer_jobs"] == 1
+    allocation_id, proposer_payload = submitter.proposer[0]
+    assert proposer_payload["node_id"] == root.node_id
+    (allocation,) = store.open_allocations()
+    assert allocation.decision_id == "decision-1"
+
+    write_proposer_result(allocation_id, proposer_payload)
+
+    # Step 3: the proposer result publishes (reconcile or poll ingests it)
+    # and the queue drains into an experiment.
+    t3 = scheduler.step()
+    assert t3["experiment_jobs"] == 1
+    assert submitter.experiments
+    experiment_id = submitter.experiments[0][0]
+    write_experiment_result(experiment_id)
+    # Ingest the terminal experiment directly so the second queued proposal
+    # is not drained into another experiment before the assertions below.
+    assert scheduler._poll_experiments() == [experiment_id]
 
     # Verify child node was created.
     with store.transaction() as tx:
@@ -169,8 +224,7 @@ def test_scheduler_closes_proposer_experiment_loop(env):
         if proposal.node_id == root.node_id
     ]
     experiment_proposal = queries.get_proposal(
-        next(iter(experiment_results.values()))["proposal_id"]
-    )
+        submitter.experiments[0][1]["proposal_id"])
     assert experiment_proposal.research_state_id == states[0].research_state_id
     assert len(proposals) == 1
     assert proposals[0].research_state_id == states[0].research_state_id
@@ -181,6 +235,15 @@ def test_scheduler_closes_proposer_experiment_loop(env):
         "Repeated setup crosses the call boundary."
     )
     assert seed["experiment"]["metrics"] == {"total_ms": 90.0}
+
+    # The terminal experiment event re-wakes the gate for the next judgment.
+    t5 = scheduler.step()
+    assert t5["supervisor_pending"] == 1  # evidence awaits judgment
+    assert len(submitter.supervisor) == 2
+    _, wake_payload = submitter.supervisor[1]
+    wake = wake_payload["batch"]["event_batch"]
+    assert wake["cursor_from"] == 1
+    assert [e["type"] for e in wake["events"]] == ["experiment_terminal"]
 
 
 def test_group_workflow_allocates_divergent_branch_and_promotes_shared_epoch(env):
@@ -213,31 +276,41 @@ def test_group_workflow_allocates_divergent_branch_and_promotes_shared_epoch(env
             (divergent.node_id,),
         )
 
-    proposer_jobs = []
-
-    def decide(snapshot, capacity):
-        return SupervisorDecision(
-            decision_id="decision-1", epoch_id=snapshot.epoch_id,
-            snapshot_watermark=snapshot.watermark,
-            allocations=(AllocationDirective(divergent.node_id, 1),),
-            rationale="fund the distinct low-base lineage",
-            evidence_refs=(f"experiment:{donor_experiment.experiment_id}",),
-            integration_request={
-                "integration_request_id": "request-1",
-                "target_node_id": root.node_id,
-                "donor_experiment_ids": [donor_experiment.experiment_id],
-                "selection_rationale": "turn the mature branch into a shared base",
-            },
-        )
-
+    submitter = _GateSubmitter(run_dir)
     scheduler = Scheduler(
         store, run_dir,
         SchedulerConfig(max_proposer_inflight=1, max_experiment_inflight=1),
-        submit_proposer=lambda work_id, payload: proposer_jobs.append(payload),
-        supervisor_decider=decide,
+        submitter=submitter,
     )
-    scheduler._allocate_proposers(Frontier({root.node_id}, {}))
-    assert proposer_jobs[0]["node_id"] == divergent.node_id
+
+    # The terminal donor event wakes the gate; it funds the distinct
+    # low-base lineage rather than the frontier leader.
+    scheduler.step()
+    submitter.decide(
+        node_ids=[divergent.node_id],
+        rationale="fund the distinct low-base lineage",
+        decision_id="decision-1")
+    scheduler.step()
+    assert submitter.proposer[0][1]["node_id"] == divergent.node_id
+    (lease,) = store.open_allocations()
+    assert lease.decision_id == "decision-1"
+
+    # A separate turn requests integration — never bundled with growth.
+    # (Driven through the gate directly so this test controls when the
+    # Integrator is scheduled.)
+    store.emit_supervisor_event("goal_changed", {"goal": "shared baseline"})
+    assert scheduler._run_supervisor_gate() == []
+    submitter.decide(
+        decision_id="decision-2", decision_kind="integration_request",
+        rationale="turn the mature branch into a shared base",
+        detail={
+            "integration_request_id": "request-1",
+            "target_node_id": root.node_id,
+            "donor_experiment_ids": [donor_experiment.experiment_id],
+            "selection_rationale": "turn the mature branch into a shared base",
+        })
+    assert scheduler._run_supervisor_gate() == []
+    assert store.get_integration_request("request-1").status == "open"
 
     integrator_payloads = []
     scheduler.submit_integrator = lambda work_id, payload: integrator_payloads.append(payload)
@@ -280,14 +353,20 @@ def test_group_workflow_allocates_divergent_branch_and_promotes_shared_epoch(env
     scheduler.submit_experiment = execute
     jobs = scheduler._drain_executor_queue()
     assert scheduler._poll_experiments() == jobs
-    scheduler._apply_epoch_review({
-        "integration_request_id": "request-1", "action": "promote",
-        "rationale": "candidate passed ordinary evaluation",
-        "evidence_refs": [f"experiment:{jobs[0]}"],
-    })
+
+    # Epoch review is the third terminal, again through the same gate.
+    scheduler.step()  # experiment_terminal wakes the gate
+    submitter.decide(
+        decision_id="decision-3", decision_kind="epoch_review",
+        rationale="candidate passed ordinary evaluation",
+        detail={
+            "integration_request_id": "request-1", "review": "promote",
+            "rationale": "candidate passed ordinary evaluation",
+            "evidence_refs": [f"experiment:{jobs[0]}"],
+        })
+    scheduler.step()
 
     assert store.current_epoch().root_node_id != root.node_id
-    snapshot = build_group_snapshot(
-        store, max_research_per_node=3, max_proposals_per_node=9,
-    )
-    assert root.node_id in {item.node_id for item in snapshot.eligible_nodes}
+    assert store.get_supervisor_decision("decision-3")["decision_kind"] == (
+        "epoch_review")
+    assert store.supervisor_event_cursor() == store.supervisor_event_head()

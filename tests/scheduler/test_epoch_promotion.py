@@ -2,7 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from proposer.supervisor import build_group_snapshot
+from proposer.l2_memory import L2MemoryService
+from proposer.supervisor import SupervisorTools
 from simpleevo.db.store import GateDecision, GateResult, Proposal, ResearchStore
 from simpleevo.scheduler.loop import Scheduler, SchedulerConfig
 
@@ -79,10 +80,16 @@ def test_supervisor_review_promotes_candidate_without_rewriting_history(tmp_path
     assert epoch.previous_epoch_id == "epoch-0"
     assert epoch.root_node_id == child.node_id
     assert store.get_integration_request("req-1").status == "promoted"
-    snapshot = build_group_snapshot(
-        store, max_research_per_node=3, max_proposals_per_node=9,
-    )
-    assert root.node_id in {item.node_id for item in snapshot.eligible_nodes}
+    # The old epoch root remains a selectable world after promotion.
+    listing = SupervisorTools(
+        L2MemoryService(tmp_path, db_path=store.path),
+        runtime_facts={
+            "max_research_per_node": 3,
+            "max_proposals_per_node": 9,
+        },
+    ).execute({"action": "list_nodes"})
+    by_id = {row["node_id"]: row for row in listing["nodes"]}
+    assert by_id[root.node_id]["allocatable"] is True
 
 
 def test_cannot_promote_unvalidated_candidate(tmp_path: Path):
