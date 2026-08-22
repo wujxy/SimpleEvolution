@@ -455,9 +455,8 @@ class Scheduler:
                 raise ValueError("cannot accept integration without an epoch")
             normalized = validate_integration_request(
                 self.store, epoch.epoch_id, detail)
-            # Idempotent on integration_request_id; created before the
-            # commit so a stale rejection cannot lose a real request.
-            self._accept_integration_request(epoch.epoch_id, normalized)
+            # The request row is created inside the decision transaction:
+            # a stale decision leaves zero side effects (design §9).
             self.store.commit_supervisor_decision(
                 decision_id=decision_id,
                 work_id=attempt.logical_work_id,
@@ -466,17 +465,12 @@ class Scheduler:
                 rationale=rationale,
                 detail=normalized,
                 cursor_to=cursor_to,
+                integration_request=normalized,
             )
             return []
         if decision_kind == "epoch_review":
-            review = detail.get("review")
-            self._apply_epoch_review({
-                "integration_request_id": detail.get(
-                    "integration_request_id"),
-                "action": review,
-                "rationale": rationale,
-                "evidence_refs": detail.get("evidence_refs", ()),
-            })
+            # Promotion/retention happens inside the decision transaction;
+            # the store re-validates the candidate on the same snapshot.
             self.store.commit_supervisor_decision(
                 decision_id=decision_id,
                 work_id=attempt.logical_work_id,
@@ -485,6 +479,13 @@ class Scheduler:
                 rationale=rationale,
                 detail=dict(detail),
                 cursor_to=cursor_to,
+                epoch_review={
+                    "integration_request_id": detail.get(
+                        "integration_request_id"),
+                    "action": detail.get("review"),
+                    "rationale": rationale,
+                    "evidence_refs": list(detail.get("evidence_refs", ())),
+                },
             )
             return []
         raise ValueError(f"unknown decision kind: {decision_kind}")
@@ -615,29 +616,6 @@ class Scheduler:
             return False
         return latest.get("work_id") == f"supervisor-{pending[-1].event_id}"
 
-    def _accept_integration_request(self, epoch_id, raw) -> None:
-        if raw is None:
-            return
-        normalized = validate_integration_request(
-            self.store, epoch_id, raw,
-        )
-        open_requests = self.store.integration_requests("open")
-        if open_requests and all(
-            item.integration_request_id != normalized["integration_request_id"]
-            for item in open_requests
-        ):
-            raise ValueError("another integration request is already open")
-        request = self.store.create_integration_request(**normalized)
-        self.store.record_scheduler_event(
-            "integration_request_created",
-            {
-                "integration_request_id": request.integration_request_id,
-                "epoch_id": request.epoch_id,
-                "target_node_id": request.target_node_id,
-                "donor_experiment_ids": list(request.donor_experiment_ids),
-            },
-        )
-
     def _resolve_integration_outcomes(self) -> None:
         """Close scientifically rejected integrations without semantic review."""
         for request in self.store.integration_requests("submitted"):
@@ -658,46 +636,6 @@ class Scheduler:
                         "status": experiment.status,
                     },
                 )
-
-    def _apply_epoch_review(self, review) -> None:
-        if review is None:
-            return
-        request_id = str(review.get("integration_request_id", "")).strip()
-        action = str(review.get("action", "")).strip()
-        rationale = str(review.get("rationale", "")).strip()
-        if not request_id or action not in {"promote", "retain"} or not rationale:
-            raise ValueError("invalid epoch review")
-        request = self.store.get_integration_request(request_id)
-        experiment = (
-            self._queries.get_experiment(request.experiment_id)
-            if request is not None and request.experiment_id else None
-        )
-        if (
-            request is None or request.status != "submitted"
-            or experiment is None or experiment.status != "completed"
-            or not experiment.gate_result.passed or not experiment.child_node_id
-        ):
-            raise ValueError("epoch review requires a gate-passed candidate")
-        if action == "promote":
-            epoch = self.store.promote_integration_epoch(request_id)
-            payload = {
-                "integration_request_id": request_id,
-                "epoch_id": epoch.epoch_id,
-                "root_node_id": epoch.root_node_id,
-                "rationale": rationale,
-                "evidence_refs": list(review.get("evidence_refs", ())),
-            }
-            self.store.record_scheduler_event("epoch_promoted", payload)
-        else:
-            self.store.finish_integration_request(request_id, status="closed")
-            self.store.record_scheduler_event(
-                "integration_candidate_retained",
-                {
-                    "integration_request_id": request_id,
-                    "rationale": rationale,
-                    "evidence_refs": list(review.get("evidence_refs", ())),
-                },
-            )
 
     # ------------------------------------------------------------------
     # Integration requests

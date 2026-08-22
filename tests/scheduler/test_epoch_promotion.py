@@ -61,15 +61,21 @@ def test_gate_rejected_integration_closes_without_epoch(tmp_path: Path):
     assert store.get_integration_request("req-1").status == "closed"
 
 
+def _commit_epoch_review(store: ResearchStore, review: dict) -> None:
+    """Drive the production path: review applied inside the decision tx."""
+    store.commit_supervisor_decision(
+        decision_id=f"d-{review['action']}", work_id="supervisor-review",
+        decision_kind="epoch_review", rationale=review["rationale"],
+        detail=dict(review), cursor_to=store.supervisor_event_head(),
+        epoch_review=review,
+    )
+
+
 def test_supervisor_review_promotes_candidate_without_rewriting_history(tmp_path: Path):
     store = ResearchStore(tmp_path / "state.db")
     root, child = _candidate(store)
-    scheduler = Scheduler(
-        store, tmp_path,
-        SchedulerConfig(max_proposer_inflight=0, max_experiment_inflight=0),
-    )
 
-    scheduler._apply_epoch_review({
+    _commit_epoch_review(store, {
         "integration_request_id": "req-1",
         "action": "promote",
         "rationale": "combined candidate passed the gate",
@@ -95,13 +101,9 @@ def test_supervisor_review_promotes_candidate_without_rewriting_history(tmp_path
 def test_cannot_promote_unvalidated_candidate(tmp_path: Path):
     store = ResearchStore(tmp_path / "state.db")
     _candidate(store, outcome="gate_rejected", passed=False)
-    scheduler = Scheduler(
-        store, tmp_path,
-        SchedulerConfig(max_proposer_inflight=0, max_experiment_inflight=0),
-    )
 
     with pytest.raises(ValueError, match="gate-passed"):
-        scheduler._apply_epoch_review({
+        _commit_epoch_review(store, {
             "integration_request_id": "req-1", "action": "promote",
             "rationale": "ignore gate", "evidence_refs": [],
         })

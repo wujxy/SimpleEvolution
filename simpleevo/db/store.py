@@ -1063,15 +1063,32 @@ class ResearchStore:
         cursor_to: int,
         leases: Sequence[LeaseSpec] = (),
         max_proposals_per_node: int = 9,
+        integration_request: Mapping[str, Any] | None = None,
+        epoch_review: Mapping[str, Any] | None = None,
     ) -> SupervisorCommit:
         """Apply one Supervisor judgment in a single transaction (design §9).
 
         The event cursor is consumed only here, atomically with the decision
-        row and any proposer leases.  Re-delivering an already-committed
-        ``decision_id`` is a no-op replay (retries never duplicate leases).
-        Raises :class:`StaleSupervisorDecision` when new evidence landed
-        between the decision and this commit; nothing is partially applied.
+        row and every side effect of its kind: proposer leases for growth,
+        the integration request row for integration_request, the epoch
+        promotion/retention for epoch_review.  Re-delivering an
+        already-committed ``decision_id`` is a no-op replay (retries never
+        duplicate side effects).  Raises :class:`StaleSupervisorDecision`
+        when new evidence landed between the decision and this commit;
+        nothing is partially applied — for all three kinds.
         """
+        if decision_kind not in {
+            "growth", "integration_request", "epoch_review",
+        }:
+            raise ValueError(f"unknown decision kind: {decision_kind}")
+        if decision_kind != "growth" and (leases or node_ids):
+            raise ValueError(
+                "only growth decisions select nodes or create leases")
+        if decision_kind == "integration_request" and not integration_request:
+            raise ValueError(
+                "integration_request decision requires the request payload")
+        if decision_kind == "epoch_review" and not epoch_review:
+            raise ValueError("epoch_review decision requires the review payload")
         ids = list(node_ids)
         self._validate_unique_ids(ids, "node_ids")
         with self.transaction(immediate=True) as tx:
@@ -1114,16 +1131,23 @@ class ResearchStore:
                     time.time(),
                 ),
             )
-            created = tuple(
-                allocation
-                for allocation in (
-                    self._allocate_on_tx(
-                        tx, spec, max_proposals_per_node, decision_id
+            created: tuple = ()
+            if decision_kind == "growth":
+                created = tuple(
+                    allocation
+                    for allocation in (
+                        self._allocate_on_tx(
+                            tx, spec, max_proposals_per_node, decision_id
+                        )
+                        for spec in leases
                     )
-                    for spec in leases
+                    if allocation is not None
                 )
-                if allocation is not None
-            )
+            elif decision_kind == "integration_request":
+                self._create_integration_request_on_tx(
+                    tx, integration_request)
+            else:
+                self._apply_epoch_review_on_tx(tx, epoch_review)
             tx._conn.execute(
                 "INSERT OR REPLACE INTO supervisor_cursor "
                 "(consumer, last_consumed_event_id) VALUES ('supervisor', ?)",
@@ -1148,6 +1172,133 @@ class ResearchStore:
             decision_id=decision_id,
             replayed=False,
             allocations=created,
+        )
+
+    def _create_integration_request_on_tx(
+        self, tx, request: Mapping[str, Any],
+    ) -> IntegrationRequest:
+        """Accept one Supervisor integration request inside the caller's tx.
+
+        Mirrors the scheduler's former two-step accept (open-request
+        uniqueness, idempotent same-id redelivery) so the request row is
+        created atomically with the decision that judged it.
+        """
+        request_id = str(request["integration_request_id"])
+        open_rows = tx._conn.execute(
+            "SELECT integration_request_id FROM integration_requests "
+            "WHERE status = 'open' ORDER BY created_at"
+        ).fetchall()
+        if open_rows and all(
+            row[0] != request_id for row in open_rows
+        ):
+            raise ValueError("another integration request is already open")
+        existing = tx.get_integration_request(request_id)
+        if existing is not None:
+            same = (
+                existing.epoch_id == request["epoch_id"]
+                and existing.target_node_id == request["target_node_id"]
+                and list(existing.donor_experiment_ids)
+                == list(request["donor_experiment_ids"])
+                and existing.selection_rationale
+                == request["selection_rationale"]
+            )
+            if not same:
+                raise ValueError("integration request identity conflict")
+            return existing
+        created = tx.create_integration_request(
+            integration_request_id=request_id,
+            epoch_id=request["epoch_id"],
+            target_node_id=request["target_node_id"],
+            donor_experiment_ids=tuple(
+                request["donor_experiment_ids"]),
+            selection_rationale=request["selection_rationale"],
+        )
+        tx._conn.execute(
+            "INSERT INTO scheduler_events (event_id, type, payload, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (
+                _new_id(),
+                "integration_request_created",
+                _json({
+                    "integration_request_id": created.integration_request_id,
+                    "epoch_id": created.epoch_id,
+                    "target_node_id": created.target_node_id,
+                    "donor_experiment_ids": list(
+                        created.donor_experiment_ids),
+                }),
+                time.time(),
+            ),
+        )
+        return created
+
+    def _apply_epoch_review_on_tx(
+        self, tx, review: Mapping[str, Any],
+    ) -> None:
+        """Apply a promote/retain judgment inside the caller's tx.
+
+        Re-validates the candidate on the transaction's own snapshot, then
+        promotes the epoch or closes the request — never both worlds.
+        """
+        request_id = str(review.get("integration_request_id", "")).strip()
+        action = str(review.get("action", "")).strip()
+        rationale = str(review.get("rationale", "")).strip()
+        if not request_id or action not in {"promote", "retain"} or not rationale:
+            raise ValueError("invalid epoch review")
+        request = tx.get_integration_request(request_id)
+        experiment = (
+            tx.get_experiment(request.experiment_id)
+            if request is not None and request.experiment_id else None
+        )
+        if (
+            request is None or request.status != "submitted"
+            or experiment is None or experiment.status != "completed"
+            or not experiment.gate_result.passed or not experiment.child_node_id
+        ):
+            raise ValueError("epoch review requires a gate-passed candidate")
+        now = time.time()
+        if action == "promote":
+            row = tx._conn.execute(
+                "SELECT * FROM epochs ORDER BY created_at DESC, rowid DESC "
+                "LIMIT 1"
+            ).fetchone()
+            current = _epoch_from_row(row)
+            if request.epoch_id != current.epoch_id:
+                raise ValueError(
+                    "integration request belongs to an older epoch")
+            epoch_id = f"epoch-{_new_id()}"
+            tx._conn.execute(
+                "INSERT INTO epochs VALUES (?, ?, ?, ?)",
+                (epoch_id, experiment.child_node_id, current.epoch_id, now),
+            )
+            tx._conn.execute(
+                "UPDATE integration_requests SET status = 'promoted', "
+                "closed_at = ? WHERE integration_request_id = ?",
+                (now, request_id),
+            )
+            event_type = "epoch_promoted"
+            payload = {
+                "integration_request_id": request_id,
+                "epoch_id": epoch_id,
+                "root_node_id": experiment.child_node_id,
+                "rationale": rationale,
+                "evidence_refs": list(review.get("evidence_refs", ())),
+            }
+        else:
+            tx._conn.execute(
+                "UPDATE integration_requests SET status = 'closed', "
+                "closed_at = ? WHERE integration_request_id = ?",
+                (now, request_id),
+            )
+            event_type = "integration_candidate_retained"
+            payload = {
+                "integration_request_id": request_id,
+                "rationale": rationale,
+                "evidence_refs": list(review.get("evidence_refs", ())),
+            }
+        tx._conn.execute(
+            "INSERT INTO scheduler_events (event_id, type, payload, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (_new_id(), event_type, _json(payload), now),
         )
 
     def create_integration_request(

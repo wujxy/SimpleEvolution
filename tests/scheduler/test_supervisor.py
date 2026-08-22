@@ -319,9 +319,8 @@ def test_over_capacity_decision_is_rejected_whole(tmp_path: Path):
     assert store.open_allocations() == []
 
 
-def test_integration_turn_creates_request_and_consumes_cursor(tmp_path: Path):
-    store = ResearchStore(tmp_path / "state.db")
-    root, episode, child = _seed(store, extra_child=True)
+def _seed_donor(store, root, episode):
+    """A gate-passed donor experiment hanging off the root."""
     with store.transaction() as tx:
         tx.create_proposal(Proposal(
             proposal_id="p-donor", node_id=root.node_id,
@@ -331,16 +330,28 @@ def test_integration_turn_creates_request_and_consumes_cursor(tmp_path: Path):
         tx.create_experiment(
             experiment_id="exp-donor", proposal_id="p-donor",
             parent_node_id=root.node_id, status="running")
-    # Give the donor a gate-passed child so it qualifies as a donor.
     store.ingest_experiment_result(
         experiment_id="exp-donor", result_sha="donor-sha",
         metrics={}, gate_result=_gate(True), status="completed")
+
+
+def _sync_cursor(store) -> int:
+    """Consume pending events so the test flow is the only wake source."""
+    head = store.supervisor_event_head()
+    if head:
+        store.commit_supervisor_decision(
+            decision_id=f"d-sync-{head}", work_id=f"supervisor-{head}",
+            node_ids=[], rationale="sync", cursor_to=head)
+    return store.supervisor_event_cursor()
+
+
+def test_integration_turn_creates_request_and_consumes_cursor(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    root, episode, child = _seed(store, extra_child=True)
+    _seed_donor(store, root, episode)
     # Neutralize the event the ingest just emitted so the test flow is the
     # only wake source.
-    head = store.supervisor_event_head()
-    store.commit_supervisor_decision(
-        decision_id="d-sync", work_id=f"supervisor-{head}",
-        node_ids=[], rationale="sync", cursor_to=head)
+    _sync_cursor(store)
 
     submitter = Submitter(tmp_path)
     scheduler = _scheduler(store, tmp_path, submitter)
@@ -432,3 +443,107 @@ def test_pending_events_block_quiescence(tmp_path: Path):
 
     assert store.pending_supervisor_events()
     assert scheduler._quiescent() is False
+
+
+def test_stale_integration_decision_has_zero_side_effects(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    root, episode, _ = _seed(store)
+    _seed_donor(store, root, episode)
+    cursor = _sync_cursor(store)
+    submitter = Submitter(tmp_path)
+    scheduler = _scheduler(store, tmp_path, submitter)
+
+    store.emit_supervisor_event("goal_changed", {"goal": "faster"})
+    scheduler.step()
+    work_id, _ = submitter.supervisor[0]
+    # New evidence lands while the worker is thinking.
+    store.emit_supervisor_event(
+        "lease_terminal",
+        {"allocation_id": "a1", "node_id": root.node_id,
+         "outcome": "abstain"})
+    submitter.write_decision(work_id, {
+        "decision_id": "d-int", "decision_kind": "integration_request",
+        "node_ids": [], "rationale": "branches matured.",
+        "detail": {
+            "integration_request_id": "req-1",
+            "target_node_id": root.node_id,
+            "donor_experiment_ids": ["exp-donor"],
+            "selection_rationale": "complementary validated results",
+        },
+        "event_cursor_to": store.supervisor_event_head() - 1,
+    })
+    scheduler.step()
+
+    # The stale decision left nothing behind: no request, no decision row,
+    # no cursor advance, no accepted/created events (design §9).
+    assert store.get_integration_request("req-1") is None
+    assert store.get_supervisor_decision("d-int") is None
+    assert store.supervisor_event_cursor() == cursor
+    assert store.supervisor_event_head() == cursor + 2
+    assert store.latest_scheduler_event("supervisor_decision_stale")[
+        "work_id"] == work_id
+    assert store.latest_scheduler_event(
+        "integration_request_created") is None
+
+
+def _seed_reviewable_request(store, root, episode):
+    """A submitted integration request with a gate-passed candidate."""
+    _seed_donor(store, root, episode)
+    epoch = store.current_epoch()
+    store.create_integration_request(
+        integration_request_id="req-1", epoch_id=epoch.epoch_id,
+        target_node_id=root.node_id,
+        donor_experiment_ids=("exp-donor",),
+        selection_rationale="branches matured",
+    )
+    with store.transaction() as tx:
+        tx.create_proposal(Proposal(
+            proposal_id="p-int", node_id=root.node_id,
+            episode_id=episode.episode_id, instruction="integrate",
+            rationale={}, status="done", created_at=0,
+        ))
+        tx.create_experiment(
+            experiment_id="exp-int", proposal_id="p-int",
+            parent_node_id=root.node_id, status="running")
+    store.finish_integration_request(
+        "req-1", status="submitted", proposal_id="p-int",
+        experiment_id="exp-int")
+    store.ingest_experiment_result(
+        experiment_id="exp-int", result_sha="int-sha",
+        metrics={}, gate_result=_gate(True), status="completed")
+
+
+def test_stale_epoch_review_has_zero_side_effects(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    root, episode, _ = _seed(store)
+    _seed_reviewable_request(store, root, episode)
+    cursor = _sync_cursor(store)
+    submitter = Submitter(tmp_path)
+    scheduler = _scheduler(store, tmp_path, submitter)
+
+    store.emit_supervisor_event("goal_changed", {"goal": "faster"})
+    scheduler.step()
+    work_id, _ = submitter.supervisor[0]
+    store.emit_supervisor_event(
+        "lease_terminal",
+        {"allocation_id": "a1", "node_id": root.node_id,
+         "outcome": "abstain"})
+    submitter.write_decision(work_id, {
+        "decision_id": "d-epoch", "decision_kind": "epoch_review",
+        "node_ids": [], "rationale": "candidate covers donors.",
+        "detail": {
+            "integration_request_id": "req-1",
+            "review": "promote",
+        },
+        "event_cursor_to": store.supervisor_event_head() - 1,
+    })
+    scheduler.step()
+
+    # No promotion, no closure, no decision row, cursor untouched.
+    assert store.current_epoch().epoch_id == "epoch-0"
+    assert store.get_integration_request("req-1").status == "submitted"
+    assert store.get_supervisor_decision("d-epoch") is None
+    assert store.supervisor_event_cursor() == cursor
+    assert store.latest_scheduler_event("supervisor_decision_stale")[
+        "work_id"] == work_id
+    assert store.latest_scheduler_event("epoch_promoted") is None

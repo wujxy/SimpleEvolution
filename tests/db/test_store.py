@@ -593,3 +593,78 @@ def test_empty_growth_decision_consumes_cursor_without_leases(
     assert commit.allocations == ()
     assert store.supervisor_event_cursor() == head
     assert store.open_allocations() == []
+
+
+def test_commit_integration_decision_creates_request_atomically(
+    store: ResearchStore,
+):
+    root, _ = _seed_root_episode(store)
+    head = store.emit_supervisor_event("goal_changed", {"goal": "faster"})
+    epoch = store.current_epoch()
+    request = {
+        "integration_request_id": "req-1",
+        "epoch_id": epoch.epoch_id,
+        "target_node_id": root.node_id,
+        "donor_experiment_ids": ("exp-donor",),
+        "selection_rationale": "branches matured",
+    }
+
+    store.commit_supervisor_decision(
+        decision_id="d-int", work_id=f"supervisor-{head}",
+        decision_kind="integration_request", rationale="matured",
+        detail=dict(request), cursor_to=head, integration_request=request,
+    )
+
+    created = store.get_integration_request("req-1")
+    assert created is not None and created.status == "open"
+    assert store.supervisor_event_cursor() == head
+    assert store.get_supervisor_decision("d-int")["decision_kind"] == (
+        "integration_request")
+    assert store.latest_scheduler_event(
+        "integration_request_created")["integration_request_id"] == "req-1"
+
+    # Re-delivering the same decision is a replay: the request row and the
+    # accepted event are not duplicated.
+    store.commit_supervisor_decision(
+        decision_id="d-int", work_id=f"supervisor-{head}",
+        decision_kind="integration_request", rationale="matured",
+        detail=dict(request), cursor_to=head, integration_request=request,
+    )
+    assert store.latest_scheduler_event(
+        "integration_request_created")["integration_request_id"] == "req-1"
+    with store._connect() as conn:
+        created_count = conn.execute(
+            "SELECT COUNT(*) FROM integration_requests").fetchone()[0]
+        accepted_count = conn.execute(
+            "SELECT COUNT(*) FROM scheduler_events "
+            "WHERE type = 'supervisor_decision_accepted'").fetchone()[0]
+    assert created_count == 1
+    assert accepted_count == 1
+
+
+def test_commit_rejects_mixed_decision_payloads(store: ResearchStore):
+    root, _ = _seed_root_episode(store)
+    head = store.emit_supervisor_event("root_ready", {"root_node_id": root.node_id})
+
+    # Only growth decisions select nodes or create leases.
+    with pytest.raises(ValueError, match="only growth"):
+        store.commit_supervisor_decision(
+            decision_id="d-bad", work_id=f"supervisor-{head}",
+            decision_kind="integration_request", node_ids=[root.node_id],
+            rationale="mixed", cursor_to=head,
+        )
+    # A kind without its side-effect payload fails fast, before any write.
+    with pytest.raises(ValueError, match="request payload"):
+        store.commit_supervisor_decision(
+            decision_id="d-bad2", work_id=f"supervisor-{head}",
+            decision_kind="integration_request", rationale="empty",
+            cursor_to=head,
+        )
+    with pytest.raises(ValueError, match="unknown decision kind"):
+        store.commit_supervisor_decision(
+            decision_id="d-bad3", work_id=f"supervisor-{head}",
+            decision_kind="hybrid", rationale="invalid", cursor_to=head,
+        )
+    assert store.get_supervisor_decision("d-bad") is None
+    assert store.supervisor_event_cursor() == 0
+    assert store.open_allocations() == []
