@@ -139,6 +139,27 @@ class ResearchQueries:
             ).fetchall()
             return {row["status"]: int(row["n"]) for row in rows}
 
+    def terminal_experiment_count(self) -> int:
+        """Scientific terminal evaluations (completed/gate_rejected/no_change).
+
+        Infra failures land on attempts, not on ``experiments.status``, so
+        they never consume eval budget.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM experiments "
+                "WHERE status IN ('completed', 'gate_rejected', 'no_change')"
+            ).fetchone()
+            return int(row["n"])
+
+    def run_limits(self) -> dict:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT name, value FROM run_limits").fetchall()
+            return {
+                row["name"]: json.loads(row["value"]) for row in rows
+            }
+
     def get_research_state(self, research_state_id: str) -> ResearchState | None:
         with self._connect() as conn:
             row = conn.execute(

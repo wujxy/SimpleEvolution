@@ -29,6 +29,7 @@ import json
 import random
 import sqlite3
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from simpleevo.cli import (
@@ -41,8 +42,8 @@ from simpleevo.db.queries import ResearchQueries
 from simpleevo.db.store import ResearchStore
 from simpleevo.jobs.local import LocalSubmitter
 from simpleevo.scheduler.loop import Scheduler
+from simpleevo.scheduler.telemetry import spend_usd
 
-_TERMINAL_STATUSES = frozenset({"completed", "gate_rejected", "no_change"})
 _EVENT_KINDS = {
     "supervisor_decision_accepted",
     "supervisor_decision_stale",
@@ -57,35 +58,15 @@ _EVENT_KINDS = {
 
 
 def _terminal_count(queries: ResearchQueries) -> int:
-    return sum(
-        1 for e in queries.list_experiments() if e.status in _TERMINAL_STATUSES
-    )
+    # Same scientific-terminal definition as the gate's budget view.
+    return queries.terminal_experiment_count()
 
 
 def _spend_usd(run_dir: Path, pricing: dict) -> float:
-    path = run_dir / "telemetry" / "usage.jsonl"
-    if not path.exists():
-        return 0.0
-    input_p = float(pricing.get("input_usd_per_1m", 0.67))
-    output_p = float(pricing.get("output_usd_per_1m", 2.02))
-    cache_read_p = float(pricing.get("cache_read_usd_per_1m", 0.02))
-    cache_creation_p = float(pricing.get("cache_creation_usd_per_1m", input_p))
-    total = 0.0
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        total += (
-            int(record.get("input_tokens", 0)) * input_p
-            + int(record.get("output_tokens", 0)) * output_p
-            + int(record.get("cache_read_input_tokens", 0)) * cache_read_p
-            + int(record.get("cache_creation_input_tokens", 0)) * cache_creation_p
-        ) / 1_000_000.0
-    return total
+    # Thin alias: the shared helper prices the same usage ledger the growth
+    # gate's budget view reads, so the cap and the Supervisor's facts never
+    # diverge.
+    return spend_usd(run_dir, pricing)
 
 
 def _latest_events(queries: ResearchQueries, seen: set[str]) -> list[str]:
@@ -126,10 +107,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
     queries = ResearchQueries(store.path)
 
     submitter = LocalSubmitter(run_dir, config)
+    # Durable budget policy: the scheduler installs these limits into the
+    # run_limits table where the growth gate reads them; restarting with
+    # the same command rebuilds the same state silently.
+    scheduler_config = replace(
+        _build_scheduler_config(config),
+        max_terminal_evals=args.max_evals,
+        budget_usd=args.budget_usd,
+    )
     scheduler = Scheduler(
         store,
         run_dir,
-        _build_scheduler_config(config),
+        scheduler_config,
         evolution_config=config,
         submitter=submitter,
     )

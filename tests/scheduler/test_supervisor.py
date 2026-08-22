@@ -676,3 +676,42 @@ def test_baseline_mode_allocates_nothing_when_capped(tmp_path: Path):
 
     assert submitted == []
     assert store.open_allocations() == []
+
+
+def test_budget_limits_are_durable_and_change_events_are_real(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    _seed(store)
+    submitter = Submitter(tmp_path)
+    scheduler = _scheduler(
+        store, tmp_path, submitter,
+        max_terminal_evals=5, budget_usd=2.0)
+
+    scheduler.step()
+    # The wake payload carries the configured budget facts.
+    _, payload = submitter.supervisor[0]
+    assert payload["runtime_facts"]["max_terminal_evals"] == 5
+    assert payload["runtime_facts"]["budget_usd"] == 2.0
+    # First install: rows written, but constructing a run is not a budget
+    # intervention — only root_ready is on the log.
+    assert store.run_limits() == {
+        "max_terminal_evals": 5, "budget_usd": 2.0}
+    assert [e.type for e in store.pending_supervisor_events()] == [
+        "root_ready"]
+    # Restart-equivalent: syncing the same configuration stays silent.
+    scheduler.step()
+    assert store.supervisor_event_head() == 1
+
+    # A driver-side budget change (a resumed run with different limits) is
+    # a durable wake event.
+    restarted = _scheduler(
+        store, tmp_path, submitter,
+        max_terminal_evals=5, budget_usd=1.0)
+    restarted.step()
+    pending = store.pending_supervisor_events()
+    assert pending[-1].type == "budget_changed"
+    assert pending[-1].payload["budget_usd"] == 1.0
+    assert pending[-1].payload["changed"] == ["budget_usd"]
+
+    # The durable state survives a process restart (a fresh store reads it).
+    reopened = ResearchStore(tmp_path / "state.db")
+    assert reopened.run_limits()["budget_usd"] == 1.0

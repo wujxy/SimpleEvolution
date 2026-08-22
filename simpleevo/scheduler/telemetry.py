@@ -141,6 +141,39 @@ def sqlite3_connect(path: Path):
     return conn
 
 
+def spend_usd(run_dir: Path, pricing: dict) -> float:
+    """Total model spend for a run, from telemetry/usage.jsonl records.
+
+    Shared by the driver (cap policy) and the growth gate's budget view so
+    both compute the same number from the same token ledger.
+    """
+    path = Path(run_dir) / "telemetry" / "usage.jsonl"
+    if not path.exists():
+        return 0.0
+    input_p = float(pricing.get("input_usd_per_1m", 0.0))
+    output_p = float(pricing.get("output_usd_per_1m", 0.0))
+    cache_read_p = float(pricing.get("cache_read_usd_per_1m", 0.0))
+    cache_creation_p = float(pricing.get(
+        "cache_creation_usd_per_1m", input_p))
+    total = 0.0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        total += (
+            int(record.get("input_tokens", 0)) * input_p
+            + int(record.get("output_tokens", 0)) * output_p
+            + int(record.get("cache_read_input_tokens", 0)) * cache_read_p
+            + int(record.get("cache_creation_input_tokens", 0))
+            * cache_creation_p
+        ) / 1_000_000.0
+    return total
+
+
 def _leaves(tree: dict[str, Any], root_id: str) -> list[str]:
     """Return all leaf node ids under root_id."""
     leaves: list[str] = []

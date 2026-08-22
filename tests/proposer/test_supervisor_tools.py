@@ -181,3 +181,46 @@ def test_execute_never_raises(tmp_path: Path):
     assert tools.execute({"action": "inspect_node", "node_id": "ghost"}) == {
         "ok": False, "error": "node not found: ghost",
     }
+
+
+def test_inspect_run_status_reports_durable_budget(tmp_path: Path):
+    memory, store, world = _seed(tmp_path)
+    # A completed experiment consumes one terminal eval.
+    store.ingest_experiment_result(
+        experiment_id=world["experiment"].experiment_id,
+        result_sha="done", metrics={"score": 2.0},
+        gate_result=_gate(), status="completed",
+    )
+    store.install_run_limits(
+        {"max_terminal_evals": 3, "budget_usd": 1.0})
+    (tmp_path / "telemetry").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "telemetry" / "usage.jsonl").write_text(
+        '{"input_tokens": 1000000, "output_tokens": 500000}\n',
+        encoding="utf-8",
+    )
+    tools = _tools(memory, {
+        **world["facts"],
+        "pricing": {
+            "input_usd_per_1m": 0.67, "output_usd_per_1m": 2.02,
+        },
+    })
+
+    status = tools.execute({"action": "inspect_run_status"})
+
+    budget = status["budget"]
+    assert budget["max_terminal_evals"] == 3
+    assert budget["terminal_evals"] == 1
+    assert budget["remaining_terminal_evals"] == 2
+    # 1M input * $0.67 + 0.5M output * $2.02 = $1.68 against a $1.0 budget.
+    assert budget["spend_usd"] == 1.68
+    assert budget["remaining_usd"] == 0.0
+    assert budget["capped"] is True
+
+
+def test_run_status_without_limits_has_no_budget_block(tmp_path: Path):
+    memory, _, world = _seed(tmp_path)
+    tools = _tools(memory, world["facts"])
+
+    status = tools.execute({"action": "inspect_run_status"})
+
+    assert "budget" not in status

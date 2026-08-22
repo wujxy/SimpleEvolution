@@ -45,7 +45,10 @@ returned; nothing here ranks nodes or recommends an allocation.
 - `inspect_node_allocations` {node_id}: proposer investment and resulting
   public outcomes for one Node.
 - `inspect_run_status` {}: mechanical run facts — in-flight work, queued
-  proposals, open leases, and configured capacity.
+  proposals, open leases, configured capacity, and (when the driver set
+  budget policy) the `budget` block: terminal evals vs the eval cap,
+  spend vs the USD budget, remaining amounts, and whether the run is
+  already capped.
 
 These tools are read-only.  The public research ledger is authoritative; your
 notebook is your own revisable account and never overrides it.
@@ -102,7 +105,8 @@ class SupervisorTools:
         if name == "inspect_node_allocations":
             return self.memory.node_allocations(str(action["node_id"]))
         if name == "inspect_run_status":
-            status = self.memory.run_status()
+            status = self.memory.run_status(
+                pricing=self.runtime_facts.get("pricing"))
             status["config"] = dict(self.runtime_facts)
             running = status["running_attempts"].get("proposer", 0)
             status["free_proposer_capacity"] = max(

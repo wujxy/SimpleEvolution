@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from simpleevo.db.queries import ResearchQueries
+from simpleevo.scheduler.telemetry import spend_usd
 
 
 def _query_terms(query: str) -> list[str]:
@@ -301,9 +302,15 @@ class L2MemoryService:
             "experiments": experiments,
         }
 
-    def run_status(self) -> dict:
-        """Mechanical run facts only: no ranking, no recommendation."""
-        return {
+    def run_status(self, *, pricing: dict | None = None) -> dict:
+        """Mechanical run facts only: no ranking, no recommendation.
+
+        With durable run limits installed (and optionally token pricing for
+        the usage ledger) the ``budget`` block carries limit / used /
+        remaining / capped so the growth gate can weigh opportunity cost
+        against real numbers instead of guessing.
+        """
+        status = {
             "ok": True,
             "running_attempts": self.queries.running_attempt_counts(),
             "queued_proposals": self.queries.queued_proposal_count(),
@@ -311,6 +318,35 @@ class L2MemoryService:
             "open_experiments": self.queries.open_experiment_count(),
             "node_counts": self.queries.node_status_counts(),
         }
+        limits = self.queries.run_limits()
+        if not limits and not pricing:
+            return status
+        terminal = self.queries.terminal_experiment_count()
+        spend = (
+            spend_usd(self.run_dir, pricing) if pricing else None
+        )
+        max_evals = limits.get("max_terminal_evals")
+        budget_usd = limits.get("budget_usd")
+        remaining_evals = (
+            None if max_evals is None else max(0, int(max_evals) - terminal)
+        )
+        remaining_usd = (
+            None if budget_usd is None or spend is None
+            else round(max(0.0, float(budget_usd) - spend), 6)
+        )
+        status["budget"] = {
+            "max_terminal_evals": max_evals,
+            "budget_usd": budget_usd,
+            "terminal_evals": terminal,
+            "spend_usd": None if spend is None else round(spend, 6),
+            "remaining_terminal_evals": remaining_evals,
+            "remaining_usd": remaining_usd,
+            "capped": (
+                remaining_evals == 0
+                or (remaining_usd is not None and remaining_usd <= 0.0)
+            ),
+        }
+        return status
 
     def list_findings(self, state: str = "active", limit: int = 20, **_) -> dict:
         return {"findings": []}

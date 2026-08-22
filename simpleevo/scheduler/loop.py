@@ -43,6 +43,11 @@ class SchedulerConfig:
     frontier: FrontierConfig | None = None
     poll_seconds: float = 5.0
     quiescence_window_proposals: int = 2
+    # Driver budget policy, durable in the run_limits table once installed:
+    # the growth gate reads it to weigh remaining budget, and changing an
+    # installed limit emits a durable ``budget_changed`` event.
+    max_terminal_evals: int | None = None
+    budget_usd: float | None = None
 
 
 # Scientific terminal outcomes produced by the experiment worker.  These are
@@ -139,6 +144,12 @@ class Scheduler:
             if root is not None:
                 self.store.emit_supervisor_event(
                     "root_ready", {"root_node_id": root.node_id})
+
+        # 1c. Budget policy is durable and rebuildable: install the
+        # configured limits each step and wake the gate only when an
+        # installed limit actually changed (a restart with the same
+        # configuration stays silent).
+        self._sync_run_limits()
 
         # 2. Compute frontier.
         frontier = self._compute_frontier()
@@ -586,6 +597,23 @@ class Scheduler:
             jobs.append(allocation.allocation_id)
         return jobs
 
+    def _sync_run_limits(self) -> None:
+        """Install the configured budget limits; emit on real changes only."""
+        limits = {
+            "max_terminal_evals": self.config.max_terminal_evals,
+            "budget_usd": self.config.budget_usd,
+        }
+        if all(value is None for value in limits.values()):
+            return
+        changed = self.store.install_run_limits(limits)
+        if changed:
+            self.store.emit_supervisor_event(
+                "budget_changed", {
+                    "changed": changed,
+                    "max_terminal_evals": limits["max_terminal_evals"],
+                    "budget_usd": limits["budget_usd"],
+                })
+
     def _supervisor_payload(self, pending, attempt) -> dict[str, Any]:
         head = pending[-1].event_id
         epoch = self.store.current_epoch()
@@ -594,6 +622,19 @@ class Scheduler:
             int(getattr(cfg, "supervisor_steps", 40)) if cfg is not None
             else 40
         )
+        runtime_facts: dict[str, Any] = {
+            "max_proposer_inflight": self.config.max_proposer_inflight,
+            "max_experiment_inflight": self.config.max_experiment_inflight,
+            "proposal_slots": self.config.proposal_slots,
+            "max_research_per_node": self._max_research_per_node(),
+            "max_proposals_per_node": self._max_proposals_per_node(),
+            "max_terminal_evals": self.config.max_terminal_evals,
+            "budget_usd": self.config.budget_usd,
+        }
+        if cfg is not None and cfg.pricing:
+            # Token pricing so the worker's budget view can price the
+            # run's usage ledger itself.
+            runtime_facts["pricing"] = dict(cfg.pricing)
         return {
             "batch": {
                 "event_batch": {
@@ -616,13 +657,7 @@ class Scheduler:
             "decision_id": uuid.uuid4().hex,
             "attempt_id": attempt.attempt_id,
             "supervisor_steps": supervisor_steps,
-            "runtime_facts": {
-                "max_proposer_inflight": self.config.max_proposer_inflight,
-                "max_experiment_inflight": self.config.max_experiment_inflight,
-                "proposal_slots": self.config.proposal_slots,
-                "max_research_per_node": self._max_research_per_node(),
-                "max_proposals_per_node": self._max_proposals_per_node(),
-            },
+            "runtime_facts": runtime_facts,
             "run_context": {"goal": cfg.goal} if cfg is not None else {},
         }
 

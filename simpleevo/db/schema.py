@@ -289,4 +289,15 @@ CREATE TABLE IF NOT EXISTS supervisor_decisions (
 
 CREATE INDEX IF NOT EXISTS idx_supervisor_decisions_work
     ON supervisor_decisions(work_id);
+
+-- Durable run-level budget limits (max evals / USD), installed by the
+-- driver through the scheduler and rebuilt from the same run
+-- configuration on restart.  The growth gate reads them to weigh
+-- remaining budget; a change to an installed limit emits a durable
+-- ``budget_changed`` supervisor event.
+CREATE TABLE IF NOT EXISTS run_limits (
+    name TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at REAL NOT NULL
+);
 """

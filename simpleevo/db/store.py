@@ -1051,6 +1051,39 @@ class ResearchStore:
             "created_at": row["created_at"],
         }
 
+    def run_limits(self) -> dict[str, Any]:
+        """The run's durable budget limits (empty when none configured)."""
+        rows = self._with_conn(lambda conn: conn.execute(
+            "SELECT name, value FROM run_limits").fetchall())
+        return {row["name"]: _unjson(row["value"]) for row in rows}
+
+    def install_run_limits(self, limits: Mapping[str, Any]) -> list[str]:
+        """Upsert budget limits; return the names whose value changed.
+
+        The first install of a limit is not a change (constructing a run is
+        not a budget intervention) — the scheduler emits ``budget_changed``
+        only for the returned names, so a restart with the same
+        configuration stays silent while a resumed run with different
+        limits wakes the gate.
+        """
+        changed: list[str] = []
+        with self.transaction() as tx:
+            for name in sorted(limits):
+                encoded = _json(limits[name])
+                row = tx._conn.execute(
+                    "SELECT value FROM run_limits WHERE name = ?", (name,)
+                ).fetchone()
+                if row is not None and row["value"] == encoded:
+                    continue
+                tx._conn.execute(
+                    "INSERT OR REPLACE INTO run_limits "
+                    "(name, value, updated_at) VALUES (?, ?, ?)",
+                    (name, encoded, time.time()),
+                )
+                if row is not None:
+                    changed.append(name)
+        return changed
+
     def commit_supervisor_decision(
         self,
         *,
