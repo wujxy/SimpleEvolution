@@ -163,7 +163,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     attempt_id TEXT PRIMARY KEY,
     logical_work_id TEXT NOT NULL,
     kind TEXT NOT NULL
-        CHECK (kind IN ('proposer', 'experiment')),
+        CHECK (kind IN ('proposer', 'experiment', 'supervisor', 'integrator')),
     status TEXT NOT NULL DEFAULT 'ready'
         CHECK (status IN (
             'ready', 'pending', 'running', 'succeeded', 'failed', 'lost'

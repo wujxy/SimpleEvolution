@@ -86,6 +86,10 @@ class BaseSubmitter(ABC):
         """
         return self._submit("experiment", experiment_id, payload, self._experiment_defaults())
 
+    def submit_supervisor(self, decision_id: str, payload: Mapping[str, Any]) -> str:
+        """Stage one stateless group-allocation decision worker."""
+        return self._submit("supervisor", decision_id, payload, self._proposer_defaults())
+
     def poll(self, spec: JobSpec) -> WorkerResult | None:
         """Return the parsed worker result once ``result.json`` exists."""
         if not spec.result_path.exists():
@@ -136,6 +140,8 @@ class BaseSubmitter(ABC):
         """(manifest_dir, manifest.json, result.json) for a logical work id."""
         if kind == "proposer":
             directory = self.run_dir / "proposer_allocations" / work_id
+        elif kind == "supervisor":
+            directory = self.run_dir / "supervisor_decisions" / work_id
         else:
             directory = self.run_dir / "experiments" / work_id
         return directory, directory / "manifest.json", directory / "result.json"
@@ -143,7 +149,12 @@ class BaseSubmitter(ABC):
     def _worker_argv(self, kind: str, manifest_path: Path) -> list[str]:
         """Worker argv (before python / job.sh).  --backend is transport
         metadata the worker reports into ``execution.scheduler``."""
-        module = "proposer.cli" if kind == "proposer" else "experiment.cli"
+        modules = {
+            "proposer": "proposer.cli",
+            "supervisor": "proposer.supervisor_cli",
+            "experiment": "experiment.cli",
+        }
+        module = modules[kind]
         return [
             "-m", module,
             "--manifest", str(manifest_path),

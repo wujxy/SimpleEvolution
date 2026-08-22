@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -153,3 +154,122 @@ def test_scheduler_falls_back_to_frontier_when_supervisor_fails(tmp_path: Path):
     assert len(jobs) == 1
     assert submitted[0]["node_id"] == root.node_id
     assert len(submitted[0]["proposal_ids"]) == 2
+
+
+def test_scheduler_submits_and_ingests_supervisor_worker(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    with store.transaction() as tx:
+        root = tx.create_node(
+            parent_node_id=None, experiment_id=None, sha="root",
+            metrics={"score": 10}, gate_result=_gate(), depth=0, status="active",
+        )
+        tx.create_episode(node_id=root.node_id)
+        dormant = tx.create_node(
+            parent_node_id=root.node_id, experiment_id="exp-old", sha="old",
+            metrics={"score": 1}, gate_result=_gate(), depth=1, status="dormant",
+        )
+        tx.create_episode(node_id=dormant.node_id)
+
+    class Submitter:
+        presumes_dead_on_startup = False
+
+        def __init__(self):
+            self.supervisor = []
+            self.proposers = []
+
+        def submit_supervisor(self, work_id, payload):
+            self.supervisor.append((work_id, payload))
+            return str(tmp_path / "supervisor_decisions" / work_id / "result.json")
+
+        def submit_proposer(self, work_id, payload):
+            self.proposers.append((work_id, payload))
+            return ""
+
+        def submit_experiment(self, work_id, payload):
+            return ""
+
+    submitter = Submitter()
+    scheduler = Scheduler(
+        store, tmp_path,
+        SchedulerConfig(max_proposer_inflight=1, proposal_slots=3),
+        submitter=submitter,
+    )
+    frontier = Frontier({root.node_id}, {})
+
+    assert scheduler._allocate_proposers(frontier) == []
+    work_id, payload = submitter.supervisor[0]
+    result_path = tmp_path / "supervisor_decisions" / work_id / "result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(json.dumps({
+        "status": "completed",
+        "result": {
+            "decision_id": work_id,
+            "epoch_id": payload["snapshot"]["epoch_id"],
+            "snapshot_watermark": payload["snapshot"]["watermark"],
+            "allocations": [{"node_id": dormant.node_id, "proposal_slots": 1}],
+            "rationale": "protect diversity",
+            "evidence_refs": [f"node:{dormant.node_id}"],
+            "integration_request": None,
+        },
+    }), encoding="utf-8")
+
+    jobs = scheduler._allocate_proposers(frontier)
+
+    assert len(jobs) == 1
+    assert submitter.proposers[0][1]["node_id"] == dormant.node_id
+    assert len(submitter.proposers[0][1]["proposal_ids"]) == 1
+
+
+def test_empty_supervisor_decision_is_not_repeated_for_same_snapshot(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    with store.transaction() as tx:
+        root = tx.create_node(
+            parent_node_id=None, experiment_id=None, sha="root", metrics={},
+            gate_result=_gate(), depth=0, status="active",
+        )
+        tx.create_episode(node_id=root.node_id)
+
+    class Submitter:
+        presumes_dead_on_startup = False
+
+        def __init__(self):
+            self.calls = []
+
+        def submit_supervisor(self, work_id, payload):
+            self.calls.append((work_id, payload))
+            return ""
+
+        def submit_proposer(self, work_id, payload):
+            raise AssertionError("empty decision must not allocate")
+
+        def submit_experiment(self, work_id, payload):
+            return ""
+
+    submitter = Submitter()
+    scheduler = Scheduler(
+        store, tmp_path,
+        SchedulerConfig(max_proposer_inflight=1, quiescence_window_proposals=1),
+        submitter=submitter,
+    )
+    frontier = Frontier({root.node_id}, {})
+    assert scheduler._allocate_proposers(frontier) == []
+    work_id, payload = submitter.calls[0]
+    path = tmp_path / "supervisor_decisions" / work_id / "result.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({
+        "status": "completed",
+        "result": {
+            "decision_id": work_id,
+            "epoch_id": payload["snapshot"]["epoch_id"],
+            "snapshot_watermark": payload["snapshot"]["watermark"],
+            "allocations": [],
+            "rationale": "no marginal work",
+            "evidence_refs": [],
+        },
+    }), encoding="utf-8")
+
+    assert scheduler._allocate_proposers(frontier) == []
+    assert scheduler._allocate_proposers(frontier) == []
+    assert len(submitter.calls) == 1
+    scheduler._step_count = 1
+    assert scheduler._quiescent() is True

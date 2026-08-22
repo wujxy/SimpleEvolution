@@ -48,6 +48,27 @@ class Reconciler:
         actions: list[ReconcileAction] = []
         actions.extend(self._reconcile_proposers())
         actions.extend(self._reconcile_experiments())
+        actions.extend(self._reconcile_supervisor())
+        return actions
+
+    def _reconcile_supervisor(self) -> list[ReconcileAction]:
+        actions = []
+        for attempt in self.store.running_attempts("supervisor"):
+            result_path = (
+                self.artifact_root / "supervisor_decisions"
+                / attempt.logical_work_id / "result.json"
+            )
+            if result_path.exists():
+                actions.append(ReconcileAction(
+                    kind="ingest_result",
+                    logical_work_id=attempt.logical_work_id,
+                    work_kind="supervisor",
+                    reason=f"supervisor result file exists: {result_path}",
+                ))
+            else:
+                actions.append(self._wait_or_retry(
+                    attempt.logical_work_id, "supervisor",
+                ))
         return actions
 
     def _reconcile_proposers(self) -> list[ReconcileAction]:
@@ -154,6 +175,8 @@ class Reconciler:
         if work_kind == "proposer":
             self.store.mark_proposer_infra_failed(
                 allocation_id=work_id, attempt_id=attempt.attempt_id)
-        else:
+        elif work_kind == "experiment":
             self.store.mark_experiment_infra_failed(
                 experiment_id=work_id, attempt_id=attempt.attempt_id)
+        else:
+            self.store.mark_attempt_failed(attempt.attempt_id)

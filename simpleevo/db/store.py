@@ -166,6 +166,7 @@ class ResearchStore:
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
             ResearchDBSchema.apply(conn)
+            self._migrate_attempt_kinds(conn)
             conn.commit()
 
             root = conn.execute(
@@ -178,6 +179,36 @@ class ResearchStore:
                     "INSERT INTO epochs VALUES (?, ?, NULL, ?)",
                     ("epoch-0", root["node_id"], time.time()),
                 )
+
+    @staticmethod
+    def _migrate_attempt_kinds(conn: sqlite3.Connection) -> None:
+        """Expand the old two-worker CHECK without discarding attempt history."""
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='attempts'"
+        ).fetchone()
+        if row is None or "'supervisor'" in (row["sql"] or ""):
+            return
+        conn.execute("""
+            CREATE TABLE attempts_v2 (
+                attempt_id TEXT PRIMARY KEY,
+                logical_work_id TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN (
+                    'proposer', 'experiment', 'supervisor', 'integrator'
+                )),
+                status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN (
+                    'ready', 'pending', 'running', 'succeeded', 'failed', 'lost'
+                )),
+                trace_ref TEXT, artifact_ref TEXT, host TEXT,
+                started_at REAL, finished_at REAL, created_at REAL NOT NULL
+            )
+        """)
+        conn.execute("INSERT INTO attempts_v2 SELECT * FROM attempts")
+        conn.execute("DROP TABLE attempts")
+        conn.execute("ALTER TABLE attempts_v2 RENAME TO attempts")
+        conn.execute(
+            "CREATE INDEX idx_attempts_work ON attempts(logical_work_id, kind)"
+        )
+        conn.execute("CREATE INDEX idx_attempts_status ON attempts(status)")
     @contextmanager
     def transaction(self, *, immediate: bool = False):
         """Context manager yielding a Transaction object."""
@@ -703,6 +734,10 @@ class ResearchStore:
         with self.transaction() as tx:
             tx.update_attempt_status(attempt_id=attempt_id, status="succeeded", finished_at=time.time())
 
+    def mark_attempt_failed(self, attempt_id: str) -> None:
+        with self.transaction() as tx:
+            tx.update_attempt_status(attempt_id=attempt_id, status="failed", finished_at=time.time())
+
     def mark_attempt_lost(self, attempt_id: str) -> None:
         with self.transaction() as tx:
             tx.update_attempt_status(attempt_id=attempt_id, status="lost", finished_at=time.time())
@@ -860,6 +895,15 @@ class ResearchStore:
                 (event_id, event_type, _json(payload), time.time()),
             )
         return event_id
+
+    def latest_scheduler_event(self, event_type: str) -> dict[str, Any] | None:
+        with self.transaction() as tx:
+            row = tx._conn.execute(
+                "SELECT payload FROM scheduler_events WHERE type = ? "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (event_type,),
+            ).fetchone()
+        return None if row is None else json.loads(row["payload"])
 
     def create_integration_request(
         self,

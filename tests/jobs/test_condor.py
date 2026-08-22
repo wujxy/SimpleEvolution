@@ -204,3 +204,19 @@ def test_proposer_and_experiment_share_layout(tmp_path, monkeypatch):
     assert (tmp_path / "experiments" / "exp-9" / "manifest.json").exists()
     assert (tmp_path / "proposer_allocations" / "alloc-9" / "manifest.json").exists()
     assert (tmp_path / "proposer_allocations" / "alloc-9" / "manifest.json").read_text().find('"kind": "proposer"') != -1
+
+
+def test_supervisor_uses_its_own_worker_artifact(tmp_path, monkeypatch):
+    submitter = HTCondorSubmitter(tmp_path, _config(), python="/usr/bin/python3")
+    _fake_submit(monkeypatch)
+
+    result_path = submitter.submit_supervisor("decision-1", {
+        "snapshot": {"epoch_id": "epoch-0", "watermark": "w"},
+        "proposer_capacity": 2,
+    })
+
+    work_dir = tmp_path / "supervisor_decisions" / "decision-1"
+    manifest = json.loads((work_dir / "manifest.json").read_text())
+    assert result_path == str(work_dir / "result.json")
+    assert manifest["kind"] == "supervisor"
+    assert "-m proposer.supervisor_cli" in (work_dir / "job.sh").read_text()

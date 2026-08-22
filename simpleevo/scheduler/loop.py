@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -13,7 +13,11 @@ from simpleevo.db.queries import ResearchQueries
 from simpleevo.generator import Generator, load_generator_basis, select_one_generator
 from simpleevo.jobs.base import BaseSubmitter
 from simpleevo.research_state import research_state_to_dict
-from proposer.supervisor import build_group_snapshot, validate_decision
+from proposer.supervisor import (
+    build_group_snapshot,
+    decision_from_dict,
+    validate_decision,
+)
 
 from .frontier import (
     FrontierConfig,
@@ -46,6 +50,8 @@ _EXPERIMENT_SCI_STATUS = {
     "GATE_REJECTED": "gate_rejected",
     "NO_CHANGE": "no_change",
 }
+
+_SUPERVISOR_WAITING = object()
 
 
 class Scheduler:
@@ -84,9 +90,11 @@ class Scheduler:
         if submitter is not None:
             self.submit_proposer = submitter.submit_proposer
             self.submit_experiment = submitter.submit_experiment
+            self.submit_supervisor = getattr(submitter, "submit_supervisor", None)
         else:
             self.submit_proposer = submit_proposer or (lambda _aid, _p: "")
             self.submit_experiment = submit_experiment or (lambda _eid, _p: "")
+            self.submit_supervisor = None
         self.clock = clock
         self.supervisor_decider = supervisor_decider
         # When True, ``step()`` stops allocating new proposers; in-flight work
@@ -264,6 +272,11 @@ class Scheduler:
                     {"error": str(exc)},
                 )
                 directives = None
+        elif self.submit_supervisor is not None:
+            outcome = self._supervisor_job_directives(capacity)
+            if outcome is _SUPERVISOR_WAITING:
+                return []
+            directives = outcome
 
         if directives is None:
             if not frontier.node_ids:
@@ -314,6 +327,86 @@ class Scheduler:
             )
             jobs.append(allocation.allocation_id)
         return jobs
+
+    def _supervisor_job_directives(self, capacity: int):
+        """Submit or ingest one stateless Supervisor worker.
+
+        While the worker is live no Frontier allocation competes with it.
+        Frontier becomes eligible only when that worker fails or its artifact
+        is invalid, preserving the designed primary/fallback relationship.
+        """
+        snapshot = build_group_snapshot(
+            self.store,
+            max_research_per_node=self._max_research_per_node(),
+            max_proposals_per_node=self._max_proposals_per_node(),
+        )
+        previous = self.store.latest_scheduler_event(
+            "supervisor_decision_accepted",
+        )
+        if (
+            previous is not None
+            and previous.get("snapshot_watermark") == snapshot.watermark
+            and not previous.get("allocations")
+        ):
+            return []
+        running = self.store.running_attempts("supervisor")
+        if running:
+            attempt = running[-1]
+            result_path = (
+                self.run_dir / "supervisor_decisions"
+                / attempt.logical_work_id / "result.json"
+            )
+            if not result_path.exists():
+                return _SUPERVISOR_WAITING
+            try:
+                raw = json.loads(result_path.read_text(encoding="utf-8"))
+                if raw.get("status") != "completed":
+                    raise ValueError(raw.get("error") or "supervisor worker failed")
+                decision = validate_decision(
+                    snapshot,
+                    decision_from_dict(raw.get("result", {})),
+                    proposer_capacity=capacity,
+                )
+            except Exception as exc:
+                self.store.mark_attempt_failed(attempt.attempt_id)
+                self.store.record_scheduler_event(
+                    "supervisor_fallback",
+                    {"decision_id": attempt.logical_work_id, "error": str(exc)},
+                )
+                self._archive_result(result_path, attempt.attempt_id)
+                return None
+            self.store.mark_attempt_succeeded(attempt.attempt_id)
+            directives = [
+                (item.node_id, item.proposal_slots)
+                for item in decision.allocations
+            ]
+            self.store.record_scheduler_event(
+                "supervisor_decision_accepted",
+                {
+                    "decision_id": decision.decision_id,
+                    "snapshot_watermark": snapshot.watermark,
+                    "allocations": [
+                        {"node_id": node_id, "proposal_slots": slots}
+                        for node_id, slots in directives
+                    ],
+                },
+            )
+            self._archive_result(result_path, attempt.attempt_id)
+            return directives
+
+        work_id = f"supervisor-{snapshot.watermark[:24]}"
+        attempt = self.store.record_attempt(
+            logical_work_id=work_id,
+            kind="supervisor",
+            status="running",
+            started_at=self.clock(),
+        )
+        self.submit_supervisor(work_id, {
+            "snapshot": asdict(snapshot),
+            "proposer_capacity": capacity,
+            "attempt_id": attempt.attempt_id,
+        })
+        return _SUPERVISOR_WAITING
 
     def _idle_episode_for_node(self, node_id: str):
         """Return a FRESH episode for ``node_id`` that has never run.
@@ -779,6 +872,8 @@ class Scheduler:
                     )
                     if self._ingest_experiment_result(action.logical_work_id, result_path):
                         ingested.append(action.logical_work_id)
+                # Supervisor artifacts are validated against the freshly built
+                # snapshot by _allocate_proposers later in this same step.
             elif action.kind == "reattach_or_wait":
                 self._resubmit_if_dead(action)
         return published, ingested
@@ -795,6 +890,27 @@ class Scheduler:
             self._resubmit_proposer(action.logical_work_id)
         elif action.work_kind == "experiment":
             self._resubmit_experiment(action.logical_work_id)
+        elif action.work_kind == "supervisor":
+            self._resubmit_supervisor(action.logical_work_id)
+
+    def _resubmit_supervisor(self, work_id: str) -> None:
+        if self.submit_supervisor is None or self.store.running_attempts("supervisor"):
+            return
+        manifest_path = (
+            self.run_dir / "supervisor_decisions" / work_id / "manifest.json"
+        )
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))["payload"]
+        except (OSError, KeyError, json.JSONDecodeError):
+            return
+        attempt = self.store.record_attempt(
+            logical_work_id=work_id,
+            kind="supervisor",
+            status="running",
+            started_at=self.clock(),
+        )
+        payload["attempt_id"] = attempt.attempt_id
+        self.submit_supervisor(work_id, payload)
 
     def _resubmit_proposer(self, allocation_id: str) -> None:
         allocation = self.store.get_allocation(allocation_id)
@@ -874,6 +990,7 @@ class Scheduler:
         return bool(
             self.store.running_attempts("proposer")
             or self.store.running_attempts("experiment")
+            or self.store.running_attempts("supervisor")
         )
 
     def _quiescent(self) -> bool:
@@ -881,6 +998,8 @@ class Scheduler:
         if self.store.running_attempts("proposer"):
             return False
         if self.store.running_attempts("experiment"):
+            return False
+        if self.store.running_attempts("supervisor"):
             return False
         if self.store.queued_proposals():
             return False
