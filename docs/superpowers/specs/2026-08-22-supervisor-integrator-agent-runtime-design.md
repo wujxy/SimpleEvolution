@@ -5,11 +5,11 @@
 SimpleEvolution 增加两个组织级研究角色，并把现有 Scientist 的通用对话循环
 抽取为可复用 Agent Runtime：
 
-- **Supervisor** 掌握整个课题组的客观实验版图，替代 Frontier 主导 proposer
-  资源分配，减少重复投入、保护真实差异，并判断何时启动阶段性统合；
+- **Supervisor** 掌握整个课题组的客观实验版图，独占正常路径的研究资源准入，
+  减少重复投入、保护真实差异，并判断何时启动阶段性统合；
 - **Scientist** 继续独立研究一个 Node，自主选择 `EXPLORE` 或 `SYNTHESIZE`；
-- **Integrator** 由 Supervisor 临时拉起，广泛调查被选中的阶段成果，只提交一个
-  integration proposal 或明确 abstain；
+- **Integrator** 是由 Supervisor 临时拉起的一次性、synthesis-only Scientist，广泛
+  调查被选中的阶段成果，只提交一个 integration proposal 或明确 abstain；
 - **Executor** 继续使用现有 `claude -p` 代码执行路径，不进入 Agent Runtime
   抽象；
 - **Scheduler** 仍是唯一持久化写入者和机械编排者，不承担语义科研判断。
@@ -71,7 +71,7 @@ Research Knowledge Exchange 已经让每个 Scientist 能发现跨 branch 的实
 
 - 让 Scientist 明确、自主地选择探索或综合，而不是把二者混进一个 proposal；
 - 让多个值得尝试的独立探索方向能够真正占用多个 proposal slot；
-- 用全局语义判断替代 measured-axis Frontier 的主资源分配职责；
+- 用全局语义判断完全替代 measured-axis Frontier 的正常资源准入职责；
 - 让相似 Node 竞争同一研究问题时只保留必要的代表继续消耗预算；
 - 让低绝对分数但机制独特、信息价值高的 Node 仍能获得研究资源；
 - 在多条 branch 均形成阶段性成果后，由独立 Integrator 尝试形成共同基线；
@@ -167,7 +167,9 @@ Supervisor 不得：
 
 ### 5.3 Integrator
 
-Integrator 是由 Supervisor 临时拉起的“主笔 Scientist”。它负责：
+Integrator 是由 Supervisor 临时拉起的一次性、synthesis-only“主笔 Scientist”。
+它复用 Scientist 的研究循环，但不是长期存在的第四种研究身份，也不拥有独立的长期
+memory、lineage 或工具体系。它负责：
 
 - 以一个 target Node 作为唯一实现基线；
 - 调查 Supervisor 指定的 donor Experiments 和相关 branch；
@@ -178,7 +180,8 @@ Integrator 是由 Supervisor 临时拉起的“主笔 Scientist”。它负责�
 - 只提交一个 integration proposal，或明确说明暂不可统合。
 
 Integrator 默认每次全新启动，不继承任一 donor 的私有 session，从而降低分支立场
-偏见。它可以广泛调查，但不能直接写目标源码，也不能宣布 epoch 晋升。
+偏见。它只能选择 `submit_synthesis` 或 abstain，不能在 integration request 中改做
+EXPLORE。它可以广泛调查，但不能直接写目标源码，也不能宣布 epoch 晋升。
 
 ### 5.4 Executor
 
@@ -203,6 +206,8 @@ Scheduler 继续承担纯机械职责：
 - 校验 Node、proposal id、donor、Gate 和预算约束；
 - 处理 attempt 重试、丢失恢复和 stale result；
 - 在 Supervisor 不可用或输出非法时使用旧 Frontier fallback；
+- 让合法 Scientist lease 或 integration request 发布的 queued Proposal 进入有界 FIFO
+  Executor queue，不再使用 Frontier 对它们进行二次否决；
 - 执行合法的 epoch promotion。
 
 Scheduler 不重新评价 Supervisor 的语义理由，也不替 Integrator 判断兼容性。
@@ -400,12 +405,19 @@ Scientist 指定研究操作。
 
 ### 8.5 Frontier 降级
 
-Frontier 不再决定 Node 是否获得 proposer capacity，只保留两个用途：
+Supervisor 是正常路径唯一的资源准入者：它授予 Node Scientist lease；由该 lease 的
+reserved proposal id 合法发布的 Proposal 已经完成准入，不需要 Frontier 在 Executor
+前再次审核。Executor queue 只保留 FIFO、容量上限和 overflow dormant 等机械背压，
+不能因为 Proposal parent 不在当前 Frontier 而把它转为 dormant。
+
+Frontier 只保留两个用途：
 
 - 用于资源集中和搜索健康度遥测；
 - 在 Supervisor job 失败、超时或输出非法时提供确定性 fallback。
 
 Fallback 只保证系统继续运行，不与有效 Supervisor decision 同时竞争资源。
+Fallback 产生的 lease 与 Supervisor lease 使用同一发布和 Executor queue 路径；
+Frontier 本身不直接决定 Proposal 是否执行。
 
 ## 9. Integration 与 Epoch
 
@@ -434,7 +446,9 @@ donor_experiment_ids
 selection_rationale
 ```
 
-- `target_node_id` 是唯一实现基线；
+- `target_node_id` 是唯一实现基线，其 Node SHA 同时决定 Integrator 的只读 workspace
+  和后续 Executor 的可写 experiment workspace；donor SHA 不参与 checkout，也不形成
+  Git merge parent；
 - donor 必须是 Gate 通过、拥有有效 Child Node 的已完成实现 Experiment；失败和负面
   Experiment 可以作为普通 evidence 引用，但不能伪装成待移植 donor；
 - donor 是 provenance，不是结构父节点；
@@ -459,8 +473,9 @@ abstain(reason)
 
 ### 9.4 Candidate epoch Node
 
-Executor 从 target Node 实现 integration proposal。成功 Experiment 创建普通 Child
-Node：
+Integrator 在 target Node SHA 的只读 workspace 中调查并形成 proposal；它不生成一个
+由多个 SHA 自动合成的中间世界。Executor 随后从同一 target Node SHA 创建新的可写
+workspace，实现 integration proposal。成功 Experiment 创建普通 Child Node：
 
 ```text
 target Node --structural parent--> candidate Node
@@ -684,13 +699,17 @@ Supervisor 的身份 prompt 必须明确：
 - 未选 Node 保留在 Archive，可被后续 decision 复活；
 - stale/非法 decision 被拒绝；
 - Supervisor failure 时 Frontier fallback 可继续分配；
+- Supervisor 选择的非 Frontier Node 所发布的合法 Proposal 仍能进入 Executor；
+- Frontier 不能把已通过 lease 准入的 queued Proposal 转为 dormant；
 - Supervisor 输出不能包含普通 Proposal 或 Scientist 技术指令。
 
 ### 15.4 Integrator 与 epoch
 
 - Integrator 能查看 target 和指定 donor 的公开材料，但不能查看 L3；
 - Integrator 每次新 request 使用新身份；
+- Integrator 是 synthesis-only Scientist，不能在 integration request 中切换到 EXPLORE；
 - Integrator 只输出一个 integration proposal 或 abstain；
+- Integrator 与执行其 Proposal 的 Executor 都从 request 的 target Node SHA 建立 workspace；
 - donor provenance 与 request 必须一致；
 - integration 仍通过普通 Executor、Eval 和 Gate；
 - Gate reject 不能晋升；
@@ -719,7 +738,8 @@ Supervisor 的身份 prompt 必须明确：
   operation，阶段统合增加独立 integration request；
 - “不存在 branch merge operation”改为：仍不存在直接 Git merge 或多父 Node，但允许
   Integrator 通过 Proposal -> Experiment 创建带 donor provenance 的综合 Child；
-- Frontier 从唯一资源选择器降级为统计视图和失败 fallback。
+- Frontier 从唯一资源选择器降级为统计视图和失败 fallback，并退出 Executor queue
+  的正常 Proposal 准入路径。
 
 以下边界保持不变：
 
@@ -738,7 +758,8 @@ Supervisor 的身份 prompt 必须明确：
 1. 抽取统一 Agent Runtime，并让 Scientist 等价迁移；
 2. 加入 EXPLORE / SYNTHESIZE 协议和 provenance；
 3. 加入 Supervisor decision、持久化和 Frontier fallback；
-4. 让 Supervisor 主导 proposer Node 选择；
+4. 让 Supervisor 独占正常 proposer Node 选择，并移除 Frontier 对已准入 Proposal 的
+   Executor 二次否决；
 5. 加入临时 Integrator role 和 integration request；
 6. 用现有 Executor 验证 integration proposal；
 7. 加入逻辑 epoch root 和 promotion；
@@ -751,13 +772,15 @@ Supervisor 的身份 prompt 必须明确：
 
 1. Scientist 自主选择 EXPLORE、SYNTHESIZE 或 abstain。
 2. Supervisor 选择 world 的资源资格，不替 Scientist 选择研究操作。
-3. Integrator 只提出一个统合实验，不直接实现或晋升。
+3. Integrator 是一次性 synthesis-only Scientist，只提出一个统合实验，不直接实现或
+   晋升，也不在统合任务中转做 EXPLORE。
 4. Executor 保持 `claude -p` 路径，不进入统一 Agent Runtime。
 5. Supervisor、Scientist、Integrator 复用同一通用对话循环，但使用独立 Role、工具、
    terminal protocol 和 session policy。
 6. Supervisor 和 Integrator 不读取 Scientist 私有 L3。
 7. Harness fact 与 LLM judgment 始终分层并带 provenance。
-8. Frontier 不再主导资源分配，只作为统计视图和 fallback。
+8. Frontier 只作为统计视图和失败 fallback；正常路径的 Scientist lease 与 Executor
+   Proposal 准入都由 Supervisor decision 派生。
 9. Supervisor decision 是有限 lease，不删除未选 Node。
 10. 普通 SYNTHESIZE 和 epoch integration 都必须通过新的 Experiment。
 11. integration candidate 只有一个 structural parent，donor 只形成 provenance DAG。
@@ -765,6 +788,8 @@ Supervisor 的身份 prompt 必须明确：
 13. epoch promotion 不改写历史 Tree；旧 branch 保留复活能力。
 14. 所有异步角色结果 identity-first、可幂等 ingest、可在 Scheduler restart 后恢复。
 15. Scheduler 保持唯一 SQLite writer 和实际 job orchestrator。
+16. Integrator 和执行其 Proposal 的 Executor 使用同一个 target Node SHA；donor 只提供
+    evidence 与 provenance，不自动改变 workspace 基线。
 
 ## 19. 最终原则
 
