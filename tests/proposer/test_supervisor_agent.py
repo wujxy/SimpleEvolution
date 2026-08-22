@@ -1,65 +1,195 @@
+"""Persistent growth-gate SupervisorAgent: tools, terminals, notebook."""
+from __future__ import annotations
+
 import json
+from collections import deque
+from pathlib import Path
 
 import pytest
 
 from proposer.model import ModelReply
 from proposer.supervisor import (
-    AllocationDirective,
-    GroupSnapshot,
-    SnapshotNode,
+    SUPERVISOR_PROMPT_VERSION,
     SupervisorAgent,
     SupervisorError,
+    load_supervisor_session,
 )
 
 
 class FakeModel:
-    def __init__(self, reply: dict):
-        self.reply = reply
+    """Scripted replies; the last one repeats if the loop asks for more."""
+
+    def __init__(self, replies: list[dict | str]):
+        self.replies = deque(replies)
 
     def complete(self, **kwargs):
-        return ModelReply(json.dumps(self.reply), {"completion_tokens": 3})
+        item = self.replies.popleft() if self.replies else {
+            "action": "list_nodes",
+        }
+        text = item if isinstance(item, str) else json.dumps(item)
+        return ModelReply(text, {"completion_tokens": 3})
 
 
-def _snapshot():
-    return GroupSnapshot(
-        epoch_id="epoch-0",
-        epoch_root_node_id="root",
-        watermark="watermark-1",
-        eligible_nodes=(
-            SnapshotNode("root", None, None, "abc", 0, "active", {"score": 1}),
-            SnapshotNode("branch", "root", "exp-1", "def", 1, "dormant", {"score": 2}),
-        ),
-    )
+def _batch(cursor_from: int = 0, cursor_to: int = 1) -> dict:
+    return {
+        "event_batch": {
+            "cursor_from": cursor_from,
+            "cursor_to": cursor_to,
+            "events": [{
+                "event_id": cursor_to,
+                "type": "root_ready",
+                "payload": {"root_node_id": "root"},
+            }],
+        },
+        "epoch": {"epoch_id": "epoch-0", "root_node_id": "root"},
+    }
 
 
-def test_supervisor_agent_uses_shared_runtime_to_return_typed_decision(tmp_path):
+def _tools():
+    class _Static:
+        def execute(self, action, **_):
+            return {"ok": True, "nodes": [
+                {"node_id": "root", "allocatable": True}]}
+
+    return _Static()
+
+
+def test_growth_turn_investigates_then_decides(tmp_path: Path):
+    session = load_supervisor_session(tmp_path)
     agent = SupervisorAgent(
-        model=FakeModel({
-            "action": "submit_supervisor_decision",
-            "decision_id": "decision-1",
-            "epoch_id": "epoch-0",
-            "snapshot_watermark": "watermark-1",
-            "allocations": [{"node_id": "branch", "proposal_slots": 2}],
-            "rationale": "Protect a distinct tested lineage.",
-            "evidence_refs": ["experiment:exp-1"],
-        }),
+        model=FakeModel([
+            {"action": "list_nodes"},
+            {"action": "submit_growth_decision",
+             "node_ids": ["root"], "rationale": "root deserves growth."},
+        ]),
         timeout_seconds=30,
-        max_steps=2,
+        max_steps=6,
     )
 
-    decision = agent.decide(_snapshot(), proposer_capacity=1, session_dir=tmp_path)
+    result = agent.resume(
+        session=session, tools=_tools(), batch=_batch(),
+        run_context={"goal": "make it fast"},
+    )
 
-    assert decision.allocations == (AllocationDirective("branch", 2),)
-    assert decision.snapshot_watermark == "watermark-1"
-    assert (tmp_path / "session.jsonl").exists()
+    assert result.decision_kind == "growth"
+    assert result.node_ids == ("root",)
+    assert result.rationale.startswith("root deserves")
+    assert session.meta["supervisor_turn"] == 1
+    assert (tmp_path / "supervisor" / "session" / "session.jsonl").exists()
 
 
-def test_supervisor_agent_rejects_technical_proposals():
+def test_notebook_checkpoint_persists_across_turns(tmp_path: Path):
+    session = load_supervisor_session(tmp_path)
+    first = SupervisorAgent(
+        model=FakeModel([
+            {"action": "submit_growth_decision", "node_ids": [],
+             "rationale": "wait."},
+            {"notebook": "Root is the only lineage; no evidence yet."},
+        ]),
+        timeout_seconds=30,
+        max_steps=4,
+    )
+    first.resume(session=session, tools=_tools(), batch=_batch())
+
+    assert "Root is the only lineage" in (
+        tmp_path / "supervisor" / "session" / "notebook.md").read_text()
+
+    second = SupervisorAgent(
+        model=FakeModel([
+            {"action": "submit_growth_decision", "node_ids": [],
+             "rationale": "still waiting."},
+        ]),
+        timeout_seconds=30,
+        max_steps=4,
+    )
+    second.resume(session=session, tools=_tools(), batch=_batch(1, 2))
+
+    assert session.meta["supervisor_turn"] == 2
+    archive = (
+        tmp_path / "supervisor" / "session" / "session.jsonl").read_text()
+    # Both wake-up batches are archived (quotes are escaped inside the
+    # archived JSON, so count the bare type name).
+    assert archive.count("root_ready") == 2
+    assert session.meta["prompt_version"] == SUPERVISOR_PROMPT_VERSION
+
+
+def test_growth_output_rejects_extra_fields(tmp_path: Path):
     agent = SupervisorAgent(
-        model=FakeModel({"action": "submit_proposals", "proposals": []}),
+        model=FakeModel([{
+            "action": "submit_growth_decision",
+            "node_ids": ["root"],
+            "rationale": "ok",
+            "proposal_slots": 2,
+        }]),
         timeout_seconds=30,
         max_steps=1,
     )
+    with pytest.raises(SupervisorError):
+        agent.resume(
+            session=load_supervisor_session(tmp_path), tools=_tools(),
+            batch=_batch(),
+        )
 
-    with pytest.raises(SupervisorError, match="protocol failed"):
-        agent.decide(_snapshot(), proposer_capacity=1)
+
+def test_integration_and_epoch_review_terminals(tmp_path: Path):
+    integrator = SupervisorAgent(
+        model=FakeModel([{
+            "action": "submit_integration_request",
+            "integration_request_id": "req-1",
+            "target_node_id": "root",
+            "donor_experiment_ids": ["exp-1"],
+            "selection_rationale": "branches matured",
+        }]),
+        timeout_seconds=30, max_steps=2,
+    )
+    result = integrator.resume(
+        session=load_supervisor_session(tmp_path / "a"),
+        tools=_tools(), batch=_batch(),
+    )
+    assert result.decision_kind == "integration_request"
+    assert result.detail["target_node_id"] == "root"
+
+    reviewer = SupervisorAgent(
+        model=FakeModel([{
+            "action": "submit_epoch_review",
+            "integration_request_id": "req-1",
+            "review": "promote",
+            "rationale": "candidate covers donors",
+        }]),
+        timeout_seconds=30, max_steps=2,
+    )
+    review = reviewer.resume(
+        session=load_supervisor_session(tmp_path / "b"),
+        tools=_tools(), batch=_batch(),
+    )
+    assert review.decision_kind == "epoch_review"
+    assert review.detail["review"] == "promote"
+
+
+def test_empty_selection_is_a_valid_wait(tmp_path: Path):
+    agent = SupervisorAgent(
+        model=FakeModel([{
+            "action": "submit_growth_decision", "node_ids": [],
+            "rationale": "siblings in flight; wait.",
+        }]),
+        timeout_seconds=30, max_steps=2,
+    )
+    result = agent.resume(
+        session=load_supervisor_session(tmp_path), tools=_tools(),
+        batch=_batch(),
+    )
+    assert result.decision_kind == "growth"
+    assert result.node_ids == ()
+
+
+def test_step_budget_exhaustion_is_an_error_not_a_default(tmp_path: Path):
+    agent = SupervisorAgent(
+        model=FakeModel([{"action": "list_nodes"}]),
+        timeout_seconds=30,
+        max_steps=2,
+    )
+    with pytest.raises(SupervisorError, match="step budget"):
+        agent.resume(
+            session=load_supervisor_session(tmp_path), tools=_tools(),
+            batch=_batch(),
+        )

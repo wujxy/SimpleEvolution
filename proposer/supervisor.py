@@ -1,8 +1,9 @@
-"""Stateless Supervisor contracts and objective group snapshot."""
+"""Supervisor contracts: the research tree's persistent growth gate."""
 from __future__ import annotations
 
 import hashlib
 import json
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,6 +14,14 @@ from simpleevo.db.store import ResearchStore
 
 from .agent_runtime import AgentRuntime
 from .research_agent import AgentError, ResearchAgent
+from .scientist import (
+    ContextPolicy,
+    _bump,
+    _compact_live_messages,
+    _estimate_tokens,
+    _prompt_tokens,
+)
+from .scientist_session import ScientistSession
 
 
 @dataclass(frozen=True)
@@ -191,35 +200,89 @@ class SupervisorTools:
         return {"ok": True, "nodes": rows}
 
 
-class _NoTools:
-    def execute(self, action, **kwargs):  # pragma: no cover - parser forbids it
-        raise SupervisorError(f"Supervisor has no tool action {action['action']!r}")
+SUPERVISOR_PROMPT_VERSION = "supervisor-v1"
 
 
-class _Session:
-    """Tiny append-only session used for audit, never reused as cognition."""
+def load_supervisor_session(
+    run_dir: Path,
+    *,
+    prompt_version: str = SUPERVISOR_PROMPT_VERSION,
+) -> "ScientistSession":
+    """One persistent growth-gate identity per run (design §5).
 
-    def __init__(self, directory: Path):
-        directory.mkdir(parents=True, exist_ok=True)
-        self.path = directory / "session.jsonl"
+    Reuses the Scientist continuity machinery: append-only session.jsonl,
+    a revisable notebook.md, and meta.json holding identity plus an audit
+    mirror of the authoritative (scheduler-side) event cursor.
+    """
+    session_dir = Path(run_dir) / "supervisor" / "session"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    return ScientistSession._load_from_dir(session_dir, prompt_version)
 
-    def append_message(self, role: str, content: str, *, round_id: int) -> None:
-        with self.path.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps({
-                "role": role, "content": content, "round": round_id,
-            }, ensure_ascii=False) + "\n")
+
+@dataclass(frozen=True)
+class SupervisorTurnResult:
+    """One committed judgment; identity and cursor come from the harness."""
+
+    decision_kind: str  # growth | integration_request | epoch_review
+    node_ids: tuple[str, ...] = ()
+    rationale: str = ""
+    detail: dict[str, Any] | None = None
+
+
+_COLD_START = (
+    "You are the Supervisor of this research tree, resumed for the first "
+    "time. The seed world (root Node) is ready, and you hold exclusive "
+    "authority over the tree's growth: every proposer lease in this run "
+    "exists only because you judged its Node worth one more opportunity to "
+    "be researched.\n"
+    "Investigate the public environment with your tools, then judge. "
+    "Selecting nothing is always available and sometimes right."
+)
+
+_SUPERVISOR_SUSPEND_PROMPT = (
+    "Your turn is ending. Rewrite your notebook — first person, as your own "
+    "revisable account of the research landscape: which lineages you funded "
+    "or refused and why, which look promising or exhausted, and what you are "
+    "waiting for. It is memory, not fact: the public research ledger always "
+    "wins where they disagree.\n"
+    'Return one JSON object: {"notebook": "<your notebook text>"}'
+)
 
 
 class SupervisorAgent(ResearchAgent):
-    """Stateless role that allocates attention without proposing code changes."""
+    """Persistent growth gate: investigates, then grants or withholds leases.
+
+    Woken only by evidence-change event batches; every resumption restores
+    the same logical identity via the shared session. The semantic output is
+    deliberately minimal — selected Node IDs and one rationale.
+    """
 
     _error_class = SupervisorError
     _protocol_reminder = (
-        "Return exactly one JSON submit_supervisor_decision object using the "
-        "supplied epoch_id and snapshot_watermark; never submit proposals."
+        "Return exactly one JSON object: submit_growth_decision "
+        "{node_ids, rationale} (empty node_ids waits), "
+        "submit_integration_request, or submit_epoch_review."
     )
+    _TERMINALS = (
+        "submit_growth_decision",
+        "submit_integration_request",
+        "submit_epoch_review",
+    )
+    _TOOL_ACTIONS = frozenset({
+        "inspect_node", "compare_nodes", "lineage", "search_experiments",
+        "inspect_experiment", "inspect_originating_research_state",
+        "list_nodes", "inspect_node_allocations", "inspect_run_status",
+    })
 
-    def __init__(self, *, model, timeout_seconds: int, max_steps: int = 3):
+    def __init__(
+        self,
+        *,
+        model,
+        timeout_seconds: int,
+        max_steps: int = 40,
+        context_policy: "ContextPolicy | None" = None,
+        usage_observer=None,
+    ):
         super().__init__(
             model=model,
             runtime=None,
@@ -227,80 +290,204 @@ class SupervisorAgent(ResearchAgent):
             max_steps=max_steps,
             command_timeout_seconds=0,
             command_output_cap_chars=0,
+            usage_observer=usage_observer,
         )
+        self._context_policy = context_policy or ContextPolicy()
 
     def _parse_action(self, text: str) -> list[dict]:
         try:
             action = json.loads(text)
         except (TypeError, json.JSONDecodeError) as exc:
             raise SupervisorError("invalid JSON") from exc
-        if not isinstance(action, dict) or action.get("action") != "submit_supervisor_decision":
-            raise SupervisorError("expected submit_supervisor_decision")
-        required = {
-            "decision_id", "epoch_id", "snapshot_watermark",
-            "allocations", "rationale", "evidence_refs",
-        }
-        missing = required - set(action)
-        if missing:
-            raise SupervisorError(f"missing decision fields: {sorted(missing)}")
-        if not isinstance(action["allocations"], list):
-            raise SupervisorError("allocations must be a list")
-        return [action]
+        if not isinstance(action, dict):
+            raise SupervisorError("action must be an object")
+        name = action.get("action")
+        if name in self._TOOL_ACTIONS:
+            return [action]
+        if name == "submit_growth_decision":
+            extra = set(action) - {"action", "node_ids", "rationale"}
+            if extra:
+                raise SupervisorError(
+                    "growth decision may contain only node_ids and rationale; "
+                    f"unexpected: {sorted(extra)}"
+                )
+            node_ids = action.get("node_ids")
+            if not isinstance(node_ids, list) or not all(
+                isinstance(item, str) and item for item in node_ids
+            ):
+                raise SupervisorError("node_ids must be a list of node ids")
+            if not str(action.get("rationale", "")).strip():
+                raise SupervisorError("rationale is required")
+            return [action]
+        if name == "submit_integration_request":
+            required = {
+                "integration_request_id", "target_node_id",
+                "donor_experiment_ids", "selection_rationale",
+            }
+            missing = required - set(action)
+            if missing:
+                raise SupervisorError(
+                    f"missing integration fields: {sorted(missing)}")
+            return [action]
+        if name == "submit_epoch_review":
+            if action.get("review") not in {"promote", "retain"}:
+                raise SupervisorError("epoch review must be promote or retain")
+            missing = {
+                "integration_request_id", "review", "rationale",
+            } - set(action)
+            if missing:
+                raise SupervisorError(
+                    f"missing epoch review fields: {sorted(missing)}")
+            return [action]
+        raise SupervisorError(
+            "expected a tool action or one of the three supervisor terminals")
 
-    def decide(
+    def resume(
         self,
-        snapshot: GroupSnapshot,
         *,
-        proposer_capacity: int,
-        session_dir: Path | None = None,
-    ) -> SupervisorDecision:
-        def run(directory: Path) -> SupervisorDecision:
-            payload = asdict(snapshot)
-            messages = [{"role": "user", "content": json.dumps({
-                "group_snapshot": payload,
-                "proposer_capacity": proposer_capacity,
-            }, ensure_ascii=False)}]
+        session: "ScientistSession",
+        tools: SupervisorTools,
+        batch: dict[str, Any],
+        run_context: dict[str, Any] | None = None,
+    ) -> SupervisorTurnResult:
+        """Run one wake-up turn over an incremental event batch."""
+        turn = int(session.meta.get("supervisor_turn") or 0) + 1
+        content = json.dumps(batch, ensure_ascii=False)
+        if session.is_first_round():
+            goal = str((run_context or {}).get("goal") or "").strip()
+            content = (
+                _COLD_START
+                + (f"\nResearch goal: {goal}" if goal else "")
+                + "\n\n" + content
+            )
+        messages = [{"role": "user", "content": content}]
+        session.append_message("user", content, round_id=turn)
+        system_prompt = self._build_system_prompt(session)
 
-            def terminal(action, state, usages, step, outcome):
-                if action is None:
-                    raise SupervisorError("Supervisor exhausted its step budget")
-                allocations = tuple(
-                    AllocationDirective(
-                        node_id=str(item["node_id"]),
-                        proposal_slots=int(item["proposal_slots"]),
-                    )
-                    for item in action["allocations"]
-                )
-                return SupervisorDecision(
-                    decision_id=str(action["decision_id"]),
-                    epoch_id=str(action["epoch_id"]),
-                    snapshot_watermark=str(action["snapshot_watermark"]),
-                    allocations=allocations,
+        def terminal(action, state, usages, step, outcome):
+            if action is None:
+                raise SupervisorError("Supervisor exhausted its step budget")
+            name = action["action"]
+            session.meta["supervisor_turn"] = turn
+            session.save_meta(round_id=turn)
+            if name == "submit_growth_decision":
+                return SupervisorTurnResult(
+                    decision_kind="growth",
+                    node_ids=tuple(str(item) for item in action["node_ids"]),
                     rationale=str(action["rationale"]),
-                    evidence_refs=tuple(str(ref) for ref in action["evidence_refs"]),
-                    integration_request=action.get("integration_request"),
-                    epoch_review=action.get("epoch_review"),
                 )
-
-            return AgentRuntime(self).run(
-                system_prompt=_supervisor_prompt(),
-                messages=messages,
-                session=_Session(directory),
-                current_round=0,
-                steps_budget=self.max_steps,
-                source_root=Path("."),
-                build_tools=lambda scratch, home: _NoTools(),
-                terminal_name="submit_supervisor_decision",
-                budget_nudge="Return submit_supervisor_decision now.",
-                handle_terminal=terminal,
-                compact=lambda messages, usages, state: None,
-                checkpoint=lambda *args, **kwargs: None,
+            if name == "submit_integration_request":
+                rationale = str(action["selection_rationale"])
+                return SupervisorTurnResult(
+                    decision_kind="integration_request",
+                    rationale=rationale,
+                    detail={
+                        "integration_request_id": str(
+                            action["integration_request_id"]),
+                        "target_node_id": str(action["target_node_id"]),
+                        "donor_experiment_ids": [
+                            str(item)
+                            for item in action["donor_experiment_ids"]
+                        ],
+                        "selection_rationale": rationale,
+                    },
+                )
+            return SupervisorTurnResult(
+                decision_kind="epoch_review",
+                rationale=str(action["rationale"]),
+                detail={
+                    "integration_request_id": str(
+                        action["integration_request_id"]),
+                    "review": str(action["review"]),
+                    "rationale": str(action["rationale"]),
+                },
             )
 
-        if session_dir is not None:
-            return run(Path(session_dir))
-        with TemporaryDirectory(prefix="simpleevo-supervisor-") as temporary:
-            return run(Path(temporary))
+        return AgentRuntime(self).run(
+            system_prompt=system_prompt,
+            messages=messages,
+            session=session,
+            current_round=turn,
+            steps_budget=self.max_steps,
+            source_root=Path("."),
+            build_tools=lambda scratch, home: tools,
+            terminal_name=self._TERMINALS,
+            budget_nudge=(
+                "Return your judgment now: submit_growth_decision, "
+                "submit_integration_request, or submit_epoch_review."
+            ),
+            handle_terminal=terminal,
+            compact=self._compact,
+            checkpoint=self._checkpoint,
+        )
+
+    def _build_system_prompt(self, session: "ScientistSession") -> str:
+        parts = [_supervisor_prompt(), SUPERVISOR_TOOL_CONTRACT]
+        if session.notebook.strip():
+            parts.append(
+                "## Your notebook (revisable autobiographical memory)\n\n"
+                "This is your own prior account, not an authoritative fact "
+                "source; the public research ledger wins whenever they "
+                "disagree.\n\n" + session.notebook.strip()
+            )
+        return "\n\n".join(parts)
+
+    def _compact(self, messages: list[dict], usages: list, state) -> None:
+        """Same live-context policy as the Scientist; archive untouched."""
+        policy = self._context_policy
+        threshold = policy.emergency_threshold_tokens
+        if threshold is None:
+            return
+        usage = usages[-1] if usages else None
+        tokens = _prompt_tokens(usage)
+        if tokens is None:
+            tokens = _estimate_tokens(messages)
+        if tokens <= threshold:
+            return
+        new_messages, info = _compact_live_messages(
+            messages,
+            window_pairs=policy.window_pairs,
+            window_max_chars=policy.window_max_chars,
+        )
+        if not info["compacted"]:
+            return
+        messages[:] = new_messages
+        _bump(state, "compact")
+
+    def _checkpoint(
+        self, system_prompt, messages, state, session, deadline, usages,
+        current_round, *, capture_expectations: bool = False,
+    ) -> None:
+        """Rewrite the notebook before suspension (best-effort)."""
+        remaining = deadline - time.monotonic()
+        if remaining <= 5:
+            return
+        prompt_messages = list(messages) + [{
+            "role": "user", "content": _SUPERVISOR_SUSPEND_PROMPT,
+        }]
+        try:
+            reply = self.model.complete(
+                system=system_prompt, messages=prompt_messages,
+                timeout_seconds=remaining,
+            )
+        except Exception as exc:
+            print(f"[supervisor] notebook checkpoint failed: {exc}",
+                  flush=True)
+            return
+        if reply.usage is not None:
+            usages.append(reply.usage)
+            if self.usage_observer is not None:
+                self.usage_observer(reply.usage)
+        try:
+            note = json.loads(reply.text).get("notebook")
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            note = None
+        if isinstance(note, str) and note.strip():
+            session.write_notebook(note.strip())
+            session.append_message(
+                "user", _SUPERVISOR_SUSPEND_PROMPT, round_id=current_round)
+            session.append_message(
+                "assistant", reply.text, round_id=current_round)
 
 
 def _supervisor_prompt() -> str:
