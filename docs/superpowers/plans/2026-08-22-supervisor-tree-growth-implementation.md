@@ -39,9 +39,9 @@
 - Produces tables: `supervisor_events(event_id PK AUTOINCREMENT, type, payload, created_at)`, `supervisor_cursor(consumer PK, last_consumed_event_id)`, `supervisor_decisions(decision_id PK, work_id, event_cursor_to, node_ids, rationale, outcome, created_at)`.
 - Produces store API: `emit_supervisor_event(type, payload) -> event_id`; `pending_supervisor_events() -> list`; `supervisor_event_head() -> int`; `commit_supervisor_decision(...)` — one transaction: CAS `head == cursor_to` (else raise `StaleDecision`), idempotent on existing `decision_id`, insert decision row, advance cursor, create proposer allocations, record `supervisor_decision_accepted`.
 
-- [ ] **Step 1: Failing store tests** — event order/durability, CAS rejects stale cursor, idempotent decision replay creates no duplicate leases, empty selection consumes the cursor
-- [ ] **Step 2: Implement schema + store API**
-- [ ] **Step 3: Focused suite green; commit** — `feat: durable supervisor wake events and decisions store`
+- [x] **Step 1: Failing store tests** — event order/durability, CAS rejects stale cursor, idempotent decision replay creates no duplicate leases, empty selection consumes the cursor
+- [x] **Step 2: Implement schema + store API**
+- [x] **Step 3: Focused suite green; commit** — `feat: durable supervisor wake events and decisions store`
 
 ### Task 3: Event emission points (M2)
 
@@ -63,10 +63,10 @@
 - Produces: `L2MemoryService.node_allocations(node_id)` and `L2MemoryService.run_status()` (mechanical facts only, no ranking).
 - Produces: `SupervisorTools` registry in `proposer/supervisor.py` exposing the nine read-only actions; `execute` never raises (`{"ok": False, ...}` failures).
 
-- [ ] **Step 1: Wire the six evidence tools** (`inspect_node`, `compare_nodes`, `lineage`, `search_experiments`, `inspect_experiment`, `inspect_originating_research_state` with its inspect-first gate)
-- [ ] **Step 2: Add the three global views** (`list_nodes` over all history with a mechanical allocatable flag, `inspect_node_allocations`, `inspect_run_status`)
-- [ ] **Step 3: Tool-contract text block** for the Supervisor prompt (self-contained, not mixed into Scientist specs)
-- [ ] **Step 4: Focused suite green; commit** — `feat: read-only supervisor investigation tools`
+- [x] **Step 1: Wire the six evidence tools** (`inspect_node`, `compare_nodes`, `lineage`, `search_experiments`, `inspect_experiment`, `inspect_originating_research_state` with its inspect-first gate)
+- [x] **Step 2: Add the three global views** (`list_nodes` over all history with a mechanical allocatable flag, `inspect_node_allocations`, `inspect_run_status`)
+- [x] **Step 3: Tool-contract text block** for the Supervisor prompt (self-contained, not mixed into Scientist specs)
+- [x] **Step 4: Focused suite green; commit** — `feat: read-only supervisor investigation tools`
 
 ### Task 5: Persistent SupervisorAgent (M4)
 
@@ -79,39 +79,39 @@
 - Produces: terminals `submit_growth_decision {node_ids, rationale}` / `submit_integration_request` / `submit_epoch_review`, mutually exclusive per turn, each consuming the batch.
 - Produces: `compact` from `ContextPolicy.from_config` + scientist.py compaction helpers; `checkpoint` = notebook rewrite model call on terminal and budget exhaustion.
 
-- [ ] **Step 1: Failing agent tests** — terminal contract rejects extra fields; notebook checkpoint writes; tool dispatch; session continuity across two turns
-- [ ] **Step 2: Implement; delete `_NoTools`, `decide()`, `GroupSnapshot`/watermark; keep `validate_integration_request`**
-- [ ] **Step 3: Rewrite `prompts/supervisor.md`** to the growth-gate identity (design §2)
-- [ ] **Step 4: Focused suite green; commit** — `feat: persistent tool-using supervisor agent`
+- [x] **Step 1: Failing agent tests** — terminal contract rejects extra fields; notebook checkpoint writes; tool dispatch; session continuity across two turns
+- [x] **Step 2: Implement; delete `_NoTools`, `decide()`, `GroupSnapshot`/watermark; keep `validate_integration_request`**
+- [x] **Step 3: Rewrite `prompts/supervisor.md`** to the growth-gate identity (design §2)
+- [x] **Step 4: Focused suite green; commit** — `feat: persistent tool-using supervisor agent`
 
 ### Task 6: Event-batch worker CLI (M5)
 
 **Files:**
 - Modify: `proposer/supervisor_cli.py`, tests
 
-- [ ] **Step 1: Payload becomes `{events, cursor_from, cursor_to, run_dir, researcher, agent_timeout_seconds, supervisor_steps, attempt_id}`; session loads from `run_dir/supervisor/session/`**
-- [ ] **Step 2: Result envelope `{decision_id, decision_kind, node_ids, rationale, event_cursor_to}`** with identity/cursor supplied by the harness
-- [ ] **Step 3: Focused suite green; commit** — `feat: event-batch supervisor worker with persistent session`
+- [x] **Step 1: Payload becomes `{events, cursor_from, cursor_to, run_dir, researcher, agent_timeout_seconds, supervisor_steps, attempt_id}`; session loads from `run_dir/supervisor/session/`**
+- [x] **Step 2: Result envelope `{decision_id, decision_kind, node_ids, rationale, event_cursor_to}`** with identity/cursor supplied by the harness
+- [x] **Step 3: Focused suite green; commit** — `feat: event-batch supervisor worker with persistent session` (landed together with Task 5 as one worker unit)
 
 ### Task 7: Scheduler gate rewiring (M6)
 
 **Files:**
 - Modify: `simpleevo/scheduler/loop.py`, `tests/scheduler/test_supervisor.py`, `tests/test_integration.py`, `tests/test_scheduler_reseed.py`, `tests/test_node_proposal_budget.py`
 
-- [ ] **Step 1: Remove the `supervisor_decider` injection and the in-process path**
-- [ ] **Step 2: Rewrite `_supervisor_job_directives` as `_run_supervisor_gate`** — submit when pending events exist and no worker is running (`work_id = supervisor-<head>`; same batch retries reuse the id); ingest → mechanical validation → `commit_supervisor_decision`; `StaleDecision` archives the artifact and records `supervisor_decision_stale` without consuming; invalid output records `supervisor_decision_rejected` and retries the same session; success creates leases via the existing creation block with config `proposal_slots`; empty selection consumes without leasing**
-- [ ] **Step 3: Bounded retries** — attempts per work id capped by config; exhaustion records `supervisor_stalled` once and stops resubmitting; `run()` returns `{"status": "stalled"}` instead of silently quiescing; step telemetry carries `supervisor_pending`**
-- [ ] **Step 4: Quiescence hardening** — in Supervisor mode `_quiescent()` additionally requires zero pending events and no stall; Frontier path remains only when `submit_supervisor is None` (explicit baseline mode)**
-- [ ] **Step 5: Focused + integration suites green; commit** — `feat: event-driven supervisor gate with no frontier fallback`
+- [x] **Step 1: Remove the `supervisor_decider` injection and the in-process path**
+- [x] **Step 2: Rewrite `_supervisor_job_directives` as `_run_supervisor_gate`** — submit when pending events exist and no worker is running (`work_id = supervisor-<head>`; same batch retries reuse the id); ingest → mechanical validation → `commit_supervisor_decision`; `StaleDecision` archives the artifact and records `supervisor_decision_stale` without consuming; invalid output records `supervisor_decision_rejected` and retries the same session; success creates leases via the existing creation block with config `proposal_slots`; empty selection consumes without leasing**
+- [x] **Step 3: Bounded retries** — attempts per work id capped by config; exhaustion records `supervisor_stalled` once and stops resubmitting; `run()` returns `{"status": "stalled"}` instead of silently quiescing; step telemetry carries `supervisor_pending`**
+- [x] **Step 4: Quiescence hardening** — in Supervisor mode `_quiescent()` additionally requires zero pending events and no stall; Frontier path remains only when `submit_supervisor is None` (explicit baseline mode)**
+- [x] **Step 5: Focused + integration suites green; commit** — `feat: event-driven supervisor gate with no frontier fallback`
 
 ### Task 8: Config and chore (M7)
 
 **Files:**
 - Modify: `simpleevo/config.py`, `tests/test_config.py`, `examples/xsbench_opt/task-supervisor.yaml`, `examples/xsbench_opt/task-supervisor-branch.yaml`, `README.md`, `scripts/run_supervisor_test.py`
 
-- [ ] **Step 1: `supervisor_steps: int = 40`, `supervisor_max_retries: int = 3`** with round-trip serialization tests
-- [ ] **Step 2: Update example headers (no fallback wording, new knobs), README supervisor description, driver event stream to the new event types**
-- [ ] **Step 3: Suite green; commit** — `chore: supervisor runtime knobs and docs`
+- [x] **Step 1: `supervisor_steps: int = 40`, `supervisor_max_retries: int = 3`** with round-trip serialization tests
+- [x] **Step 2: Update example headers (no fallback wording, new knobs), README supervisor description, driver event stream to the new event types**
+- [x] **Step 3: Suite green; commit** — `chore: supervisor runtime knobs and docs`
 
 ### Task 9: Invariant test matrix (M8)
 
@@ -119,13 +119,13 @@
 - Modify: `tests/scheduler/test_supervisor.py`, `tests/proposer/test_supervisor_agent.py`, `tests/test_integration.py`
 - Add: focused cases mapping one-to-one onto the design's 14 acceptance invariants
 
-- [ ] **Step 1: Invariants 1/2/12** — every lease links to a decision row; N worker failures produce zero Frontier leases, idle capacity, and `supervisor_stalled`
-- [ ] **Step 2: Invariants 3/13** — two wake-ups share identity/notebook; compaction keeps the archive append-only and resumes from notebook + new events
-- [ ] **Step 3: Invariants 4/5** — events durable before delivery; kill-and-restart redelivers the same batch; decision replay creates no duplicate leases
-- [ ] **Step 4: Invariants 6/7/8** — wake payload schema allowlist (no ranking); `list_nodes` sees parked/prior-epoch nodes; a historical node unrelated to the newest event may be selected
-- [ ] **Step 5: Invariants 9/10/11** — 0/1/N selections; no re-ask without new terminal events; empty selection waits with work in flight, quiesces without; pending events block quiescence
-- [ ] **Step 6: Invariant 14** — output contains only `node_ids` and `rationale`
-- [ ] **Step 7: Full suite green; commit** — `test: cover tree-growth supervisor invariants`
+- [x] **Step 1: Invariants 1/2/12** — every lease links to a decision row; N worker failures produce zero Frontier leases, idle capacity, and `supervisor_stalled`
+- [x] **Step 2: Invariants 3/13** — two wake-ups share identity/notebook; compaction keeps the archive append-only and resumes from notebook + new events
+- [x] **Step 3: Invariants 4/5** — events durable before delivery; kill-and-restart redelivers the same batch; decision replay creates no duplicate leases
+- [x] **Step 4: Invariants 6/7/8** — wake payload schema allowlist (no ranking); `list_nodes` sees parked/prior-epoch nodes; a historical node unrelated to the newest event may be selected
+- [x] **Step 5: Invariants 9/10/11** — 0/1/N selections; no re-ask without new terminal events; empty selection waits with work in flight, quiesces without; pending events block quiescence
+- [x] **Step 6: Invariant 14** — output contains only `node_ids` and `rationale`
+- [x] **Step 7: Full suite green; commit** — `test: cover tree-growth supervisor invariants`
 
 ## Verification
 
