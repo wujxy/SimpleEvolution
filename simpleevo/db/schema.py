@@ -35,6 +35,16 @@ class ResearchDBSchema:
                 "ALTER TABLE proposals ADD COLUMN donor_experiment_ids TEXT "
                 "NOT NULL DEFAULT '[]'"
             )
+        allocation_columns = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(proposer_allocations)"
+            ).fetchall()
+        }
+        if "decision_id" not in allocation_columns:
+            conn.execute(
+                "ALTER TABLE proposer_allocations ADD COLUMN decision_id TEXT"
+            )
 
 
 _DDL = """
@@ -243,4 +253,40 @@ CREATE TABLE IF NOT EXISTS scheduler_events (
 
 CREATE INDEX IF NOT EXISTS idx_events_type ON scheduler_events(type);
 CREATE INDEX IF NOT EXISTS idx_events_created ON scheduler_events(created_at);
+
+-- Supervisor wake events: durable evidence changes that resume the growth
+-- gate (tree-growth design §4).  Written before any notification; consumed
+-- only through the decision-commit transaction.
+CREATE TABLE IF NOT EXISTS supervisor_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL CHECK (type IN (
+        'root_ready', 'experiment_terminal', 'lease_terminal',
+        'goal_changed', 'budget_changed'
+    )),
+    payload TEXT NOT NULL DEFAULT '{}',
+    created_at REAL NOT NULL
+);
+
+-- Authoritative consumption cursor; advanced only inside
+-- commit_supervisor_decision.  Session meta.json mirrors it for audit.
+CREATE TABLE IF NOT EXISTS supervisor_cursor (
+    consumer TEXT PRIMARY KEY,
+    last_consumed_event_id INTEGER NOT NULL DEFAULT 0
+);
+
+-- One committed Supervisor judgment per wake batch (tree-growth design §8/§9).
+CREATE TABLE IF NOT EXISTS supervisor_decisions (
+    decision_id TEXT PRIMARY KEY,
+    work_id TEXT NOT NULL,
+    decision_kind TEXT NOT NULL DEFAULT 'growth'
+        CHECK (decision_kind IN ('growth', 'integration_request', 'epoch_review')),
+    event_cursor_to INTEGER NOT NULL,
+    node_ids TEXT NOT NULL DEFAULT '[]',
+    rationale TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT '{}',
+    created_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_supervisor_decisions_work
+    ON supervisor_decisions(work_id);
 """

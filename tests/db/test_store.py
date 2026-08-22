@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 
 from simpleevo.db.queries import ResearchQueries
-from simpleevo.db.store import GateDecision, GateResult, ResearchStore
+from simpleevo.db.store import (
+    GateDecision,
+    GateResult,
+    LeaseSpec,
+    ResearchStore,
+    StaleSupervisorDecision,
+)
 
 
 def _gate(passed: bool) -> GateDecision:
@@ -435,3 +441,155 @@ def test_integration_request_is_durable_and_idempotent(store: ResearchStore):
     assert request.status == "open"
     assert request.donor_experiment_ids == ("donor-a", "donor-b")
     assert store.get_integration_request("request-1") == request
+
+
+# ---------------------------------------------------------------------------
+# Supervisor wake events and growth decisions (tree-growth design §4/§9)
+# ---------------------------------------------------------------------------
+
+
+def _seed_root_episode(store: ResearchStore):
+    with store.transaction() as tx:
+        root = tx.create_node(
+            parent_node_id=None,
+            experiment_id=None,
+            sha="sup-root",
+            metrics={"total_ms": 1.0},
+            gate_result=_gate(True),
+            depth=0,
+            status="active",
+        )
+        episode = tx.create_episode(
+            inherited_from_episode_id=None,
+            node_id=root.node_id,
+        )
+    return root, episode
+
+
+def test_supervisor_events_are_ordered_and_durable(store: ResearchStore):
+    first = store.emit_supervisor_event("root_ready", {"root_node_id": "n1"})
+    second = store.emit_supervisor_event(
+        "experiment_terminal",
+        {"experiment_id": "e1", "status": "completed"},
+    )
+    assert second > first
+    assert store.supervisor_event_head() == second
+    assert store.supervisor_event_cursor() == 0
+
+    pending = store.pending_supervisor_events()
+    assert [item.event_id for item in pending] == [first, second]
+    assert pending[1].type == "experiment_terminal"
+    assert pending[1].payload["experiment_id"] == "e1"
+
+    reopened = ResearchStore(store.path)
+    assert reopened.supervisor_event_head() == second
+    assert len(reopened.pending_supervisor_events()) == 2
+
+
+def test_commit_growth_decision_consumes_cursor_and_creates_leases(
+    store: ResearchStore,
+):
+    root, episode = _seed_root_episode(store)
+    head = store.emit_supervisor_event("root_ready", {"root_node_id": root.node_id})
+
+    commit = store.commit_supervisor_decision(
+        decision_id="d1",
+        work_id=f"supervisor-{head}",
+        node_ids=[root.node_id],
+        rationale="root deserves a first lease",
+        cursor_to=head,
+        leases=[LeaseSpec(
+            node_id=root.node_id,
+            episode_id=episode.episode_id,
+            proposal_slots=2,
+        )],
+    )
+
+    assert commit.replayed is False
+    assert store.supervisor_event_cursor() == head
+    assert store.pending_supervisor_events() == []
+    (allocation,) = commit.allocations
+    assert allocation.node_id == root.node_id
+    assert len(allocation.reserved_proposal_ids) == 2
+    assert allocation.decision_id == "d1"
+    decision = store.get_supervisor_decision("d1")
+    assert decision["node_ids"] == [root.node_id]
+    assert decision["decision_kind"] == "growth"
+    accepted = store.latest_scheduler_event("supervisor_decision_accepted")
+    assert accepted["decision_id"] == "d1"
+
+
+def test_commit_rejects_stale_cursor_atomically(store: ResearchStore):
+    root, episode = _seed_root_episode(store)
+    head = store.emit_supervisor_event("root_ready", {"root_node_id": root.node_id})
+    store.emit_supervisor_event(
+        "experiment_terminal",
+        {"experiment_id": "e1", "status": "no_change"},
+    )
+
+    with pytest.raises(StaleSupervisorDecision):
+        store.commit_supervisor_decision(
+            decision_id="d1",
+            work_id=f"supervisor-{head}",
+            node_ids=[root.node_id],
+            rationale="stale",
+            cursor_to=head,
+            leases=[LeaseSpec(root.node_id, episode.episode_id, 1)],
+        )
+
+    assert store.get_supervisor_decision("d1") is None
+    assert store.supervisor_event_cursor() == 0
+    assert store.open_allocations() == []
+    assert len(store.pending_supervisor_events()) == 2
+
+
+def test_commit_is_idempotent_on_decision_id(store: ResearchStore):
+    root, episode = _seed_root_episode(store)
+    head = store.emit_supervisor_event("root_ready", {"root_node_id": root.node_id})
+    leases = [LeaseSpec(root.node_id, episode.episode_id, 1)]
+    first = store.commit_supervisor_decision(
+        decision_id="d1",
+        work_id=f"supervisor-{head}",
+        node_ids=[root.node_id],
+        rationale="once",
+        cursor_to=head,
+        leases=leases,
+    )
+
+    # A new event lands after the commit; re-delivering the same decision
+    # must be a no-op replay, not a stale rejection.
+    store.emit_supervisor_event(
+        "lease_terminal", {"allocation_id": "a1", "outcome": "abstain"})
+    second = store.commit_supervisor_decision(
+        decision_id="d1",
+        work_id=f"supervisor-{head}",
+        node_ids=[root.node_id],
+        rationale="once",
+        cursor_to=head,
+        leases=leases,
+    )
+
+    assert second.replayed is True
+    assert [a.allocation_id for a in second.allocations] == [
+        a.allocation_id for a in first.allocations
+    ]
+    assert len(store.open_allocations()) == 1
+
+
+def test_empty_growth_decision_consumes_cursor_without_leases(
+    store: ResearchStore,
+):
+    root, _ = _seed_root_episode(store)
+    head = store.emit_supervisor_event("root_ready", {"root_node_id": root.node_id})
+
+    commit = store.commit_supervisor_decision(
+        decision_id="d-wait",
+        work_id=f"supervisor-{head}",
+        node_ids=[],
+        rationale="wait for sibling evidence",
+        cursor_to=head,
+    )
+
+    assert commit.allocations == ()
+    assert store.supervisor_event_cursor() == head
+    assert store.open_allocations() == []

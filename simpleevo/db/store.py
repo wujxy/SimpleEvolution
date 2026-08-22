@@ -12,7 +12,7 @@ import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping, Sequence
 
 from simpleevo.research_state import CognitiveTransformation, ResearchState
 
@@ -150,6 +150,43 @@ class ProposerAllocation:
     started_at: float
     finished_at: float | None
     proposals_produced: int
+    decision_id: str | None = None
+
+
+@dataclass(frozen=True)
+class SupervisorEvent:
+    """One durable evidence change that may resume the growth gate."""
+
+    event_id: int
+    type: str
+    payload: dict[str, Any]
+    created_at: float
+
+
+@dataclass(frozen=True)
+class LeaseSpec:
+    """What the Scheduler turns one growth-decision node into."""
+
+    node_id: str
+    episode_id: str
+    proposal_slots: int = 1
+
+
+@dataclass(frozen=True)
+class SupervisorCommit:
+    decision_id: str
+    replayed: bool
+    allocations: tuple[ProposerAllocation, ...]
+
+
+class StaleSupervisorDecision(RuntimeError):
+    """New evidence arrived between decision and commit (design §9)."""
+
+    def __init__(self, head: int):
+        super().__init__(
+            f"supervisor decision is stale; event head moved to {head}"
+        )
+        self.head = head
 
 
 class ResearchStore:
@@ -573,43 +610,57 @@ class ResearchStore:
         the ids are issued here by the single writer and handed to the worker.
         """
         with self.transaction(immediate=True) as tx:
-            node = tx.get_node(node_id)
-            episode = tx.get_episode(episode_id)
-            if node is None:
-                raise ValueError(f"unknown node: {node_id}")
-            if episode is None or episode.node_id != node_id:
-                raise ValueError("episode belongs to another node")
-            published = tx._conn.execute(
-                "SELECT COUNT(*) FROM proposals WHERE node_id = ?",
-                (node_id,),
-            ).fetchone()[0]
-            open_rows = tx._conn.execute(
-                "SELECT reserved_proposal_ids FROM proposer_allocations "
-                "WHERE node_id = ? AND finished_at IS NULL",
-                (node_id,),
-            ).fetchall()
-            open_reserved = sum(
-                len(_unjson(row["reserved_proposal_ids"])) for row in open_rows
+            return self._allocate_on_tx(
+                tx,
+                LeaseSpec(node_id, episode_id, proposal_slots),
+                max_proposals_per_node,
             )
-            remaining = max(
-                0, max_proposals_per_node - published - open_reserved,
-            )
-            reserved_count = min(max(0, proposal_slots), remaining)
-            if reserved_count == 0:
-                return None
-            now = time.time()
-            allocation = ProposerAllocation(
-                allocation_id=_new_id(),
-                node_id=node_id,
-                episode_id=episode_id,
-                reserved_proposal_ids=tuple(
-                    _new_id() for _ in range(reserved_count)
-                ),
-                started_at=now,
-                finished_at=None,
-                proposals_produced=0,
-            )
-            tx.create_allocation(allocation)
+
+    def _allocate_on_tx(
+        self,
+        tx: "_Transaction",
+        spec: LeaseSpec,
+        max_proposals_per_node: int,
+        decision_id: str | None = None,
+    ) -> ProposerAllocation | None:
+        node = tx.get_node(spec.node_id)
+        episode = tx.get_episode(spec.episode_id)
+        if node is None:
+            raise ValueError(f"unknown node: {spec.node_id}")
+        if episode is None or episode.node_id != spec.node_id:
+            raise ValueError("episode belongs to another node")
+        published = tx._conn.execute(
+            "SELECT COUNT(*) FROM proposals WHERE node_id = ?",
+            (spec.node_id,),
+        ).fetchone()[0]
+        open_rows = tx._conn.execute(
+            "SELECT reserved_proposal_ids FROM proposer_allocations "
+            "WHERE node_id = ? AND finished_at IS NULL",
+            (spec.node_id,),
+        ).fetchall()
+        open_reserved = sum(
+            len(_unjson(row["reserved_proposal_ids"])) for row in open_rows
+        )
+        remaining = max(
+            0, max_proposals_per_node - published - open_reserved,
+        )
+        reserved_count = min(max(0, spec.proposal_slots), remaining)
+        if reserved_count == 0:
+            return None
+        now = time.time()
+        allocation = ProposerAllocation(
+            allocation_id=_new_id(),
+            node_id=spec.node_id,
+            episode_id=spec.episode_id,
+            reserved_proposal_ids=tuple(
+                _new_id() for _ in range(reserved_count)
+            ),
+            started_at=now,
+            finished_at=None,
+            proposals_produced=0,
+            decision_id=decision_id,
+        )
+        tx.create_allocation(allocation)
         return allocation
 
     def deallocate_proposer(
@@ -908,6 +959,167 @@ class ResearchStore:
                 (event_type,),
             ).fetchone()
         return None if row is None else json.loads(row["payload"])
+
+    # ------------------------------------------------------------------
+    # Supervisor growth gate: wake events, cursor, decisions (§4/§9)
+    # ------------------------------------------------------------------
+
+    def emit_supervisor_event(self, event_type: str, payload: dict[str, Any]) -> int:
+        """Persist one evidence change before any notification happens."""
+        with self.transaction() as tx:
+            cursor = tx._conn.execute(
+                "INSERT INTO supervisor_events (type, payload, created_at) "
+                "VALUES (?, ?, ?)",
+                (event_type, _json(payload), time.time()),
+            )
+            return int(cursor.lastrowid)
+
+    def supervisor_event_head(self) -> int:
+        return int(self._with_conn(lambda conn: conn.execute(
+            "SELECT COALESCE(MAX(event_id), 0) FROM supervisor_events"
+        ).fetchone()[0]))
+
+    def supervisor_event_cursor(self, consumer: str = "supervisor") -> int:
+        row = self._with_conn(lambda conn: conn.execute(
+            "SELECT last_consumed_event_id FROM supervisor_cursor "
+            "WHERE consumer = ?",
+            (consumer,),
+        ).fetchone())
+        return 0 if row is None else int(row[0])
+
+    def pending_supervisor_events(self) -> list[SupervisorEvent]:
+        cursor = self.supervisor_event_cursor()
+        rows = self._with_conn(lambda conn: conn.execute(
+            "SELECT * FROM supervisor_events WHERE event_id > ? "
+            "ORDER BY event_id",
+            (cursor,),
+        ).fetchall())
+        return [
+            SupervisorEvent(
+                event_id=int(row["event_id"]),
+                type=row["type"],
+                payload=_unjson(row["payload"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def get_supervisor_decision(self, decision_id: str) -> dict[str, Any] | None:
+        row = self._with_conn(lambda conn: conn.execute(
+            "SELECT * FROM supervisor_decisions WHERE decision_id = ?",
+            (decision_id,),
+        ).fetchone())
+        if row is None:
+            return None
+        return {
+            "decision_id": row["decision_id"],
+            "work_id": row["work_id"],
+            "decision_kind": row["decision_kind"],
+            "event_cursor_to": int(row["event_cursor_to"]),
+            "node_ids": _unjson(row["node_ids"]),
+            "rationale": row["rationale"],
+            "detail": _unjson(row["detail"]),
+            "created_at": row["created_at"],
+        }
+
+    def commit_supervisor_decision(
+        self,
+        *,
+        decision_id: str,
+        work_id: str,
+        decision_kind: str = "growth",
+        node_ids: Sequence[str] = (),
+        rationale: str = "",
+        detail: Mapping[str, Any] | None = None,
+        cursor_to: int,
+        leases: Sequence[LeaseSpec] = (),
+        max_proposals_per_node: int = 9,
+    ) -> SupervisorCommit:
+        """Apply one Supervisor judgment in a single transaction (design §9).
+
+        The event cursor is consumed only here, atomically with the decision
+        row and any proposer leases.  Re-delivering an already-committed
+        ``decision_id`` is a no-op replay (retries never duplicate leases).
+        Raises :class:`StaleSupervisorDecision` when new evidence landed
+        between the decision and this commit; nothing is partially applied.
+        """
+        ids = list(node_ids)
+        self._validate_unique_ids(ids, "node_ids")
+        with self.transaction(immediate=True) as tx:
+            existing = tx._conn.execute(
+                "SELECT decision_id FROM supervisor_decisions "
+                "WHERE decision_id = ?",
+                (decision_id,),
+            ).fetchone()
+            if existing is not None:
+                rows = tx._conn.execute(
+                    "SELECT * FROM proposer_allocations WHERE decision_id = ? "
+                    "ORDER BY started_at, allocation_id",
+                    (decision_id,),
+                ).fetchall()
+                return SupervisorCommit(
+                    decision_id=decision_id,
+                    replayed=True,
+                    allocations=tuple(
+                        _proposer_allocation_from_row(row) for row in rows
+                    ),
+                )
+            head = int(tx._conn.execute(
+                "SELECT COALESCE(MAX(event_id), 0) FROM supervisor_events"
+            ).fetchone()[0])
+            if head != cursor_to:
+                raise StaleSupervisorDecision(head)
+            tx._conn.execute(
+                "INSERT INTO supervisor_decisions "
+                "(decision_id, work_id, decision_kind, event_cursor_to, "
+                " node_ids, rationale, detail, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    decision_id,
+                    work_id,
+                    decision_kind,
+                    cursor_to,
+                    _json(ids),
+                    rationale,
+                    _json(dict(detail or {})),
+                    time.time(),
+                ),
+            )
+            created = tuple(
+                allocation
+                for allocation in (
+                    self._allocate_on_tx(
+                        tx, spec, max_proposals_per_node, decision_id
+                    )
+                    for spec in leases
+                )
+                if allocation is not None
+            )
+            tx._conn.execute(
+                "INSERT OR REPLACE INTO supervisor_cursor "
+                "(consumer, last_consumed_event_id) VALUES ('supervisor', ?)",
+                (cursor_to,),
+            )
+            tx._conn.execute(
+                "INSERT INTO scheduler_events "
+                "(event_id, type, payload, created_at) VALUES (?, ?, ?, ?)",
+                (
+                    _new_id(),
+                    "supervisor_decision_accepted",
+                    _json({
+                        "decision_id": decision_id,
+                        "decision_kind": decision_kind,
+                        "node_ids": ids,
+                        "event_cursor_to": cursor_to,
+                    }),
+                    time.time(),
+                ),
+            )
+        return SupervisorCommit(
+            decision_id=decision_id,
+            replayed=False,
+            allocations=created,
+        )
 
     def create_integration_request(
         self,
@@ -1456,8 +1668,8 @@ class _Transaction:
             """
             INSERT INTO proposer_allocations
             (allocation_id, node_id, episode_id, reserved_proposal_ids,
-             started_at, finished_at, proposals_produced)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+             started_at, finished_at, proposals_produced, decision_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 allocation.allocation_id,
@@ -1467,6 +1679,7 @@ class _Transaction:
                 allocation.started_at,
                 allocation.finished_at,
                 allocation.proposals_produced,
+                allocation.decision_id,
             ),
         )
 
@@ -1606,6 +1819,7 @@ def _proposer_allocation_from_row(row: sqlite3.Row) -> ProposerAllocation:
         started_at=row["started_at"],
         finished_at=row["finished_at"],
         proposals_produced=row["proposals_produced"],
+        decision_id=row["decision_id"],
     )
 
 
