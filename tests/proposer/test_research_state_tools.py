@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from proposer.cognitive_transformer import CognitiveTransformer
-from proposer.cli import _proposal_to_dict, _result_to_dict
+from proposer.cli import _enrich_proposals, _proposal_to_dict, _result_to_dict
 from proposer.model import ModelReply
 from proposer.research_agent import (
     WorkingState, _build_telemetry, _build_trace, _register_evidence,
@@ -350,6 +350,56 @@ def test_one_registered_state_can_submit_two_proposals(tmp_path):
         state_id,
         state_id,
     ]
+
+
+def test_explore_and_synthesis_terminal_actions_are_distinct(tmp_path):
+    state = WorkingState()
+    state_id = _tools(tmp_path).execute(
+        {"action": "register_research_state", "working_model": "model"},
+        deadline=time.monotonic() + 10,
+        working_state=state,
+    )["research_state_id"]
+    explore = parse_response(json.dumps({
+        "action": "submit_explorations",
+        "proposals": [_proposal_payload(state_id, "Try mechanism A.")],
+    }), proposal_slots=2)
+    assert explore["operation"] == "explore"
+    assert explore["action"] == "submit_proposals"
+
+    synthesis = parse_response(json.dumps({
+        "action": "submit_synthesis",
+        "proposal": _proposal_payload(state_id, "Port donor result."),
+        "donor_experiment_ids": ["exp-1"],
+    }), proposal_slots=2)
+    assert synthesis["operation"] == "synthesize"
+    assert synthesis["donor_experiment_ids"] == ("exp-1",)
+    assert _validate_action_guard(state, [synthesis], Path(".")) == "uninspected_donor"
+
+
+def test_synthesis_rejects_multiple_proposals():
+    with pytest.raises(ProposerError, match="proposal"):
+        parse_response(json.dumps({
+            "action": "submit_synthesis",
+            "proposals": [_proposal_payload("rs-1", "A")],
+            "donor_experiment_ids": ["exp-1"],
+        }), proposal_slots=2)
+
+
+def test_synthesis_metadata_reaches_proposal_artifact():
+    proposal = parse_response(json.dumps({
+        "action": "submit_synthesis",
+        "proposal": _proposal_payload("rs-1", "Port donor result."),
+        "donor_experiment_ids": ["exp-1"],
+    }), proposal_slots=1)["proposals"][0]
+
+    artifact = _enrich_proposals(
+        (proposal,), ["prop-1"],
+        research_operation="synthesize",
+        donor_experiment_ids=("exp-1",),
+    )[0]
+
+    assert artifact["research_operation"] == "synthesize"
+    assert artifact["donor_experiment_ids"] == ["exp-1"]
 
 
 def test_worker_result_serializes_cognitive_records_and_proposal_linkage():

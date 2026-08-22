@@ -493,6 +493,14 @@ class ResearchStore:
                     raise ValueError(
                         "proposal research state belongs to another node or episode"
                     )
+                operation = raw.get("research_operation")
+                donors = tuple(raw.get("donor_experiment_ids", ()))
+                if operation == "explore" and donors:
+                    raise ValueError("explore proposals cannot name donors")
+                if operation == "synthesize" and not donors:
+                    raise ValueError("synthesize proposals require donors")
+                if operation not in {None, "explore", "synthesize"}:
+                    raise ValueError("unknown research operation")
                 proposal = tx.create_proposal(Proposal(
                     proposal_id=proposal_id,
                     node_id=node_id,
@@ -502,6 +510,8 @@ class ResearchStore:
                     status="queued",
                     created_at=now,
                     research_state_id=state_id,
+                    research_operation=operation,
+                    donor_experiment_ids=donors,
                 ))
                 created.append(proposal)
             tx.update_episode_last_active(episode_id, now)

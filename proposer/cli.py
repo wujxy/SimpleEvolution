@@ -101,7 +101,13 @@ def _result_to_dict(result, proposals_with_meta) -> dict:
     }
 
 
-def _proposal_to_dict(proposal, proposal_id: str) -> dict:
+def _proposal_to_dict(
+    proposal,
+    proposal_id: str,
+    *,
+    research_operation: str | None = None,
+    donor_experiment_ids: tuple[str, ...] = (),
+) -> dict:
     """Serialize a ResearchProposal and attach its L2 identity (proposal_id)."""
     target: dict = {}
     rt = proposal.research_target
@@ -116,6 +122,8 @@ def _proposal_to_dict(proposal, proposal_id: str) -> dict:
         }
     return {
         "proposal_id": proposal_id,
+        "research_operation": research_operation,
+        "donor_experiment_ids": list(donor_experiment_ids),
         "research_state_id": proposal.research_state_id,
         "instruction": proposal.instruction,
         "rationale": {
@@ -129,7 +137,13 @@ def _proposal_to_dict(proposal, proposal_id: str) -> dict:
     }
 
 
-def _enrich_proposals(proposals: tuple, proposal_ids: list[str]) -> list[dict]:
+def _enrich_proposals(
+    proposals: tuple,
+    proposal_ids: list[str],
+    *,
+    research_operation: str | None = None,
+    donor_experiment_ids: tuple[str, ...] = (),
+) -> list[dict]:
     """Attach the Scheduler-issued proposal_ids to the proposals."""
     if len(proposal_ids) < len(proposals):
         raise ValueError(
@@ -137,7 +151,12 @@ def _enrich_proposals(proposals: tuple, proposal_ids: list[str]) -> list[dict]:
             f"{len(proposals)} proposals"
         )
     return [
-        _proposal_to_dict(proposal, proposal_id)
+        _proposal_to_dict(
+            proposal,
+            proposal_id,
+            research_operation=research_operation,
+            donor_experiment_ids=donor_experiment_ids,
+        )
         for proposal, proposal_id in zip(proposals, proposal_ids)
     ]
 
@@ -260,7 +279,11 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeError(
                 result.abstain_reason or "proposer episode errored")
         proposals_with_meta = _enrich_proposals(
-            result.proposals, proposal_ids)
+            result.proposals,
+            proposal_ids,
+            research_operation=result.research_operation,
+            donor_experiment_ids=result.donor_experiment_ids,
+        )
     except Exception as exc:
         status = "failed"
         error = str(exc)

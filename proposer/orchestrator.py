@@ -47,6 +47,8 @@ class LaneResult:
     abstain_reason: str | None = None
     deliberation_telemetry: dict = field(default_factory=dict)
     trace: dict = field(default_factory=dict)
+    research_operation: str | None = None
+    donor_experiment_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,8 @@ class EpisodeResult:
     trace: dict = field(default_factory=dict)
     research_states: tuple[ResearchState, ...] = ()
     transformations: tuple[CognitiveTransformation, ...] = ()
+    research_operation: str | None = None
+    donor_experiment_ids: tuple[str, ...] = ()
 
 
 def _safe_save_meta(
@@ -200,6 +204,8 @@ class ProposerOrchestrator:
             abstained=False,
             deliberation_telemetry=self._telemetry([lane_result], elapsed),
             trace=self._lane_trace([lane_result]),
+            research_operation=lane_result.research_operation,
+            donor_experiment_ids=lane_result.donor_experiment_ids,
         )
 
     def run_lane_episode(
@@ -309,6 +315,8 @@ class ProposerOrchestrator:
             trace=result.trace,
             research_states=result.research_states,
             transformations=result.transformations,
+            research_operation=result.research_operation,
+            donor_experiment_ids=result.donor_experiment_ids,
         )
 
     def _run_lane(
@@ -368,6 +376,8 @@ class ProposerOrchestrator:
             abstain_reason=result.abstain_reason,
             deliberation_telemetry=result.deliberation_telemetry,
             trace=result.trace,
+            research_operation=result.research_operation,
+            donor_experiment_ids=result.donor_experiment_ids,
         )
 
     def run_self_review(

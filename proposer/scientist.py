@@ -99,6 +99,8 @@ class ProposerResult:
     abstain_blocking_unknown: str | None = None
     deliberation_telemetry: dict = field(default_factory=dict)
     trace: dict = field(default_factory=dict)
+    research_operation: str | None = None
+    donor_experiment_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,8 @@ class ScientistRound:
     trace: dict = field(default_factory=dict)
     research_states: tuple[ResearchState, ...] = ()
     transformations: tuple[CognitiveTransformation, ...] = ()
+    research_operation: str | None = None
+    donor_experiment_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -433,10 +437,10 @@ A batch's actions run sequentially in one step and all their results return \
 together as one {"tool_results": [...]} message — reach for it when you have \
 several independent lookups (reads, greps, globs) so each costs no turn of \
 its own. A single action's result arrives in the same {"tool_results": [...]} \
-shape with one entry. submit_proposals is always sent ALONE as a single \
-action object, never inside a batch.
+shape with one entry. submit_explorations, submit_synthesis, and abstain are \
+always sent ALONE as a single action object, never inside a batch.
 
-- "action" (required): one research tool call, OR submit_proposals.
+- "action" (required): one research tool call, OR one terminal action.
 - "message" (optional): natural text you choose to leave in your own research
   trajectory — what you might say aloud while working. It is NOT required and
   NOT a substitute for acting; if you have nothing to add, omit it. It is
@@ -450,8 +454,9 @@ register a state or submit a Proposal for you. Prefer breadth across viable
 ResearchStates before spending multiple Proposals under one state, but submit
 every materially distinct experiment worth its cost and never pad a quota.
 
-Control action (the only non-tool action):
-- {"action":"submit_proposals","proposals":[
+Terminal actions (choose exactly one research operation):
+- EXPLORE expands the tested mechanism space:
+  {"action":"submit_explorations","proposals":[
     {"research_state_id":"rs-...","instruction":"...",
      "expectation":"observable outcome expected from the experiment",
      "research_target":{"mode":"existing","finding_id":"F-NNN"}
@@ -459,24 +464,36 @@ Control action (the only non-tool action):
                          "mechanisms":[...],"code_regions":[...]},
      "evidence_refs":["source:src/foo.cc:FunctionName"],
      "material_difference":"..."}]}
-  Submit the directions you believe are worth an experiment. You may submit
-  between 0 and {n} proposals. {n} is exploitable research capacity — NOT a
-  quota to fill and NOT a reward to hoard: submit every direction you judge
-  worth its execution cost, neither padding to fill the slots nor withholding a
-  worthwhile bet. Submitting 0 (with a reason in "message") is an honest
-  abstention when you currently see nothing worth the compute; a single
-  well-considered direction is legitimate; several distinct directions worth
-  testing in parallel are equally legitimate. When you submit more than one,
-  spend the slots as BREADTH, not repetition: target different mechanisms,
-  code regions, or hypotheses so the tree explores widely. If two proposals
-  would converge on the same function with the same change, they are one
-  proposal — keep them apart or drop one. You are the only Scientist on this
-  Node, so the search's diversity rests on you spreading your bets across
-  genuinely distinct directions. The instruction states WHAT to
-  try and WHY you think it may move the goal; the executor reads the real code
-  and decides the concrete implementation, so you need not reach line-level
-  detail. evidence_refs and material_difference are optional; research_state_id
-  and expectation are required for each Proposal.
+  Submit 1 to {n} proposals. Every mechanism or causal direction in your
+  ResearchState that you judge worth testing should occupy its own slot. When
+  you submit more than one, spend the slots as BREADTH, not repetition: target
+  different mechanisms, code regions, or hypotheses. A direct port of an
+  already validated implementation is not EXPLORE. If two proposals
+  are merely variants of the same bet, keep the stronger one.
+
+- SYNTHESIZE brings inspected, validated branch results into this world:
+  {"action":"submit_synthesis","proposal":
+    {"research_state_id":"rs-...","instruction":"...",
+     "expectation":"...","research_target":{...},
+     "evidence_refs":["experiment:..."],
+     "material_difference":"..."},
+   "donor_experiment_ids":["exp-..."]}
+  Submit exactly one proposal and name every donor Experiment. Necessary glue
+  and compatibility adaptation are allowed; an unrelated new optimization
+  mechanism is not. A validated result may be combined with your current
+  world, but it must not replace a distinct exploratory direction you still
+  judge worth testing in a later EXPLORE episode. If the donors are not
+  compatible, abstain rather than forcing a combination.
+
+- {"action":"abstain","reason":"...","blocking_unknown":"...optional..."}
+  Use this when no experiment is currently worth its execution cost.
+
+You are the only Scientist on this Node, so the search's diversity rests on
+you spreading EXPLORE bets across genuinely distinct directions. Proposal
+instructions state WHAT to try and WHY it may move the goal; the executor reads
+the real code and decides the concrete implementation. evidence_refs and
+material_difference are optional; research_state_id and expectation are
+required for every Proposal.
 """
 
 _RUNTIME_BOUNDARIES = """Runtime boundaries:
@@ -531,7 +548,8 @@ def _build_research_start_messages(
 _BUDGET_NUDGE = (
     "Your research turn is nearing its computation budget. If you have "
     "directions you currently believe are worth an experiment, submit them now "
-    "via submit_proposals. This is a resource notice, not a required phase — "
+    "via submit_explorations or submit_synthesis. If none is worth the cost, "
+    "abstain honestly. This is a resource notice, not a required phase — "
     "keep researching if your best judgment says nothing yet clears the bar."
 )
 
@@ -1705,7 +1723,42 @@ def _dispatch(action: dict, proposal_slots: int) -> dict:
         return parsed
 
     # --- terminal action ---
-    if name == "submit_proposals":
+    if name == "abstain":
+        _require_keys(action, {"action", "reason"}, {"blocking_unknown"})
+        reason = action["reason"]
+        if not isinstance(reason, str) or not reason.strip():
+            raise ProposerError("abstain.reason must be non-empty")
+        blocking = action.get("blocking_unknown")
+        if blocking is not None and (
+            not isinstance(blocking, str) or not blocking.strip()
+        ):
+            raise ProposerError(
+                "abstain.blocking_unknown must be non-empty when present"
+            )
+        return {
+            "action": "submit_proposals",
+            "operation": None,
+            "proposals": [],
+            "abstain_reason": reason.strip(),
+            "blocking_unknown": (
+                blocking.strip() if isinstance(blocking, str) else None
+            ),
+        }
+
+    if name == "submit_synthesis":
+        _require_keys(action, {"action", "proposal", "donor_experiment_ids"})
+        donors = tuple(_require_string_list(
+            action["donor_experiment_ids"], name="donor_experiment_ids",
+            allow_empty=False,
+        ))
+        return {
+            "action": "submit_proposals",
+            "operation": "synthesize",
+            "proposals": [_parse_proposal(action["proposal"])],
+            "donor_experiment_ids": donors,
+        }
+
+    if name in {"submit_proposals", "submit_explorations"}:
         _require_keys(action, {"action", "proposals"})
         proposals = action["proposals"]
         if not isinstance(proposals, list):
@@ -1715,9 +1768,15 @@ def _dispatch(action: dict, proposal_slots: int) -> dict:
                 f"at most {proposal_slots} proposal(s) allowed; "
                 f"got {len(proposals)}"
             )
-        # 0 proposals is a legal abstention.
+        if name == "submit_explorations" and not proposals:
+            raise ProposerError("submit_explorations requires a proposal")
+        # submit_proposals keeps its historical empty-list abstention.
         parsed = [_parse_proposal(item) for item in proposals]
-        return {"action": name, "proposals": parsed}
+        return {
+            "action": "submit_proposals",
+            "operation": "explore" if name == "submit_explorations" else None,
+            "proposals": parsed,
+        }
 
     # --- terminal action: self-review decision (RSI S3c) ---
     if name == "submit_self_decision":
@@ -1965,6 +2024,14 @@ def _validate_action_guard(
             if not state_ids.issubset(state.research_states):
                 return "unknown_research_state"
             state.counts["proposed_research_states"] = len(state_ids)
+            if action.get("operation") == "synthesize":
+                donors = set(action["donor_experiment_ids"])
+                if not donors.issubset(state.inspected_experiment_ids):
+                    return "uninspected_donor"
+            if action.get("operation") == "synthesize":
+                donors = set(action["donor_experiment_ids"])
+                if not donors.issubset(state.inspected_experiment_ids):
+                    return "uninspected_donor"
         if action["action"] not in _RESEARCH_TOOL_ACTIONS:
             continue
         fingerprint = _fingerprint(action)
@@ -2234,9 +2301,14 @@ class ScientistAgent(ResearchAgent):
                 abstained = len(proposals) == 0
                 return ScientistRound(
                     proposals=proposals,
+                    research_operation=action.get("operation"),
+                    donor_experiment_ids=tuple(
+                        action.get("donor_experiment_ids", ())
+                    ),
                     abstained=abstained,
                     abstain_reason=(
-                        "submitted no directions this round"
+                        action.get("abstain_reason")
+                        or "submitted no directions this round"
                         if abstained else None
                     ),
                     usage=usages,

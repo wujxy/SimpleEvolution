@@ -134,12 +134,16 @@ def test_publish_research_batch_persists_state_and_two_proposals(store):
                 "research_state_id": state_id,
                 "instruction": "try X",
                 "rationale": {"expectation": "metric improves"},
+                "research_operation": "explore",
+                "donor_experiment_ids": [],
             },
             {
                 "proposal_id": "p-2",
                 "research_state_id": state_id,
                 "instruction": "try Y",
                 "rationale": {"expectation": "memory falls"},
+                "research_operation": "explore",
+                "donor_experiment_ids": [],
             },
         ],
         reserved_proposal_ids=("p-1", "p-2"),
@@ -149,6 +153,7 @@ def test_publish_research_batch_persists_state_and_two_proposals(store):
     assert queries.get_research_state(state_id) is not None
     assert queries.get_transformation(transformations[0]["transformation_id"]) is not None
     assert {item.research_state_id for item in queries.queued_proposals()} == {state_id}
+    assert {item.research_operation for item in proposals} == {"explore"}
 
 
 def test_publish_research_batch_persists_state_only_abstention(store):

@@ -129,8 +129,11 @@ or ResearchState you inherit. Re-ground it against the current world and form
 your own ResearchState.
 
 Several inspected Experiments may inform one ResearchState. If their
-interventions appear complementary, submit an ordinary Proposal to test the
-combination in the current world; never assume branch gains compose.
+interventions appear complementary, choose `SYNTHESIZE` and name the donor
+Experiments so the combination is tested in the current world; never assume
+branch gains compose. `SYNTHESIZE` is one integration bet, not a place to hide
+an unrelated new mechanism. Choose `EXPLORE` when you want to test one or more
+genuinely new directions instead.
 
 ## Continuity of inquiry
 
@@ -162,11 +165,12 @@ register a state or submit a Proposal for you. Prefer breadth across viable
 ResearchStates before spending multiple Proposals under one state, but submit
 every materially distinct experiment worth its cost and never pad a quota.
 
-You do not need certainty before proposing an experiment. A proposal is a
-scientific judgment about a direction worth trying. Multiple distinct directions
-may be worth trying, and one broad restructuring may be more valuable than many
-small changes. Judge proposals by how they may advance the goal, not by how
-closely they resemble the current work.
+You do not need certainty before proposing an experiment. In `EXPLORE`, each
+distinct direction you judge worth its cost gets its own proposal slot; using
+one slot means you found one worthwhile direction, not that you selected one
+winner from several. In `SYNTHESIZE`, submit exactly one proposal combining the
+inspected donor results with the current world. Judge proposals by how they may
+advance the goal, not by how closely they resemble the current work.
 
 The Executor implements the directions you submit; it reads the real code and
 decides the concrete changes, so your proposal states what to try and why, not a
