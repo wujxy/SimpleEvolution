@@ -7,10 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from simpleevo.db.store import GateDecision, GateResult, ResearchStore
+from simpleevo.db.store import GateDecision, GateResult, Proposal, ResearchStore
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.scheduler.frontier import FrontierConfig
 from simpleevo.scheduler.loop import Scheduler, SchedulerConfig
+from simpleevo.scheduler.frontier import Frontier
+from proposer.supervisor import (
+    AllocationDirective, SupervisorDecision, build_group_snapshot,
+)
 
 
 @pytest.fixture
@@ -177,3 +181,113 @@ def test_scheduler_closes_proposer_experiment_loop(env):
         "Repeated setup crosses the call boundary."
     )
     assert seed["experiment"]["metrics"] == {"total_ms": 90.0}
+
+
+def test_group_workflow_allocates_divergent_branch_and_promotes_shared_epoch(env):
+    run_dir, store = env
+    with store.transaction() as tx:
+        root = tx.create_node(
+            parent_node_id=None, experiment_id=None, sha="root",
+            metrics={"score": 10}, gate_result=GateDecision({}, True),
+            depth=0, status="active",
+        )
+        root_episode = tx.create_episode(node_id=root.node_id)
+        donor_proposal = tx.create_proposal(Proposal(
+            proposal_id="donor-proposal", node_id=root.node_id,
+            episode_id=root_episode.episode_id, instruction="independent win",
+            rationale={}, status="running", created_at=1,
+        ))
+        donor_experiment = tx.create_experiment(
+            experiment_id="donor-experiment",
+            proposal_id=donor_proposal.proposal_id,
+            parent_node_id=root.node_id, status="running",
+        )
+    divergent = store.ingest_experiment_result(
+        experiment_id=donor_experiment.experiment_id,
+        result_sha="divergent", metrics={"score": 1},
+        gate_result=GateDecision({}, True), status="completed",
+    )
+    with store.transaction() as tx:
+        tx._conn.execute(
+            "UPDATE nodes SET status = 'dormant' WHERE node_id = ?",
+            (divergent.node_id,),
+        )
+
+    proposer_jobs = []
+
+    def decide(snapshot, capacity):
+        return SupervisorDecision(
+            decision_id="decision-1", epoch_id=snapshot.epoch_id,
+            snapshot_watermark=snapshot.watermark,
+            allocations=(AllocationDirective(divergent.node_id, 1),),
+            rationale="fund the distinct low-base lineage",
+            evidence_refs=(f"experiment:{donor_experiment.experiment_id}",),
+            integration_request={
+                "integration_request_id": "request-1",
+                "target_node_id": root.node_id,
+                "donor_experiment_ids": [donor_experiment.experiment_id],
+                "selection_rationale": "turn the mature branch into a shared base",
+            },
+        )
+
+    scheduler = Scheduler(
+        store, run_dir,
+        SchedulerConfig(max_proposer_inflight=1, max_experiment_inflight=1),
+        submit_proposer=lambda work_id, payload: proposer_jobs.append(payload),
+        supervisor_decider=decide,
+    )
+    scheduler._allocate_proposers(Frontier({root.node_id}, {}))
+    assert proposer_jobs[0]["node_id"] == divergent.node_id
+
+    integrator_payloads = []
+    scheduler.submit_integrator = lambda work_id, payload: integrator_payloads.append(payload)
+    assert scheduler._schedule_integrators() == ["request-1"]
+    payload = integrator_payloads[0]
+    state_id = f"rs-{payload['episode_id']}-integration"
+    _write_json(run_dir / "integration_requests/request-1/result.json", {
+        "status": "completed",
+        "result": {
+            "outcome": "submitted", "reason": None,
+            "research_state": {
+                "research_state_id": state_id, "node_id": root.node_id,
+                "episode_id": payload["episode_id"],
+                "working_model": "the donor can become the common trunk",
+                "evidence_refs": ["experiment:donor-experiment"],
+            },
+            "proposal": {
+                "proposal_id": payload["proposal_id"],
+                "research_state_id": state_id,
+                "instruction": "port the validated donor onto root",
+                "rationale": {}, "research_operation": "synthesize",
+                "donor_experiment_ids": ["donor-experiment"],
+                "evidence_refs": ["experiment:donor-experiment"],
+            },
+        },
+    })
+    assert scheduler._poll_integrators() == ["request-1"]
+
+    def execute(experiment_id, payload):
+        _write_json(run_dir / "experiments" / experiment_id / "result.json", {
+            "status": "completed",
+            "result": {
+                "outcome": "COMPLETED", "sha": "shared-candidate",
+                "metrics": {"score": 12},
+                "gate": {"passed": True, "results": {}},
+                "changed_paths": [],
+            },
+        })
+
+    scheduler.submit_experiment = execute
+    jobs = scheduler._drain_executor_queue(Frontier({root.node_id}, {}))
+    assert scheduler._poll_experiments() == jobs
+    scheduler._apply_epoch_review({
+        "integration_request_id": "request-1", "action": "promote",
+        "rationale": "candidate passed ordinary evaluation",
+        "evidence_refs": [f"experiment:{jobs[0]}"],
+    })
+
+    assert store.current_epoch().root_node_id != root.node_id
+    snapshot = build_group_snapshot(
+        store, max_research_per_node=3, max_proposals_per_node=9,
+    )
+    assert root.node_id in {item.node_id for item in snapshot.eligible_nodes}

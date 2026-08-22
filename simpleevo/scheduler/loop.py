@@ -552,6 +552,7 @@ class Scheduler:
             if experiment is None:
                 continue
             proposal = self._queries.get_proposal(experiment.proposal_id)
+            parent = self._queries.get_node(experiment.parent_node_id)
             child = (
                 self._queries.get_node(experiment.child_node_id)
                 if experiment.child_node_id else None
@@ -559,11 +560,15 @@ class Scheduler:
             donors.append({
                 "experiment": asdict(experiment),
                 "proposal": None if proposal is None else asdict(proposal),
+                "parent": None if parent is None else asdict(parent),
                 "child": None if child is None else asdict(child),
             })
         return {
             "target": None if target is None else asdict(target),
             "donors": donors,
+            "group_experiments": [
+                asdict(item) for item in self._queries.list_experiments()
+            ],
         }
 
     def _poll_integrators(self) -> list[str]:

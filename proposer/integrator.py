@@ -9,6 +9,7 @@ from typing import Any
 
 from .agent_runtime import AgentRuntime
 from .research_agent import AgentError, ResearchAgent, WorkingState
+from .research_files import ResearchFiles
 
 
 class IntegratorError(AgentError):
@@ -30,6 +31,19 @@ class _Session:
     def __init__(self, directory: Path):
         directory.mkdir(parents=True, exist_ok=True)
         self.path = directory / "session.jsonl"
+        self.trajectory = []
+        if self.path.exists():
+            for line in self.path.read_text(encoding="utf-8").splitlines():
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if item.get("role") in {"user", "assistant"} and isinstance(
+                    item.get("content"), str,
+                ):
+                    self.trajectory.append({
+                        "role": item["role"], "content": item["content"],
+                    })
 
     def append_message(self, role, content, *, round_id):
         with self.path.open("a", encoding="utf-8") as stream:
@@ -38,15 +52,45 @@ class _Session:
             }, ensure_ascii=False) + "\n")
 
 
-class _NoTools:
-    def execute(self, action, **kwargs):  # pragma: no cover
-        raise IntegratorError(f"unknown Integrator action {action['action']!r}")
+class IntegratorTools:
+    """Read-only target-world navigation; no source writes or private L3."""
+
+    def __init__(self, *, workspace: Path, repo: Path, scratch: Path):
+        self.files = ResearchFiles(
+            work=workspace, repo=repo, scratch=scratch, cap_chars=12_000,
+        )
+
+    def execute(self, action, **kwargs):
+        try:
+            if action["action"] == "read_file":
+                return self.files.read_file(
+                    action["path"], offset=action.get("offset", 1),
+                    limit=action.get("limit", 400),
+                )
+            if action["action"] == "grep_files":
+                return self.files.grep_files(
+                    action["pattern"], path=action.get("path", "/work"),
+                    glob=action.get("glob"), context=action.get("context", 0),
+                    max_matches=action.get("max_matches", 50),
+                )
+            if action["action"] == "glob_files":
+                return self.files.glob_files(
+                    action["pattern"], path=action.get("path", "/work"),
+                    limit=action.get("limit", 200),
+                )
+        except (ValueError, OSError) as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": False, "error": "Integrator tools are read-only"}
 
 
 class IntegratorAgent(ResearchAgent):
     """Fresh request-scoped identity; never inherits donor private cognition."""
 
     _error_class = IntegratorError
+    _protocol_reminder = (
+        "Return exactly one JSON object: submit_synthesis using only request "
+        "donors, or abstain with a reason."
+    )
 
     def __init__(self, *, model, timeout_seconds: int, max_steps: int = 4):
         super().__init__(
@@ -64,6 +108,13 @@ class IntegratorAgent(ResearchAgent):
         if not isinstance(action, dict):
             raise IntegratorError("action must be an object")
         name = action.get("action")
+        if name in {"read_file", "grep_files", "glob_files"}:
+            required = "path" if name == "read_file" else (
+                "pattern" if name in {"grep_files", "glob_files"} else ""
+            )
+            if required not in action:
+                raise IntegratorError(f"{name} requires {required}")
+            return [action]
         if name == "abstain":
             if not str(action.get("reason", "")).strip():
                 raise IntegratorError("abstain requires reason")
@@ -90,14 +141,22 @@ class IntegratorAgent(ResearchAgent):
         *,
         public_evidence: dict[str, Any],
         session_dir: Path | None = None,
+        workspace: Path | None = None,
+        repo: Path | None = None,
     ) -> IntegratorResult:
         self._allowed_donors = set(request["donor_experiment_ids"])
 
         def run(directory: Path) -> IntegratorResult:
-            messages = [{"role": "user", "content": json.dumps({
+            session = _Session(directory)
+            seed = json.dumps({
                 "integration_request": request,
                 "public_evidence": public_evidence,
-            }, ensure_ascii=False)}]
+            }, ensure_ascii=False)
+            messages = list(session.trajectory)
+            if messages:
+                seed = "Resume the same request after interruption. Current public facts: " + seed
+            messages.append({"role": "user", "content": seed})
+            session.append_message("user", seed, round_id=0)
 
             def terminal(action, state, usages, step, outcome):
                 if action is None:
@@ -119,12 +178,20 @@ class IntegratorAgent(ResearchAgent):
                     ),
                 )
 
-            return AgentRuntime(self).run(
+            source_root = Path(workspace) if workspace is not None else Path(".")
+            return AgentRuntime(
+                self,
+                source_read_actions=("read_file", "grep_files", "glob_files"),
+            ).run(
                 system_prompt=(Path(__file__).parent / "prompts" / "integrator.md").read_text(),
                 messages=messages,
-                session=_Session(directory), current_round=0,
-                steps_budget=self.max_steps, source_root=Path("."),
-                build_tools=lambda scratch, home: _NoTools(),
+                session=session, current_round=0,
+                steps_budget=self.max_steps, source_root=source_root,
+                build_tools=lambda scratch, home: IntegratorTools(
+                    workspace=source_root,
+                    repo=Path(repo) if repo is not None else source_root,
+                    scratch=Path(scratch),
+                ),
                 terminal_name=("submit_synthesis", "abstain"),
                 budget_nudge="Submit one synthesis or abstain now.",
                 handle_terminal=terminal,

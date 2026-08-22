@@ -100,6 +100,10 @@ class SupervisorAgent(ResearchAgent):
     """Stateless role that allocates attention without proposing code changes."""
 
     _error_class = SupervisorError
+    _protocol_reminder = (
+        "Return exactly one JSON submit_supervisor_decision object using the "
+        "supplied epoch_id and snapshot_watermark; never submit proposals."
+    )
 
     def __init__(self, *, model, timeout_seconds: int, max_steps: int = 3):
         super().__init__(

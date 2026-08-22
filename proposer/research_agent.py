@@ -337,6 +337,7 @@ class ResearchAgent:
     # ---- to be provided by subclasses ----
 
     _error_class = AgentError
+    _protocol_reminder = _PROTOCOL_REMINDER
 
     def _parse_action(self, text: str) -> list[dict]:
         raise NotImplementedError
@@ -402,7 +403,7 @@ class ResearchAgent:
                     {"role": "assistant", "content": reply.text},
                     {"role": "user", "content": (
                         "Protocol correction required "
-                        f"({reason}). {_PROTOCOL_REMINDER}"
+                        f"({reason}). {self._protocol_reminder}"
                     )},
                 ])
                 continue
@@ -428,7 +429,7 @@ class ResearchAgent:
                     {"role": "assistant", "content": reply.text},
                     {"role": "user", "content": (
                         f"Protocol correction required ({guard}). "
-                        f"{_PROTOCOL_REMINDER}"
+                        f"{self._protocol_reminder}"
                     )},
                 ])
                 continue

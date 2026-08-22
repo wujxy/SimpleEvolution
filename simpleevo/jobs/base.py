@@ -1,7 +1,7 @@
 """Shared job-submission contract for every SimpleEvolution launch backend.
 
-The Scheduler talks to ONE interface — ``submit_proposer`` /
-``submit_experiment``, each returning the result path it will later poll —
+The Scheduler talks to one interface for proposer, experiment, Supervisor, and
+Integrator workers, each returning the result path it will later poll —
 regardless of whether the worker runs as a local subprocess or a condor job.
 This module holds everything the two backends share so the only thing a
 backend implements is the single seam ``_launch`` (how a staged manifest
@@ -9,7 +9,7 @@ becomes a running worker).
 
 Interface parity is the point: ``LocalSubmitter`` and ``HTCondorSubmitter``
 are both thin subclasses of ``BaseSubmitter`` and both expose the same
-methods (submit_proposer / submit_experiment / poll / probe_job /
+methods (the four submit methods / poll / probe_job /
 remove_job).  Backend-specific concerns stay inside the subclass.
 """
 from __future__ import annotations

@@ -7,6 +7,7 @@ import socket
 from pathlib import Path
 
 from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
+from experiment.git_worktree import GitWorkspaceProvider, WorkspaceSpec
 
 from .integrator import IntegratorAgent
 from .model import build_chat_model
@@ -22,7 +23,16 @@ def main(argv: list[str] | None = None) -> int:
     payload = manifest["payload"]
     error = None
     result = None
+    provider = None
+    workspace = None
     try:
+        run_dir = Path(payload["run_dir"])
+        provider = GitWorkspaceProvider(run_dir, Path(payload["repo_path"]))
+        provider.initialize()
+        target_sha = payload["public_evidence"]["target"]["sha"]
+        workspace = provider.create(WorkspaceSpec(
+            f"integrator-{manifest['request_id']}", target_sha,
+        ))
         result = IntegratorAgent(
             model=build_chat_model(payload.get("researcher", {})),
             timeout_seconds=int(payload.get("agent_timeout_seconds", 3600)),
@@ -31,9 +41,14 @@ def main(argv: list[str] | None = None) -> int:
             payload["request"],
             public_evidence=payload.get("public_evidence", {}),
             session_dir=args.manifest.parent / "session",
+            workspace=workspace.path,
+            repo=provider.repo,
         )
     except Exception as exc:
         error = str(exc)
+    finally:
+        if provider is not None and workspace is not None:
+            provider.remove(workspace)
 
     output = {}
     if result is not None:

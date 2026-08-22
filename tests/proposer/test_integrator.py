@@ -9,9 +9,12 @@ from proposer.model import ModelReply
 class FakeModel:
     def __init__(self, reply):
         self.reply = reply
+        self.calls = []
 
     def complete(self, **kwargs):
-        return ModelReply(json.dumps(self.reply), {"completion_tokens": 2})
+        self.calls.append(kwargs)
+        reply = self.reply.pop(0) if isinstance(self.reply, list) else self.reply
+        return ModelReply(json.dumps(reply), {"completion_tokens": 2})
 
 
 def _request():
@@ -77,3 +80,43 @@ def test_integrator_can_abstain_on_incompatibility():
 
     assert result.outcome == "abstained"
     assert "invariant" in result.reason
+
+
+def test_integrator_retry_resumes_same_request_session(tmp_path):
+    reply = {
+        "action": "abstain", "reason": "not enough compatible evidence",
+    }
+    IntegratorAgent(
+        model=FakeModel(reply), timeout_seconds=30, max_steps=1,
+    ).integrate(_request(), public_evidence={}, session_dir=tmp_path)
+    retry_model = FakeModel(reply)
+
+    IntegratorAgent(
+        model=retry_model, timeout_seconds=30, max_steps=1,
+    ).integrate(_request(), public_evidence={}, session_dir=tmp_path)
+
+    messages = retry_model.calls[0]["messages"]
+    assert any(item["role"] == "assistant" for item in messages)
+    assert any(
+        item["role"] == "user" and "Resume the same request" in item["content"]
+        for item in messages
+    )
+
+
+def test_integrator_can_read_target_but_has_no_write_tool(tmp_path):
+    workspace = tmp_path / "work"
+    workspace.mkdir()
+    workspace.joinpath("kernel.cc").write_text("int kernel() { return 1; }\n")
+    model = FakeModel([
+        {"action": "read_file", "path": "/work/kernel.cc"},
+        {"action": "abstain", "reason": "the requested donors conflict"},
+    ])
+
+    result = IntegratorAgent(
+        model=model, timeout_seconds=30, max_steps=2,
+    ).integrate(
+        _request(), public_evidence={}, workspace=workspace, repo=workspace,
+    )
+
+    assert result.outcome == "abstained"
+    assert any("int kernel" in item["content"] for item in model.calls[1]["messages"])

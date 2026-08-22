@@ -1,9 +1,17 @@
 # SimpleEvolution
 
-Event-driven Research Tree evolution: **Node → Proposer → Proposal →
-Experiment → New Node**. A Scientist thread proposes changes to a research
-target; an Executor implements them; the Harness measures, gates, and advances
-a GEPA-style per-axis frontier.
+Event-driven Research Tree evolution: **Node → Scientist → Proposal →
+Experiment → New Node**. Scientists independently choose EXPLORE or SYNTHESIZE;
+an Executor implements proposals and the Harness measures them. A stateless
+Supervisor allocates attention across all eligible branches, using the old
+Frontier only when its decision worker fails.
+
+When several branches have mature, compatible evidence, the Supervisor may
+open one integration request. A fresh request-scoped Integrator writes exactly
+one synthesis proposal (or abstains); that proposal passes through the normal
+Executor and Gate. A gate-passed candidate can then become a new logical epoch
+root. Promotion appends a shared trunk without rewriting or deleting old
+branches, so the Supervisor can revive them later.
 
 Design source of truth: [docs/simpleevolution_design.md](docs/simpleevolution_design.md).
 Implementation notes: [docs/simpleevolution_implementation.md](docs/simpleevolution_implementation.md).
@@ -45,7 +53,7 @@ Worked examples:
 
 ## Job backends (local vs. HTCondor)
 
-Workers (proposer + experiment) are submitted through one of two backends that
+Workers (Supervisor, Scientist/proposer, Integrator, and experiment) are submitted through one of two backends that
 share the same `BaseSubmitter` interface and the same manifest/result path
 layout — swapping backends is a config change, not a code change:
 
@@ -103,4 +111,3 @@ jobs:
 When any proxy is set and `no_proxy` is omitted it defaults to
 `localhost,127.0.0.1`. Unset fields forward the submit host's own proxy env as
 before. Setup for the jump host itself: [proxy/](proxy/).
-
