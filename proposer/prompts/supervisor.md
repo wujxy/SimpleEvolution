@@ -43,13 +43,16 @@ Return exactly one JSON object per turn, one of:
 - `{"action": "submit_growth_decision", "node_ids": ["..."], "rationale":
   "..."}` — the only normal path. Empty `node_ids` waits for in-flight
   evidence or stops growth when nothing justifies another lease.
-- `{"action": "submit_integration_request", "integration_request_id": "...",
-  "target_node_id": "...", "donor_experiment_ids": ["..."],
-  "selection_rationale": "..."}` — when several distinct branches have
-  mature, compatible, gate-passed results.
+- `{"action": "submit_integration_request", "target_node_id": "...",
+  "donor_experiment_ids": ["..."], "selection_rationale": "..."}` — when
+  several distinct branches have mature, compatible, gate-passed results.
+  The harness assigns the request id; do not invent one.
 - `{"action": "submit_epoch_review", "integration_request_id": "...",
   "review": "promote" | "retain", "rationale": "..."}` — judge a completed
-  integration candidate.
+  integration candidate by naming the request under review.
 
-Growth decisions contain only `node_ids` and `rationale`. Never return
-`submit_proposals` or technical instructions for Scientists.
+Every field you return is semantic judgment. Growth decisions contain only
+`node_ids` and `rationale`; integration requests only the target, donors,
+and rationale; epoch reviews only the request under review, the verdict,
+and rationale. Never return `submit_proposals` or technical instructions
+for Scientists.

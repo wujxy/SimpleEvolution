@@ -376,7 +376,6 @@ def test_integration_turn_creates_request_and_consumes_cursor(tmp_path: Path):
         "decision_id": "d-int", "decision_kind": "integration_request",
         "node_ids": [], "rationale": "branches matured.",
         "detail": {
-            "integration_request_id": "req-1",
             "target_node_id": root.node_id,
             "donor_experiment_ids": ["exp-donor"],
             "selection_rationale": "complementary validated results",
@@ -385,11 +384,62 @@ def test_integration_turn_creates_request_and_consumes_cursor(tmp_path: Path):
     })
     scheduler.step()
 
-    request = store.get_integration_request("req-1")
+    # The harness assigned the request id from the work: stable across
+    # retries of this batch, never model output.
+    request = store.get_integration_request(f"ir-{work_id}")
     assert request is not None and request.status == "open"
     assert store.supervisor_event_cursor() == store.supervisor_event_head()
     assert store.get_supervisor_decision("d-int")["decision_kind"] == (
         "integration_request")
+
+
+def test_integration_retry_reuses_the_harness_request_id(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    root, episode, _ = _seed(store)
+    _seed_donor(store, root, episode)
+    _sync_cursor(store)
+    submitter = Submitter(tmp_path)
+    scheduler = _scheduler(store, tmp_path, submitter)
+
+    store.emit_supervisor_event("goal_changed", {"goal": "faster"})
+    scheduler.step()
+    work_id, _ = submitter.supervisor[0]
+    # First attempt names an unknown donor: rejected, nothing created.
+    submitter.write_decision(work_id, {
+        "decision_id": "d-bad", "decision_kind": "integration_request",
+        "node_ids": [], "rationale": "matured.",
+        "detail": {
+            "target_node_id": root.node_id,
+            "donor_experiment_ids": ["ghost"],
+            "selection_rationale": "unknown donor",
+        },
+        "event_cursor_to": store.supervisor_event_head(),
+    })
+    scheduler.step()
+    assert store.latest_scheduler_event(
+        "supervisor_decision_rejected")["work_id"] == work_id
+    assert store.integration_requests() == []
+
+    # The same batch retries under the same work id, hence the same
+    # harness-assigned request id: exactly one request ever appears.
+    scheduler.step()
+    retry_work_id, _ = submitter.supervisor[-1]
+    assert retry_work_id == work_id
+    submitter.write_decision(work_id, {
+        "decision_id": "d-good", "decision_kind": "integration_request",
+        "node_ids": [], "rationale": "matured.",
+        "detail": {
+            "target_node_id": root.node_id,
+            "donor_experiment_ids": ["exp-donor"],
+            "selection_rationale": "complementary validated results",
+        },
+        "event_cursor_to": store.supervisor_event_head(),
+    })
+    scheduler.step()
+
+    requests = store.integration_requests()
+    assert [r.integration_request_id for r in requests] == [
+        f"ir-{work_id}"]
 
 
 def test_baseline_frontier_mode_still_allocates_without_supervisor(
@@ -478,7 +528,6 @@ def test_stale_integration_decision_has_zero_side_effects(tmp_path: Path):
         "decision_id": "d-int", "decision_kind": "integration_request",
         "node_ids": [], "rationale": "branches matured.",
         "detail": {
-            "integration_request_id": "req-1",
             "target_node_id": root.node_id,
             "donor_experiment_ids": ["exp-donor"],
             "selection_rationale": "complementary validated results",
@@ -487,9 +536,10 @@ def test_stale_integration_decision_has_zero_side_effects(tmp_path: Path):
     })
     scheduler.step()
 
-    # The stale decision left nothing behind: no request, no decision row,
-    # no cursor advance, no accepted/created events (design §9).
-    assert store.get_integration_request("req-1") is None
+    # The stale decision left nothing behind: no request (under the id the
+    # harness would have assigned), no decision row, no cursor advance, no
+    # accepted/created events (design §9).
+    assert store.get_integration_request(f"ir-{work_id}") is None
     assert store.get_supervisor_decision("d-int") is None
     assert store.supervisor_event_cursor() == cursor
     assert store.supervisor_event_head() == cursor + 2

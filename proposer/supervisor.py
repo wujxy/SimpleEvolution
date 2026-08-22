@@ -265,13 +265,21 @@ class SupervisorAgent(ResearchAgent):
             return [action]
         if name == "submit_integration_request":
             required = {
-                "integration_request_id", "target_node_id",
-                "donor_experiment_ids", "selection_rationale",
+                "target_node_id", "donor_experiment_ids",
+                "selection_rationale",
             }
             missing = required - set(action)
             if missing:
                 raise SupervisorError(
                     f"missing integration fields: {sorted(missing)}")
+            # The request id is mechanical: the harness assigns it from the
+            # work (stable across retries of the same batch), so a model
+            # supplying one is a contract violation, same as growth's
+            # extra-field rejection.
+            extra = set(action) - {"action"} - required
+            if extra:
+                raise SupervisorError(
+                    f"unsupported integration fields: {sorted(extra)}")
             return [action]
         if name == "submit_epoch_review":
             if action.get("review") not in {"promote", "retain"}:
@@ -326,8 +334,6 @@ class SupervisorAgent(ResearchAgent):
                     decision_kind="integration_request",
                     rationale=rationale,
                     detail={
-                        "integration_request_id": str(
-                            action["integration_request_id"]),
                         "target_node_id": str(action["target_node_id"]),
                         "donor_experiment_ids": [
                             str(item)

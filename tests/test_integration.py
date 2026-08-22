@@ -304,20 +304,22 @@ def test_group_workflow_allocates_divergent_branch_and_promotes_shared_epoch(env
         decision_id="decision-2", decision_kind="integration_request",
         rationale="turn the mature branch into a shared base",
         detail={
-            "integration_request_id": "request-1",
             "target_node_id": root.node_id,
             "donor_experiment_ids": [donor_experiment.experiment_id],
             "selection_rationale": "turn the mature branch into a shared base",
         })
     assert scheduler._run_supervisor_gate() == []
-    assert store.get_integration_request("request-1").status == "open"
+    # The harness assigned the request id from the work.
+    request_id = store.integration_requests("open")[0].integration_request_id
+    assert request_id.startswith("ir-supervisor-")
+    assert store.get_integration_request(request_id).status == "open"
 
     integrator_payloads = []
     scheduler.submit_integrator = lambda work_id, payload: integrator_payloads.append(payload)
-    assert scheduler._schedule_integrators() == ["request-1"]
+    assert scheduler._schedule_integrators() == [request_id]
     payload = integrator_payloads[0]
     state_id = f"rs-{payload['episode_id']}-integration"
-    _write_json(run_dir / "integration_requests/request-1/result.json", {
+    _write_json(run_dir / f"integration_requests/{request_id}/result.json", {
         "status": "completed",
         "result": {
             "outcome": "submitted", "reason": None,
@@ -337,7 +339,7 @@ def test_group_workflow_allocates_divergent_branch_and_promotes_shared_epoch(env
             },
         },
     })
-    assert scheduler._poll_integrators() == ["request-1"]
+    assert scheduler._poll_integrators() == [request_id]
 
     def execute(experiment_id, payload):
         _write_json(run_dir / "experiments" / experiment_id / "result.json", {
@@ -354,13 +356,14 @@ def test_group_workflow_allocates_divergent_branch_and_promotes_shared_epoch(env
     jobs = scheduler._drain_executor_queue()
     assert scheduler._poll_experiments() == jobs
 
-    # Epoch review is the third terminal, again through the same gate.
+    # Epoch review is the third terminal, again through the same gate —
+    # naming the existing request under review.
     scheduler.step()  # experiment_terminal wakes the gate
     submitter.decide(
         decision_id="decision-3", decision_kind="epoch_review",
         rationale="candidate passed ordinary evaluation",
         detail={
-            "integration_request_id": "request-1", "review": "promote",
+            "integration_request_id": request_id, "review": "promote",
             "rationale": "candidate passed ordinary evaluation",
             "evidence_refs": [f"experiment:{jobs[0]}"],
         })

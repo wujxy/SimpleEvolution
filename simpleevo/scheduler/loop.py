@@ -513,6 +513,12 @@ class Scheduler:
             epoch = self.store.current_epoch()
             if epoch is None:
                 raise ValueError("cannot accept integration without an epoch")
+            # The request id is mechanical harness state, never model
+            # output: keyed on the work id it stays stable across retries
+            # of the same batch (idempotent redelivery) and changes when a
+            # stale batch grows — exactly when the judgment itself changes.
+            detail["integration_request_id"] = (
+                f"ir-{attempt.logical_work_id}")
             normalized = validate_integration_request(
                 self.store, epoch.epoch_id, detail)
             # The request row is created inside the decision transaction:

@@ -114,17 +114,40 @@ def test_notebook_checkpoint_persists_across_turns(tmp_path: Path):
 
 
 def test_growth_output_rejects_extra_fields(tmp_path: Path):
+    # The model insists on the extra field through every protocol repair,
+    # so the rejection (not a step-budget stop) is what surfaces.
+    invalid = {
+        "action": "submit_growth_decision",
+        "node_ids": ["root"],
+        "rationale": "ok",
+        "proposal_slots": 2,
+    }
     agent = SupervisorAgent(
-        model=FakeModel([{
-            "action": "submit_growth_decision",
-            "node_ids": ["root"],
-            "rationale": "ok",
-            "proposal_slots": 2,
-        }]),
+        model=FakeModel([invalid] * 6),
         timeout_seconds=30,
-        max_steps=1,
+        max_steps=8,
     )
-    with pytest.raises(SupervisorError):
+    with pytest.raises(SupervisorError, match="action protocol failed"):
+        agent.resume(
+            session=load_supervisor_session(tmp_path), tools=_tools(),
+            batch=_batch(),
+        )
+
+
+def test_integration_output_rejects_mechanical_ids(tmp_path: Path):
+    invalid = {
+        "action": "submit_integration_request",
+        "integration_request_id": "req-1",
+        "target_node_id": "root",
+        "donor_experiment_ids": ["exp-1"],
+        "selection_rationale": "matured",
+    }
+    agent = SupervisorAgent(
+        model=FakeModel([invalid] * 6),
+        timeout_seconds=30,
+        max_steps=8,
+    )
+    with pytest.raises(SupervisorError, match="integration_request_id"):
         agent.resume(
             session=load_supervisor_session(tmp_path), tools=_tools(),
             batch=_batch(),
@@ -135,7 +158,6 @@ def test_integration_and_epoch_review_terminals(tmp_path: Path):
     integrator = SupervisorAgent(
         model=FakeModel([{
             "action": "submit_integration_request",
-            "integration_request_id": "req-1",
             "target_node_id": "root",
             "donor_experiment_ids": ["exp-1"],
             "selection_rationale": "branches matured",
@@ -148,6 +170,8 @@ def test_integration_and_epoch_review_terminals(tmp_path: Path):
     )
     assert result.decision_kind == "integration_request"
     assert result.detail["target_node_id"] == "root"
+    # The request id is harness state, never part of the model's output.
+    assert "integration_request_id" not in result.detail
 
     reviewer = SupervisorAgent(
         model=FakeModel([{
