@@ -398,3 +398,40 @@ def test_proposal_operations_require_correct_donor_provenance(store: ResearchSto
                 "research_operation": "synthesize",
             }],
         )
+
+
+def test_integration_request_is_durable_and_idempotent(store: ResearchStore):
+    with store.transaction() as tx:
+        root = tx.create_node(
+            parent_node_id=None,
+            experiment_id=None,
+            sha="integration-root",
+            metrics={},
+            gate_result=_gate(True),
+            depth=0,
+            status="active",
+        )
+
+    epoch = store.current_epoch()
+    assert epoch is not None
+
+    request = store.create_integration_request(
+        integration_request_id="request-1",
+        epoch_id=epoch.epoch_id,
+        target_node_id=root.node_id,
+        donor_experiment_ids=("donor-a", "donor-b"),
+        selection_rationale="complementary validated results",
+    )
+
+    same_request = store.create_integration_request(
+        integration_request_id="request-1",
+        epoch_id=epoch.epoch_id,
+        target_node_id=root.node_id,
+        donor_experiment_ids=("donor-a", "donor-b"),
+        selection_rationale="complementary validated results",
+    )
+
+    assert request == same_request
+    assert request.status == "open"
+    assert request.donor_experiment_ids == ("donor-a", "donor-b")
+    assert store.get_integration_request("request-1") == request

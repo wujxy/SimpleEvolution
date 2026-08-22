@@ -89,6 +89,17 @@ class Epoch:
 
 
 @dataclass(frozen=True)
+class IntegrationRequest:
+    integration_request_id: str
+    epoch_id: str
+    target_node_id: str
+    donor_experiment_ids: tuple[str, ...]
+    selection_rationale: str
+    status: str
+    created_at: float
+
+
+@dataclass(frozen=True)
 class Experiment:
     experiment_id: str
     proposal_id: str
@@ -830,6 +841,45 @@ class ResearchStore:
             ).fetchone()
         return None if row is None else _epoch_from_row(row)
 
+    def create_integration_request(
+        self,
+        *,
+        integration_request_id: str,
+        epoch_id: str,
+        target_node_id: str,
+        donor_experiment_ids: tuple[str, ...],
+        selection_rationale: str,
+    ) -> IntegrationRequest:
+        with self.transaction() as tx:
+            existing = tx.get_integration_request(integration_request_id)
+            if existing is not None:
+                if existing != IntegrationRequest(
+                    integration_request_id=integration_request_id,
+                    epoch_id=epoch_id,
+                    target_node_id=target_node_id,
+                    donor_experiment_ids=donor_experiment_ids,
+                    selection_rationale=selection_rationale,
+                    status="open",
+                    created_at=existing.created_at,
+                ):
+                    raise ValueError("integration request identity conflict")
+                return existing
+            return tx.create_integration_request(
+                integration_request_id=integration_request_id,
+                epoch_id=epoch_id,
+                target_node_id=target_node_id,
+                donor_experiment_ids=donor_experiment_ids,
+                selection_rationale=selection_rationale,
+            )
+
+    def get_integration_request(self, integration_request_id: str) -> IntegrationRequest | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM integration_requests WHERE integration_request_id = ?",
+                (integration_request_id,),
+            ).fetchone()
+        return None if row is None else _integration_request_from_row(row)
+
 
 
 class _Transaction:
@@ -879,6 +929,37 @@ class _Transaction:
             )
 
         return self.get_node(nid)
+
+    def create_integration_request(
+        self,
+        *,
+        integration_request_id: str,
+        epoch_id: str,
+        target_node_id: str,
+        donor_experiment_ids: tuple[str, ...],
+        selection_rationale: str,
+    ) -> IntegrationRequest:
+        if not donor_experiment_ids:
+            raise ValueError("integration request requires donors")
+        now = time.time()
+        self._conn.execute(
+            """
+            INSERT INTO integration_requests
+            (integration_request_id, epoch_id, target_node_id,
+             donor_experiment_ids, selection_rationale, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (integration_request_id, epoch_id, target_node_id,
+             _json(list(donor_experiment_ids)), selection_rationale, now),
+        )
+        return self.get_integration_request(integration_request_id)
+
+    def get_integration_request(self, integration_request_id: str) -> IntegrationRequest | None:
+        row = self._conn.execute(
+            "SELECT * FROM integration_requests WHERE integration_request_id = ?",
+            (integration_request_id,),
+        ).fetchone()
+        return None if row is None else _integration_request_from_row(row)
 
     def get_node(self, node_id: str) -> Node | None:
         row = self._conn.execute(
@@ -1362,6 +1443,18 @@ def _epoch_from_row(row: sqlite3.Row) -> Epoch:
         epoch_id=row["epoch_id"],
         root_node_id=row["root_node_id"],
         previous_epoch_id=row["previous_epoch_id"],
+        created_at=row["created_at"],
+    )
+
+
+def _integration_request_from_row(row: sqlite3.Row) -> IntegrationRequest:
+    return IntegrationRequest(
+        integration_request_id=row["integration_request_id"],
+        epoch_id=row["epoch_id"],
+        target_node_id=row["target_node_id"],
+        donor_experiment_ids=tuple(_unjson(row["donor_experiment_ids"])),
+        selection_rationale=row["selection_rationale"],
+        status=row["status"],
         created_at=row["created_at"],
     )
 
