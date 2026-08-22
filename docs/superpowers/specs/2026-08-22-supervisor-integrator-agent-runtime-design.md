@@ -236,8 +236,8 @@ class AgentRole(Protocol):
     def handle_terminal(self, action, state): ...
 ```
 
-具体实现可以增加必要的 typed result 和 lifecycle hook，但不能把全部角色差异做成
-大量布尔配置。角色差异留在角色类中，公共循环只处理真正相同的行为。
+`handle_terminal` 直接返回角色的 typed result。MVP 不增加通用 lifecycle hook；角色差异
+留在角色类中，公共循环只处理真正相同的行为。
 
 ### 6.2 Role Profile
 
@@ -247,7 +247,6 @@ class AgentRole(Protocol):
 - task context builder；
 - tool registry；
 - terminal action 集合和校验器；
-- typed result adapter；
 - session policy；
 - 默认 budget 和 context policy。
 
@@ -259,13 +258,12 @@ class AgentRole(Protocol):
 角色复用 Runtime，但不共享记忆语义：
 
 - Scientist：沿 cognition lineage 持久；
-- Supervisor：在一个 epoch 内持久，epoch 晋升后生成可审计 dossier，并开启新的
-  Supervisor session；
+- Supervisor：每次根据当前 `GroupSnapshot` 无状态运行，不积累独立认知历史；
 - Integrator：一个 integration request 对应一个临时 session；失败重试恢复同一
   session，新的 request 不继承旧 session。
 
-Supervisor 的 epoch reset 用于防止长期路径依赖；dossier 只包含公开事实、已作出的
-资源决定和未决问题，不成为第二套事实来源。
+Supervisor 的组织连续性由 L2 中的 Experiment、allocation、epoch 和 integration
+记录提供。不给它增加 dossier 或私人长期记忆，避免重复事实源和路径依赖。
 
 ### 6.4 包和兼容边界
 
@@ -299,19 +297,8 @@ EXPLORE 用于扩大可检验方向空间：
 - 已验证实现的直接搬运不属于探索；
 - 公共知识可以启发方向，但不能让所有新方向自动继承赢家实现。
 
-每个探索 proposal 记录一个 `idea_origin`：
-
-```text
-independent
-cross_pollinated
-evidence_followup
-```
-
-- `independent`：没有研究父项，从当前 world 和调查独立形成；
-- `cross_pollinated`：受到其他 branch 证据启发，但形成新的可检验判断；
-- `evidence_followup`：针对先前证据留下的未知点继续追问。
-
-这些名称描述 provenance，不声称绝对新颖性，也不建立新的认知 lineage。
+proposal 可以在 rationale 中说明它来自当前调查、跨 branch 启发或 evidence follow-up，
+但这些是自然语言研究判断，不增加枚举字段或新的 lineage。
 
 ### 7.3 SYNTHESIZE
 
@@ -338,7 +325,6 @@ Scheduler 为 Supervisor 提供带 watermark 的 `GroupSnapshot`，至少包含�
 - changed paths、来源 Experiment 和 lineage；
 - proposer allocation / proposal / experiment 使用量；
 - 近期成功、失败、no-change 和停滞记录；
-- Frontier measured-axis 统计，作为观察信号而非候选过滤器；
 - 跨 branch coverage；
 - 已完成 integration request 及结果；
 - 可按需深入查询的公开 ResearchState 和 Experiment refs。
@@ -365,18 +351,22 @@ snapshot_watermark
 allocations:
   - node_id
     proposal_slots
-    rationale
-    evidence_refs
-suspended_similar_groups:
-  - representative_node_id
-    covered_node_ids
-    rationale
 integration_request: optional
-quiescence_reason: optional
+rationale
+evidence_refs
 ```
 
 每个 allocation 是有限 lease，不是永久生存资格。未获资源的 Node 仍在 Archive，
 后续 Supervisor 可以重新选择。
+
+当 `allocations` 为空且没有 integration request 时，rationale 说明当前无值得启动的工作；
+Scheduler 继续使用现有 quiescence 判断，不增加 Supervisor 专用状态。
+
+Node 相似性和暂停理由只进入本次 decision 的 rationale / trace，不建立相似组状态机。
+
+当成功的 integration candidate 等待晋升评审时，同一 Supervisor Role 输出单独的
+`EpochDecision(request_id, promote | retain, rationale, evidence_refs)`；它不与普通资源
+allocation 混成一个 terminal result。
 
 ### 8.3 选择纪律
 
@@ -410,9 +400,8 @@ Scientist 指定研究操作。
 
 ### 8.5 Frontier 降级
 
-Frontier 不再决定 Node 是否获得 proposer capacity，但保留三个用途：
+Frontier 不再决定 Node 是否获得 proposer capacity，只保留两个用途：
 
-- 作为 Supervisor 的客观 measured-axis 视图；
 - 用于资源集中和搜索健康度遥测；
 - 在 Supervisor job 失败、超时或输出非法时提供确定性 fallback。
 
@@ -443,7 +432,6 @@ epoch_id
 target_node_id
 donor_experiment_ids
 selection_rationale
-open_conflicts
 ```
 
 - `target_node_id` 是唯一实现基线；
@@ -457,24 +445,17 @@ open_conflicts
 Integrator 生成自己的 ResearchState，并终止为：
 
 ```text
-submit_integration(
-  proposal,
-  donor_experiment_ids,
-  included_results,
-  excluded_results,
-  compatibility_analysis,
-  integration_order
-)
+submit_synthesis(proposal, donor_experiment_ids)
 ```
 
 或：
 
 ```text
-abstain(reason, blocking_conflicts)
+abstain(reason)
 ```
 
-`excluded_results` 是必要输出：阶段成果有价值不等于应当进入当前树干。互斥、未成熟、
-仅适用于特殊 workload 的方向可以继续留在 active branch 或 evidence Archive。
+兼容性、冲突、纳入/排除和实现顺序按需要写入现有 proposal rationale / instruction；
+不为它们建立强制结构化字段。Integrator 不能引用 request 之外的 donor。
 
 ### 9.4 Candidate epoch Node
 
@@ -505,7 +486,7 @@ donor refs 表达成果来源。真正的 multi-parent Node merge 留到该表�
 - Experiment 有有效 result SHA 和 Child Node；
 - Supervisor 已查看 integration outcome。
 
-Supervisor 可以根据整体 metrics、退化、收益覆盖和未纳入成果决定 promote 或 reject。
+Supervisor 可以根据整体 metrics、退化、收益覆盖和未纳入成果决定 promote 或 retain。
 Scheduler 只校验前置条件并持久化合法决定，不能允许 Supervisor 覆盖 Gate failure。
 
 晋升创建逻辑 epoch：
@@ -514,9 +495,11 @@ Scheduler 只校验前置条件并持久化合法决定，不能允许 Superviso
 epoch_id
 root_node_id
 previous_epoch_id
-promotion_experiment_id
 created_at
 ```
+
+promotion Experiment 沿 `root_node_id -> nodes.experiment_id` 确定性反查，不在 epoch
+重复保存。
 
 系统不改写历史 root，也不删除旧 branch。最新 epoch root 是新的默认共同 world；旧 Node
 仍可被 Supervisor 选择获得少量资源，从而保留逃离局部最优的通道。
@@ -528,33 +511,30 @@ created_at
 Proposal 需要持久化以下最小字段，而不能只把它们藏在 rationale 文本中：
 
 ```text
-research_operation:
-  legacy | explore | synthesize | integrate
-
-idea_origin:
-  independent | cross_pollinated | evidence_followup | null
-
+research_operation: explore | synthesize | null
 donor_experiment_ids: []
-integration_request_id: optional
 ```
 
 约束：
 
-- `explore` 必须有 `idea_origin`，不能有 donor；
-- `synthesize` 必须有 donor，不能有 `idea_origin`；
-- `integrate` 必须属于一个 integration request，且 donor 必须与 request 一致；
-- `legacy` 只允许用于迁移前已经存在的 Proposal，新提交不能选择该值；
-- schema migration 将旧 Proposal 明确标记为 `legacy`，不猜测其原本属于探索还是综合，
-  也不伪造 donor provenance。
+- `explore` 不能有 donor；
+- `synthesize` 必须有 donor；
+- Integrator 产出的 Proposal 仍是 `synthesize`；request 与 Proposal 的关联保存在
+  `integration_requests.proposal_id`，不在 Proposal 重复保存 request id；
+- 迁移前的旧 Proposal 保持 `null`，不猜测它原本属于探索还是综合；所有新提交必须
+  明确选择 `explore` 或 `synthesize`。
 
 ### 10.2 组织工作流对象
 
 异步恢复要求以下状态不能只存在于 Supervisor 对话或临时 artifact：
 
 - `epochs`：逻辑共同基线；
-- `supervisor_decisions`：输入 watermark、资源 lease、相似分组、理由和状态；
 - `integration_requests`：target、donors、状态、Integrator episode、proposal、experiment
   和 promotion 结果。
+
+`SupervisorDecision` 不新增领域表：接纳/拒绝结果写入已有 `scheduler_events`，实际资源
+lease 继续由 `proposer_allocations` 持久化。Decision artifact 和 watermark 只负责
+幂等 ingest 与审计，不形成第二套调度状态。
 
 具体表拆分可以在实现计划中按现有 Store 模式确定，但必须满足：
 
@@ -627,14 +607,12 @@ Supervisor 的身份 prompt 必须明确：
 1. Supervisor 不读取 Scientist 私有 L3；
 2. Supervisor 分配 Node，不向 Scientist 注入技术指令；
 3. Scientist 自主选择 `EXPLORE` / `SYNTHESIZE`；
-4. Supervisor consultation 若后续加入，必须 pull-based，本次不作为资源决策的附带
-   广播通道；
-5. allocation 是有限 lease，暂停 Node 可复活；
-6. 资源决定、相似分组和 promotion 全部记录 evidence refs；
-7. Integrator 是新临时身份，不继承 donor 私有 cognition；
-8. Frontier 保留 concentration、lineage survival 和 axis coverage 遥测；
-9. Supervisor epoch session 在 promotion 后重置，只传递公开 dossier；
-10. Harness facts 始终优先于任何组织级叙事。
+4. allocation 是有限 lease，暂停 Node 可复活；
+5. 资源决定和 promotion 记录 evidence refs；
+6. Integrator 是新临时身份，不继承 donor 私有 cognition；
+7. Frontier 只用于搜索健康度遥测和故障 fallback；
+8. Supervisor 无私人长期记忆，每次从当前 L2 事实重新判断；
+9. Harness facts 始终优先于任何组织级叙事。
 
 ## 13. 错误、重试和恢复
 
@@ -651,8 +629,8 @@ Supervisor 的身份 prompt 必须明确：
 - Executor / Eval infrastructure failure：继续使用现有 attempt 语义；
 - integration Gate rejected / no change：关闭本次 request，保留负面证据，不晋升；
 - promotion 时 candidate 已失效或 provenance 断裂：拒绝 promotion；
-- Scheduler restart：从 DB 恢复 current epoch、decision、request 和 attempts，不依赖内存中
-  的 agent 调用栈。
+- Scheduler restart：从 DB 恢复 current epoch、open integration request、allocation 和
+  attempts；Supervisor decision 从 `scheduler_events` 审计，不形成待恢复状态机。
 
 ## 14. 遥测
 
@@ -662,25 +640,20 @@ Supervisor 的身份 prompt 必须明确：
 
 - EXPLORE / SYNTHESIZE / abstain 次数；
 - EXPLORE proposal slots 使用率；
-- `idea_origin` 分布；
-- donor 数量和跨 lineage 比例；
-- research-state 方向数与实际 proposal 数的差异。
+- donor 数量和跨 lineage 比例。
 
 ### 14.2 Supervisor allocation
 
 - 每个 decision 的 allocation 分布；
 - lineage 和 Node 的实际资源份额；
 - allocation concentration / entropy；
-- 暂停、代表选择和复活次数；
-- 相似分组后来是否被证据推翻；
 - Supervisor decision 与 Frontier fallback 使用率。
 
 ### 14.3 Integration / epoch
 
 - integration request 频率；
 - Integrator abstain、Gate reject、no-change 和成功率；
-- donor 数量、lineage 数量和冲突类型；
-- integration 后各组件收益是否保持；
+- donor 数量和 lineage 数量；
 - epoch 间 objective 变化；
 - promotion 后旧 lineage 获得资源和产生突破的比例。
 
