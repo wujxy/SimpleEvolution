@@ -31,7 +31,7 @@ from .frontier import (
 )
 from .queue import ExecutorQueue, QueueConfig
 from .reconcile import Reconciler
-from .telemetry import TelemetryRecorder
+from .telemetry import TelemetryRecorder, spend_usd
 
 
 @dataclass(frozen=True)
@@ -110,6 +110,12 @@ class Scheduler:
         # to turn the eval/budget cap into an actual stop for tree runs, which
         # otherwise never quiesce while frontier nodes keep research budget.
         self.stop_allocating = stop_allocating
+        # Durable cap state (eval/budget limit already reached), recomputed
+        # from the database + usage ledger at the top of every step, before
+        # any new work starts.  Together with ``stop_allocating`` this is
+        # the allocation-disabled condition, so a restarted capped run, a
+        # plain ``run()``, and a bounded driver all behave identically.
+        self._durable_cap_reached = False
         self._allocations_counter: dict[str, int] = {}
         self._queries = ResearchQueries(store.path)
         self._telemetry = TelemetryRecorder(self.run_dir)
@@ -150,15 +156,19 @@ class Scheduler:
         # installed limit actually changed (a restart with the same
         # configuration stays silent).
         self._sync_run_limits()
+        # 1d. Derive the durable cap from the same eval/spend data the
+        # budget view reads — before any new work starts this step.
+        self._durable_cap_reached = self._compute_durable_run_limit()
 
         # 2. Compute frontier.
         frontier = self._compute_frontier()
 
-        # 3. Allocation.  Once the driver has hit its eval/budget cap
-        #    (``stop_allocating``), the scheduler initiates no new logical
-        #    work — but a Supervisor result already on disk is still
-        #    harvested (closing the attempt, unapplied), so a capped run
-        #    drains instead of wedging on a running gate worker.
+        # 3. Allocation.  Once allocation is disabled — the driver declared
+        #    the cap (``stop_allocating``) or a durable run limit is already
+        #    reached — the scheduler initiates no new logical work, but a
+        #    Supervisor result already on disk is still harvested (closing
+        #    the attempt, unapplied), so a capped run drains instead of
+        #    wedging on a running gate worker.
         proposer_jobs = self._allocate_proposers(frontier)
 
         # A Supervisor-created integration request runs as an independent,
@@ -178,7 +188,10 @@ class Scheduler:
         #    L2, never turned into new experiments), so the run only drains
         #    experiments already in flight.
         experiment_jobs = (
-            [] if self.stop_allocating else self._drain_executor_queue()
+            (
+                [] if self._allocation_disabled()
+                else self._drain_executor_queue()
+            )
         )
 
         # 6. Poll running experiments for completed results.
@@ -212,9 +225,10 @@ class Scheduler:
 
         ``stalled`` means the growth gate exhausted its bounded retries with
         an unconsumed batch: the run parks instead of silently quiescing or
-        falling back to Frontier.  ``capped`` means the driver declared
-        ``stop_allocating`` and in-flight work has drained — evidence left
-        unconsumed does not keep a capped run spinning.
+        falling back to Frontier.  ``capped`` means allocation is
+        disabled (driver stop or a durable run limit reached) and in-flight
+        work has drained — evidence left unconsumed does not keep a capped
+        run spinning.
         """
         telemetry: list[dict[str, Any]] = []
         status = "quiesced"
@@ -227,7 +241,7 @@ class Scheduler:
             if self._supervisor_stalled() and not self._in_flight():
                 status = "stalled"
                 break
-            if self.stop_allocating and not self._in_flight():
+            if self._allocation_disabled() and not self._in_flight():
                 status = "capped"
                 break
             if self._quiescent():
@@ -287,13 +301,13 @@ class Scheduler:
         """Create proposer leases from the Supervisor growth gate, or from
         the explicit Frontier baseline when no supervisor is configured.
 
-        Under ``stop_allocating`` the baseline mode allocates nothing; the
+        With allocation disabled the baseline mode allocates nothing; the
         Supervisor gate still runs because it owns result harvesting (a
         completed worker must close its attempt even on a capped run).
         """
         if self.submit_supervisor is not None:
             return self._run_supervisor_gate()
-        if self.stop_allocating:
+        if self._allocation_disabled():
             return []
         return self._allocate_frontier_baseline(frontier)
 
@@ -369,7 +383,7 @@ class Scheduler:
         bounded by ``supervisor_max_retries``; exhaustion records
         ``supervisor_stalled`` and parks allocation visibly.
 
-        Once the driver has capped the run (``stop_allocating``), the gate
+        Once allocation is disabled (driver stop or durable cap), the gate
         only harvests: a result already on disk closes its attempt and is
         archived unapplied (``supervisor_decision_discarded``), and no new
         gate worker is submitted — a judgment formed under a budget state
@@ -384,11 +398,11 @@ class Scheduler:
             )
             if not result_path.exists():
                 return []
-            if self.stop_allocating:
+            if self._allocation_disabled():
                 return self._discard_supervisor_result(attempt, result_path)
             return self._ingest_supervisor_result(attempt, result_path)
 
-        if self.stop_allocating:
+        if self._allocation_disabled():
             return []
         pending = self.store.pending_supervisor_events()
         if not pending:
@@ -465,7 +479,7 @@ class Scheduler:
             {
                 "work_id": attempt.logical_work_id,
                 "decision_id": decision_id,
-                "reason": "run capped (stop_allocating)",
+                "reason": "run capped (allocation disabled)",
             },
         )
         self._archive_result(result_path, attempt.attempt_id)
@@ -604,21 +618,58 @@ class Scheduler:
         return jobs
 
     def _sync_run_limits(self) -> None:
-        """Install the configured budget limits; emit on real changes only."""
+        """Install the configured budget limits.
+
+        ``install_run_limits`` writes any change and its ``budget_changed``
+        wake event in one transaction; there is deliberately no second
+        emit here — a crash between the two writes could never leave the
+        intervention silently swallowed.
+        """
         limits = {
             "max_terminal_evals": self.config.max_terminal_evals,
             "budget_usd": self.config.budget_usd,
         }
         if all(value is None for value in limits.values()):
             return
-        changed = self.store.install_run_limits(limits)
-        if changed:
-            self.store.emit_supervisor_event(
-                "budget_changed", {
-                    "changed": changed,
-                    "max_terminal_evals": limits["max_terminal_evals"],
-                    "budget_usd": limits["budget_usd"],
-                })
+        self.store.install_run_limits(limits)
+
+    def _allocation_disabled(self) -> bool:
+        """No new logical work may start.
+
+        Either the driver declared the cap (``stop_allocating``) or a
+        durable run limit is already reached — the two causes are kept
+        distinct so a driver's manual stop is never silently overwritten.
+        """
+        return self.stop_allocating or self._durable_cap_reached
+
+    def _compute_durable_run_limit(self) -> bool:
+        """True when an installed eval/budget limit is already reached.
+
+        Reads the same numbers the budget view shows: terminal experiments
+        against ``max_terminal_evals``, and the shared usage-ledger spend
+        against ``budget_usd`` (only priceable when token pricing is
+        configured).  No limits installed -> never capped.
+        """
+        limits = self.store.run_limits()
+        if not limits:
+            return False
+        max_evals = limits.get("max_terminal_evals")
+        if max_evals is not None and self._queries.terminal_experiment_count() >= int(
+            max_evals
+        ):
+            return True
+        budget_usd = limits.get("budget_usd")
+        if budget_usd is not None:
+            pricing = (
+                dict(self.evolution_config.pricing)
+                if self.evolution_config is not None
+                and self.evolution_config.pricing else {}
+            )
+            if pricing and spend_usd(self.run_dir, pricing) >= float(
+                budget_usd
+            ):
+                return True
+        return False
 
     def _supervisor_payload(self, pending, attempt) -> dict[str, Any]:
         head = pending[-1].event_id
@@ -737,7 +788,7 @@ class Scheduler:
         # A capped run never starts integrator work (the request stays open
         # for a resumed run); results of jobs already in flight are still
         # harvested by _poll_integrators.
-        if self.stop_allocating:
+        if self._allocation_disabled():
             return []
         running_ids = {
             attempt.logical_work_id
@@ -1337,7 +1388,7 @@ class Scheduler:
             return
         # A capped run never re-runs the gate: its result could only be
         # discarded unapplied.
-        if self.stop_allocating:
+        if self._allocation_disabled():
             return
         if self._supervisor_exhausted(work_id):
             self._record_supervisor_stall(work_id)
@@ -1365,7 +1416,7 @@ class Scheduler:
         ):
             return
         # A capped run never (re-)starts integrator work.
-        if self.stop_allocating:
+        if self._allocation_disabled():
             return
         manifest_path = (
             self.run_dir / "integration_requests" / work_id / "manifest.json"

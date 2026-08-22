@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from simpleevo.config import EvolutionConfig
 from simpleevo.db.store import GateDecision, GateResult, Proposal, ResearchStore
 from simpleevo.scheduler.frontier import Frontier
 from simpleevo.scheduler.loop import Scheduler, SchedulerConfig
@@ -765,3 +766,65 @@ def test_budget_limits_are_durable_and_change_events_are_real(tmp_path: Path):
     # The durable state survives a process restart (a fresh store reads it).
     reopened = ResearchStore(tmp_path / "state.db")
     assert reopened.run_limits()["budget_usd"] == 1.0
+
+
+def test_durable_eval_cap_blocks_new_work_on_restart(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    root, episode, _ = _seed(store)
+    _seed_donor(store, root, episode)  # one terminal experiment
+    # A previous process installed the limit; the eval budget is spent.
+    store.install_run_limits(
+        {"max_terminal_evals": 1, "budget_usd": None})
+    _sync_cursor(store)
+    submitter = Submitter(tmp_path)
+    scheduler = _scheduler(store, tmp_path, submitter, max_terminal_evals=1)
+
+    store.emit_supervisor_event("goal_changed", {"goal": "faster"})
+    scheduler.step()
+
+    # The restart's very first step starts nothing despite pending
+    # evidence — the durable cap is derived before any new work.
+    assert submitter.supervisor == []
+    assert submitter.proposer == []
+    assert submitter.integrator == []
+    assert scheduler._allocation_disabled() is True
+    assert store.pending_supervisor_events()  # batch stays unconsumed
+    # A plain run() parks as capped without any driver-side flag.
+    assert scheduler.run(max_steps=4)["status"] == "capped"
+
+
+def test_durable_budget_cap_blocks_allocation(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    _seed(store)
+    # The usage ledger already exceeds the budget.
+    (tmp_path / "telemetry").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "telemetry" / "usage.jsonl").write_text(
+        '{"input_tokens": 1000000, "output_tokens": 0}\n',
+        encoding="utf-8",
+    )
+    store.install_run_limits(
+        {"max_terminal_evals": None, "budget_usd": 0.5})
+    _sync_cursor(store)
+    submitter = Submitter(tmp_path)
+    scheduler = Scheduler(
+        store, tmp_path,
+        SchedulerConfig(
+            quiescence_window_proposals=1, budget_usd=0.5),
+        evolution_config=EvolutionConfig(
+            goal="faster", repo_path=tmp_path,
+            runtime_image=tmp_path / "apptainer.sif",
+            editable_paths=(), frozen_paths=(), eval_commands=(),
+            metrics_schema={}, axes=(),
+            pricing={"input_usd_per_1m": 0.67, "output_usd_per_1m": 2.02},
+        ),
+        submitter=submitter,
+    )
+
+    store.emit_supervisor_event("goal_changed", {"goal": "faster"})
+    scheduler.step()
+
+    # $0.67 spent against a $0.50 budget: allocation is disabled, not just
+    # reported.
+    assert scheduler._allocation_disabled() is True
+    assert submitter.supervisor == []
+    assert store.pending_supervisor_events()

@@ -169,7 +169,9 @@ Budget changes have a reliable source: the driver's limits (terminal-eval cap,
 USD budget) are durable in the run's database and rebuilt from the same run
 configuration on restart, so constructing or restarting a run with unchanged
 limits emits nothing, while a resumed run with different limits emits a
-durable `budget_changed` event.
+durable `budget_changed` event — written in the same transaction as the new
+limit values, so a crash can never strand an applied change without its
+wake event.
 
 Scheduler ticks, telemetry updates, free capacity by itself, and work starting
 do not resume the Supervisor.
@@ -363,15 +365,23 @@ new automatic allocation while the Supervisor is unavailable.
 
 ### 9.1 Capped runs: harvest, never derive
 
-When the driver declares the run capped (eval or budget limit reached), the
-scheduler initiates no new logical work: no new gate turns, no new integrator
-jobs, no new proposer or experiment jobs. Work already in flight is drained
-and harvested — including a Supervisor result that lands after the cap, which
-closes its attempt and is archived unapplied (`supervisor_decision_discarded`)
-because it was formed under a budget state that no longer holds. The batch
-stays unconsumed for a resumed run; the discard is neither a failure nor a
-retry. A capped run ends with status `capped` once in-flight work drains,
-even with unconsumed evidence pending.
+The scheduler derives the cap itself, before any new work starts in a step:
+`allocation_disabled = stop_allocating or durable_run_limit_reached`, where
+the durable condition is computed from the same eval/spend numbers the budget
+view shows (terminal experiments against the eval cap, usage-ledger spend
+against the USD budget). The driver's manual `stop_allocating` remains a
+distinct cause and is never overwritten — a restarted already-capped run, a
+plain `run()`, and a bounded driver therefore behave identically, and the
+restart's very first step starts nothing.
+
+With allocation disabled the scheduler initiates no new logical work: no new
+gate turns, no new integrator jobs, no new proposer or experiment jobs. Work
+already in flight is drained and harvested — including a Supervisor result
+that lands after the cap, which closes its attempt and is archived unapplied
+(`supervisor_decision_discarded`) because it was formed under a budget state
+that no longer holds. The batch stays unconsumed for a resumed run; the
+discard is neither a failure nor a retry. A capped run ends with status
+`capped` once in-flight work drains, even with unconsumed evidence pending.
 
 ## 10. Required invariants and acceptance tests
 

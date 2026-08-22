@@ -668,3 +668,27 @@ def test_commit_rejects_mixed_decision_payloads(store: ResearchStore):
     assert store.get_supervisor_decision("d-bad") is None
     assert store.supervisor_event_cursor() == 0
     assert store.open_allocations() == []
+
+
+def test_budget_change_event_shares_the_limit_transaction(
+    store: ResearchStore,
+):
+    store.install_run_limits(
+        {"max_terminal_evals": 5, "budget_usd": 2.0})
+    # Constructing the run is not an intervention: no wake event.
+    assert store.pending_supervisor_events() == []
+
+    changed = store.install_run_limits(
+        {"max_terminal_evals": 5, "budget_usd": 1.0})
+
+    assert changed == ["budget_usd"]
+    events = store.pending_supervisor_events()
+    assert [e.type for e in events] == ["budget_changed"]
+    assert events[0].payload["budget_usd"] == 1.0
+    assert events[0].payload["changed"] == ["budget_usd"]
+    # One transaction: a reopen sees the new value AND the event, or
+    # neither — there is no crash window between them.
+    reopened = ResearchStore(store.path)
+    assert reopened.run_limits()["budget_usd"] == 1.0
+    assert [e.type for e in reopened.pending_supervisor_events()] == [
+        "budget_changed"]

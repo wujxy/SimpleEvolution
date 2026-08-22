@@ -1061,10 +1061,10 @@ class ResearchStore:
         """Upsert budget limits; return the names whose value changed.
 
         The first install of a limit is not a change (constructing a run is
-        not a budget intervention) — the scheduler emits ``budget_changed``
-        only for the returned names, so a restart with the same
-        configuration stays silent while a resumed run with different
-        limits wakes the gate.
+        not a budget intervention).  A change to an installed limit and its
+        ``budget_changed`` wake event are written in this one transaction —
+        a crash between the two is structurally impossible, so a resumed
+        run can never silently swallow a budget intervention.
         """
         changed: list[str] = []
         with self.transaction() as tx:
@@ -1082,6 +1082,21 @@ class ResearchStore:
                 )
                 if row is not None:
                     changed.append(name)
+            if changed:
+                tx._conn.execute(
+                    "INSERT INTO supervisor_events (type, payload, created_at) "
+                    "VALUES (?, ?, ?)",
+                    (
+                        "budget_changed",
+                        _json({
+                            "changed": changed,
+                            "max_terminal_evals": limits.get(
+                                "max_terminal_evals"),
+                            "budget_usd": limits.get("budget_usd"),
+                        }),
+                        time.time(),
+                    ),
+                )
         return changed
 
     def commit_supervisor_decision(

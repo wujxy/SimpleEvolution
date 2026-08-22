@@ -173,3 +173,24 @@ Four defects found by the review round after Tasks 1–9 landed, fixed in order:
   §6 budget block; §8 minimal semantic output per terminal; §9 atomic side
   effects for all kinds + §9.1 capped-run semantics; invariants 14 reworded,
   15 (stale zero side effects) and 16 (capped harvest-only) added.
+
+## Acceptance fixes (2026-08-23, review round 3)
+
+Two cross-paths in budget-state driving the runtime, both confirmed and fixed:
+
+- [x] **Finding 1 — atomic `budget_changed`.** The limit write and the wake
+  event were two transactions; a crash between them stranded an applied
+  change with no event, and the restart's diff saw nothing to re-emit.
+  `install_run_limits` now writes the change and its `budget_changed` event
+  in one transaction; the scheduler no longer emits separately. Test:
+  reopen sees value and event together, first install silent.
+- [x] **Finding 2 — durable cap is self-derived.** `stop_allocating` alone
+  let a restarted already-capped run start a fresh gate turn on its first
+  step (and baseline runs allocate) before the driver noticed. Allocation
+  gating is now `_allocation_disabled() = stop_allocating or
+  durable_run_limit_reached`, recomputed at the top of every step from the
+  same eval/spend data the budget view reads — restart, plain `run()`, and
+  the bounded driver behave identically; `run()` reports `capped` for the
+  durable cause too. Tests: eval-cap restart starts nothing despite pending
+  evidence and `run()` parks `capped`; budget-cap via the usage ledger
+  disables allocation.
