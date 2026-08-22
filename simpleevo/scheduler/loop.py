@@ -13,6 +13,7 @@ from simpleevo.db.queries import ResearchQueries
 from simpleevo.generator import Generator, load_generator_basis, select_one_generator
 from simpleevo.jobs.base import BaseSubmitter
 from simpleevo.research_state import research_state_to_dict
+from proposer.supervisor import build_group_snapshot, validate_decision
 
 from .frontier import (
     FrontierConfig,
@@ -66,6 +67,7 @@ class Scheduler:
         submitter: BaseSubmitter | None = None,
         submit_proposer: Callable[[str, dict[str, Any]], str] | None = None,
         submit_experiment: Callable[[str, dict[str, Any]], str] | None = None,
+        supervisor_decider: Callable[[Any, int], Any] | None = None,
         clock: Callable[[], float] = time.time,
         generator_basis: list[Generator] | None = None,
         stop_allocating: bool = False,
@@ -86,6 +88,7 @@ class Scheduler:
             self.submit_proposer = submit_proposer or (lambda _aid, _p: "")
             self.submit_experiment = submit_experiment or (lambda _eid, _p: "")
         self.clock = clock
+        self.supervisor_decider = supervisor_decider
         # When True, ``step()`` stops allocating new proposers; in-flight work
         # (running proposers/experiments and queued proposals) is still drained
         # until the scheduler reaches quiescence.  Used by the ablation driver
@@ -222,18 +225,61 @@ class Scheduler:
         return self.config.max_proposer_inflight - self.store.count_running_attempts("proposer")
 
     def _allocate_proposers(self, frontier):
-        """Create proposer allocations and submit jobs for frontier nodes."""
+        """Create proposer leases from Supervisor, or Frontier on failure."""
         capacity = self._proposer_capacity()
-        if capacity <= 0 or not frontier.node_ids:
+        if capacity <= 0:
             return []
 
+        directives = None
+        if self.supervisor_decider is not None:
+            try:
+                snapshot = build_group_snapshot(
+                    self.store,
+                    max_research_per_node=self._max_research_per_node(),
+                    max_proposals_per_node=self._max_proposals_per_node(),
+                )
+                decision = validate_decision(
+                    snapshot,
+                    self.supervisor_decider(snapshot, capacity),
+                    proposer_capacity=capacity,
+                )
+                directives = [
+                    (item.node_id, item.proposal_slots)
+                    for item in decision.allocations
+                ]
+                self.store.record_scheduler_event(
+                    "supervisor_decision_accepted",
+                    {
+                        "decision_id": decision.decision_id,
+                        "snapshot_watermark": snapshot.watermark,
+                        "allocations": [
+                            {"node_id": node_id, "proposal_slots": slots}
+                            for node_id, slots in directives
+                        ],
+                    },
+                )
+            except Exception as exc:
+                self.store.record_scheduler_event(
+                    "supervisor_fallback",
+                    {"error": str(exc)},
+                )
+                directives = None
+
+        if directives is None:
+            if not frontier.node_ids:
+                return []
+            directives = [
+                (node_id, self.config.proposal_slots)
+                for node_id in sample_proposer_nodes(
+                    frontier,
+                    self._allocations_counter,
+                    capacity,
+                    self._frontier_config(),
+                )
+            ]
+
         jobs = []
-        for node_id in sample_proposer_nodes(
-            frontier,
-            self._allocations_counter,
-            capacity,
-            self._frontier_config(),
-        ):
+        for node_id, proposal_slots in directives:
             episode = self._idle_episode_for_node(node_id)
             if episode is None:
                 # Frontier node whose episodes are all terminal: re-study it
@@ -248,7 +294,7 @@ class Scheduler:
             allocation = self.store.allocate_proposer(
                 node_id=node_id,
                 episode_id=episode.episode_id,
-                proposal_slots=self.config.proposal_slots,
+                proposal_slots=proposal_slots,
                 max_proposals_per_node=self._max_proposals_per_node(),
             )
             if allocation is None:

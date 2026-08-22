@@ -84,6 +84,14 @@ class ResearchQueries:
             ).fetchone()
             return None if row is None else _proposal_from_row(row)
 
+    def proposal_count_for_node(self, node_id: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM proposals WHERE node_id = ?",
+                (node_id,),
+            ).fetchone()
+            return int(row["n"])
+
     def get_research_state(self, research_state_id: str) -> ResearchState | None:
         with self._connect() as conn:
             row = conn.execute(

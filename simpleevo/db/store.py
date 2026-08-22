@@ -851,6 +851,16 @@ class ResearchStore:
             ).fetchone()
         return None if row is None else _epoch_from_row(row)
 
+    def record_scheduler_event(self, event_type: str, payload: dict[str, Any]) -> str:
+        event_id = _new_id()
+        with self.transaction() as tx:
+            tx._conn.execute(
+                "INSERT INTO scheduler_events (event_id, type, payload, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (event_id, event_type, _json(payload), time.time()),
+            )
+        return event_id
+
     def create_integration_request(
         self,
         *,
