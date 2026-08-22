@@ -90,6 +90,10 @@ class BaseSubmitter(ABC):
         """Stage one stateless group-allocation decision worker."""
         return self._submit("supervisor", decision_id, payload, self._proposer_defaults())
 
+    def submit_integrator(self, request_id: str, payload: Mapping[str, Any]) -> str:
+        """Stage one request-scoped temporary Integrator worker."""
+        return self._submit("integrator", request_id, payload, self._proposer_defaults())
+
     def poll(self, spec: JobSpec) -> WorkerResult | None:
         """Return the parsed worker result once ``result.json`` exists."""
         if not spec.result_path.exists():
@@ -142,6 +146,8 @@ class BaseSubmitter(ABC):
             directory = self.run_dir / "proposer_allocations" / work_id
         elif kind == "supervisor":
             directory = self.run_dir / "supervisor_decisions" / work_id
+        elif kind == "integrator":
+            directory = self.run_dir / "integration_requests" / work_id
         else:
             directory = self.run_dir / "experiments" / work_id
         return directory, directory / "manifest.json", directory / "result.json"
@@ -152,6 +158,7 @@ class BaseSubmitter(ABC):
         modules = {
             "proposer": "proposer.cli",
             "supervisor": "proposer.supervisor_cli",
+            "integrator": "proposer.integrator_cli",
             "experiment": "experiment.cli",
         }
         module = modules[kind]

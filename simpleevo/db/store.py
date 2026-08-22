@@ -97,6 +97,10 @@ class IntegrationRequest:
     selection_rationale: str
     status: str
     created_at: float
+    integrator_episode_id: str | None = None
+    proposal_id: str | None = None
+    experiment_id: str | None = None
+    closed_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -925,6 +929,10 @@ class ResearchStore:
                     selection_rationale=selection_rationale,
                     status="open",
                     created_at=existing.created_at,
+                    integrator_episode_id=existing.integrator_episode_id,
+                    proposal_id=existing.proposal_id,
+                    experiment_id=existing.experiment_id,
+                    closed_at=existing.closed_at,
                 ):
                     raise ValueError("integration request identity conflict")
                 return existing
@@ -943,6 +951,67 @@ class ResearchStore:
                 (integration_request_id,),
             ).fetchone()
         return None if row is None else _integration_request_from_row(row)
+
+    def integration_requests(self, *statuses: str) -> list[IntegrationRequest]:
+        sql = "SELECT * FROM integration_requests"
+        params: tuple[str, ...] = ()
+        if statuses:
+            sql += " WHERE status IN (" + ",".join("?" for _ in statuses) + ")"
+            params = tuple(statuses)
+        sql += " ORDER BY created_at"
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_integration_request_from_row(row) for row in rows]
+
+    def prepare_integration_request(self, request_id: str) -> IntegrationRequest:
+        with self.transaction() as tx:
+            request = tx.get_integration_request(request_id)
+            if request is None or request.status != "open":
+                raise ValueError("integration request is not open")
+            if request.integrator_episode_id is None:
+                episode = tx.create_episode(node_id=request.target_node_id)
+                tx._conn.execute(
+                    "UPDATE integration_requests SET integrator_episode_id = ? "
+                    "WHERE integration_request_id = ?",
+                    (episode.episode_id, request_id),
+                )
+            return tx.get_integration_request(request_id)
+
+    def finish_integration_request(
+        self,
+        request_id: str,
+        *,
+        status: str,
+        proposal_id: str | None = None,
+        experiment_id: str | None = None,
+    ) -> IntegrationRequest:
+        if status not in {"abstained", "submitted", "closed", "promoted"}:
+            raise ValueError("invalid integration request status")
+        closed_at = time.time() if status in {"abstained", "closed", "promoted"} else None
+        with self.transaction() as tx:
+            tx._conn.execute(
+                "UPDATE integration_requests SET status = ?, "
+                "proposal_id = COALESCE(?, proposal_id), "
+                "experiment_id = COALESCE(?, experiment_id), closed_at = ? "
+                "WHERE integration_request_id = ?",
+                (status, proposal_id, experiment_id, closed_at, request_id),
+            )
+            request = tx.get_integration_request(request_id)
+            if request is None:
+                raise ValueError("unknown integration request")
+            return request
+
+    def link_integration_experiment(
+        self, proposal_id: str, experiment_id: str,
+    ) -> None:
+        with self.transaction() as tx:
+            updated = tx._conn.execute(
+                "UPDATE integration_requests SET experiment_id = ? "
+                "WHERE proposal_id = ? AND status = 'submitted'",
+                (experiment_id, proposal_id),
+            )
+            if updated.rowcount > 1:
+                raise ValueError("proposal belongs to multiple integration requests")
 
 
 
@@ -1520,6 +1589,10 @@ def _integration_request_from_row(row: sqlite3.Row) -> IntegrationRequest:
         selection_rationale=row["selection_rationale"],
         status=row["status"],
         created_at=row["created_at"],
+        integrator_episode_id=row["integrator_episode_id"],
+        proposal_id=row["proposal_id"],
+        experiment_id=row["experiment_id"],
+        closed_at=row["closed_at"],
     )
 
 

@@ -220,3 +220,17 @@ def test_supervisor_uses_its_own_worker_artifact(tmp_path, monkeypatch):
     assert result_path == str(work_dir / "result.json")
     assert manifest["kind"] == "supervisor"
     assert "-m proposer.supervisor_cli" in (work_dir / "job.sh").read_text()
+
+
+def test_integrator_uses_request_scoped_worker_artifact(tmp_path, monkeypatch):
+    submitter = HTCondorSubmitter(tmp_path, _config(), python="/usr/bin/python3")
+    _fake_submit(monkeypatch)
+
+    result_path = submitter.submit_integrator("request-1", {
+        "request": {"integration_request_id": "request-1"},
+    })
+
+    work_dir = tmp_path / "integration_requests" / "request-1"
+    assert result_path == str(work_dir / "result.json")
+    assert json.loads((work_dir / "manifest.json").read_text())["kind"] == "integrator"
+    assert "-m proposer.integrator_cli" in (work_dir / "job.sh").read_text()

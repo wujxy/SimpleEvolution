@@ -17,6 +17,7 @@ from proposer.supervisor import (
     build_group_snapshot,
     decision_from_dict,
     validate_decision,
+    validate_integration_request,
 )
 
 from .frontier import (
@@ -91,10 +92,12 @@ class Scheduler:
             self.submit_proposer = submitter.submit_proposer
             self.submit_experiment = submitter.submit_experiment
             self.submit_supervisor = getattr(submitter, "submit_supervisor", None)
+            self.submit_integrator = getattr(submitter, "submit_integrator", None)
         else:
             self.submit_proposer = submit_proposer or (lambda _aid, _p: "")
             self.submit_experiment = submit_experiment or (lambda _eid, _p: "")
             self.submit_supervisor = None
+            self.submit_integrator = None
         self.clock = clock
         self.supervisor_decider = supervisor_decider
         # When True, ``step()`` stops allocating new proposers; in-flight work
@@ -141,8 +144,13 @@ class Scheduler:
             [] if self.stop_allocating else self._allocate_proposers(frontier)
         )
 
+        # A Supervisor-created integration request runs as an independent,
+        # temporary main-writer job rather than consuming a Scientist lease.
+        integrator_jobs = self._schedule_integrators()
+
         # 4. Poll proposer results and publish proposals.
         published = self._poll_proposers()
+        integrated = self._poll_integrators()
         if published:
             self._last_proposal_step = self._step_count
 
@@ -168,6 +176,8 @@ class Scheduler:
             "frontier_size": len(frontier.node_ids),
             "proposer_jobs": len(proposer_jobs),
             "published": len(published),
+            "integrator_jobs": len(integrator_jobs),
+            "integrated": len(integrated),
             "experiment_jobs": len(experiment_jobs),
             "ingested": len(ingested),
             "reconcile_actions": len(reconcile_actions),
@@ -250,6 +260,9 @@ class Scheduler:
                     snapshot,
                     self.supervisor_decider(snapshot, capacity),
                     proposer_capacity=capacity,
+                )
+                self._accept_integration_request(
+                    snapshot, decision.integration_request,
                 )
                 directives = [
                     (item.node_id, item.proposal_slots)
@@ -367,6 +380,9 @@ class Scheduler:
                     decision_from_dict(raw.get("result", {})),
                     proposer_capacity=capacity,
                 )
+                self._accept_integration_request(
+                    snapshot, decision.integration_request,
+                )
             except Exception as exc:
                 self.store.mark_attempt_failed(attempt.attempt_id)
                 self.store.record_scheduler_event(
@@ -407,6 +423,136 @@ class Scheduler:
             "attempt_id": attempt.attempt_id,
         })
         return _SUPERVISOR_WAITING
+
+    def _accept_integration_request(self, snapshot, raw) -> None:
+        if raw is None:
+            return
+        normalized = validate_integration_request(
+            self.store, snapshot.epoch_id, raw,
+        )
+        open_requests = self.store.integration_requests("open")
+        if open_requests and all(
+            item.integration_request_id != normalized["integration_request_id"]
+            for item in open_requests
+        ):
+            raise ValueError("another integration request is already open")
+        request = self.store.create_integration_request(**normalized)
+        self.store.record_scheduler_event(
+            "integration_request_created",
+            {
+                "integration_request_id": request.integration_request_id,
+                "epoch_id": request.epoch_id,
+                "target_node_id": request.target_node_id,
+                "donor_experiment_ids": list(request.donor_experiment_ids),
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Integration requests
+    # ------------------------------------------------------------------
+
+    def _schedule_integrators(self) -> list[str]:
+        if self.submit_integrator is None:
+            return []
+        running_ids = {
+            attempt.logical_work_id
+            for attempt in self.store.running_attempts("integrator")
+        }
+        jobs = []
+        for request in self.store.integration_requests("open"):
+            if request.integration_request_id in running_ids:
+                continue
+            request = self.store.prepare_integration_request(
+                request.integration_request_id,
+            )
+            proposal_id = f"integration-{request.integration_request_id}"
+            attempt = self.store.record_attempt(
+                logical_work_id=request.integration_request_id,
+                kind="integrator", status="running", started_at=self.clock(),
+            )
+            self.submit_integrator(request.integration_request_id, {
+                "request": asdict(request),
+                "episode_id": request.integrator_episode_id,
+                "proposal_id": proposal_id,
+                "public_evidence": self._integration_evidence(request),
+                "attempt_id": attempt.attempt_id,
+            })
+            jobs.append(request.integration_request_id)
+        return jobs
+
+    def _integration_evidence(self, request) -> dict[str, Any]:
+        target = self._queries.get_node(request.target_node_id)
+        donors = []
+        for experiment_id in request.donor_experiment_ids:
+            experiment = self._queries.get_experiment(experiment_id)
+            if experiment is None:
+                continue
+            proposal = self._queries.get_proposal(experiment.proposal_id)
+            child = (
+                self._queries.get_node(experiment.child_node_id)
+                if experiment.child_node_id else None
+            )
+            donors.append({
+                "experiment": asdict(experiment),
+                "proposal": None if proposal is None else asdict(proposal),
+                "child": None if child is None else asdict(child),
+            })
+        return {
+            "target": None if target is None else asdict(target),
+            "donors": donors,
+        }
+
+    def _poll_integrators(self) -> list[str]:
+        completed = []
+        for attempt in self.store.running_attempts("integrator"):
+            request_id = attempt.logical_work_id
+            result_path = (
+                self.run_dir / "integration_requests" / request_id / "result.json"
+            )
+            if not result_path.exists():
+                continue
+            try:
+                raw = json.loads(result_path.read_text(encoding="utf-8"))
+                if raw.get("status") != "completed":
+                    raise RuntimeError(raw.get("error") or "integrator worker failed")
+                result = raw.get("result", {})
+                request = self.store.get_integration_request(request_id)
+                if request is None or request.status != "open":
+                    raise ValueError("integration request is not open")
+                if result.get("outcome") == "abstained":
+                    self.store.finish_integration_request(
+                        request_id, status="abstained",
+                    )
+                elif result.get("outcome") == "submitted":
+                    proposal = result.get("proposal") or {}
+                    state = result.get("research_state") or {}
+                    donors = tuple(proposal.get("donor_experiment_ids", ()))
+                    if not donors or not set(donors).issubset(
+                        set(request.donor_experiment_ids)
+                    ):
+                        raise ValueError("Integrator used donors outside its request")
+                    self.store.publish_research_batch(
+                        node_id=request.target_node_id,
+                        episode_id=request.integrator_episode_id,
+                        transformations=(), research_states=(state,),
+                        proposals=(proposal,),
+                        reserved_proposal_ids=(proposal["proposal_id"],),
+                    )
+                    self.store.finish_integration_request(
+                        request_id, status="submitted",
+                        proposal_id=proposal["proposal_id"],
+                    )
+                else:
+                    raise ValueError("unknown Integrator outcome")
+            except Exception as exc:
+                print(f"[scheduler] invalid Integrator result {request_id}: {exc}", flush=True)
+                self.store.mark_attempt_failed(attempt.attempt_id)
+                self._archive_result(result_path, attempt.attempt_id)
+                continue
+            self.store.mark_attempt_succeeded(attempt.attempt_id)
+            self._archive_result(result_path, attempt.attempt_id)
+            completed.append(request_id)
+        return completed
 
     def _idle_episode_for_node(self, node_id: str):
         """Return a FRESH episode for ``node_id`` that has never run.
@@ -606,9 +752,14 @@ class Scheduler:
 
     def _drain_executor_queue(self, frontier):
         """Submit queued proposals as experiment jobs up to capacity."""
+        integration_targets = {
+            request.target_node_id
+            for request in self.store.integration_requests("submitted")
+            if request.experiment_id is None
+        }
         queue = ExecutorQueue(
             self.store,
-            frontier.node_ids,
+            set(frontier.node_ids) | integration_targets,
             self.config.queue or QueueConfig(),
         )
         queue.cleanup()
@@ -632,6 +783,9 @@ class Scheduler:
                     status="pending",
                 )
                 tx.transition_proposal_status(proposal_id, "running")
+            self.store.link_integration_experiment(
+                proposal_id, experiment.experiment_id,
+            )
             attempt = self.store.record_attempt(
                 logical_work_id=experiment.experiment_id,
                 kind="experiment",
@@ -892,6 +1046,8 @@ class Scheduler:
             self._resubmit_experiment(action.logical_work_id)
         elif action.work_kind == "supervisor":
             self._resubmit_supervisor(action.logical_work_id)
+        elif action.work_kind == "integrator":
+            self._resubmit_integrator(action.logical_work_id)
 
     def _resubmit_supervisor(self, work_id: str) -> None:
         if self.submit_supervisor is None or self.store.running_attempts("supervisor"):
@@ -911,6 +1067,26 @@ class Scheduler:
         )
         payload["attempt_id"] = attempt.attempt_id
         self.submit_supervisor(work_id, payload)
+
+    def _resubmit_integrator(self, work_id: str) -> None:
+        if self.submit_integrator is None or any(
+            item.logical_work_id == work_id
+            for item in self.store.running_attempts("integrator")
+        ):
+            return
+        manifest_path = (
+            self.run_dir / "integration_requests" / work_id / "manifest.json"
+        )
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))["payload"]
+        except (OSError, KeyError, json.JSONDecodeError):
+            return
+        attempt = self.store.record_attempt(
+            logical_work_id=work_id, kind="integrator", status="running",
+            started_at=self.clock(),
+        )
+        payload["attempt_id"] = attempt.attempt_id
+        self.submit_integrator(work_id, payload)
 
     def _resubmit_proposer(self, allocation_id: str) -> None:
         allocation = self.store.get_allocation(allocation_id)
@@ -991,6 +1167,7 @@ class Scheduler:
             self.store.running_attempts("proposer")
             or self.store.running_attempts("experiment")
             or self.store.running_attempts("supervisor")
+            or self.store.running_attempts("integrator")
         )
 
     def _quiescent(self) -> bool:
@@ -1000,6 +1177,10 @@ class Scheduler:
         if self.store.running_attempts("experiment"):
             return False
         if self.store.running_attempts("supervisor"):
+            return False
+        if self.store.running_attempts("integrator"):
+            return False
+        if self.store.integration_requests("open"):
             return False
         if self.store.queued_proposals():
             return False

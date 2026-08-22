@@ -37,7 +37,7 @@ class AgentRuntime:
         steps_budget: int,
         source_root: Path,
         build_tools,
-        terminal_name: str,
+        terminal_name: str | tuple[str, ...],
         budget_nudge: str,
         handle_terminal,
         compact,
@@ -46,6 +46,10 @@ class AgentRuntime:
         state: WorkingState | None = None,
     ):
         state = state or WorkingState()
+        terminal_names = (
+            {terminal_name} if isinstance(terminal_name, str)
+            else set(terminal_name)
+        )
         deadline = time.monotonic() + self.agent.timeout_seconds
         usages: list = []
         reminder_step = int(0.8 * steps_budget)
@@ -81,10 +85,10 @@ class AgentRuntime:
                     steps_budget=steps_budget,
                 )
 
-                if len(actions) == 1 and actions[0]["action"] == terminal_name:
+                if len(actions) == 1 and actions[0]["action"] in terminal_names:
                     action = actions[0]
-                    state.action_log.append({"action": terminal_name, "step": step})
-                    _bump(state, terminal_name)
+                    state.action_log.append({"action": action["action"], "step": step})
+                    _bump(state, action["action"])
                     messages.append({"role": "assistant", "content": reply_text})
                     session.append_message(
                         "assistant", reply_text, round_id=current_round,

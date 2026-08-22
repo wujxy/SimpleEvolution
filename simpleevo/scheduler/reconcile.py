@@ -49,6 +49,7 @@ class Reconciler:
         actions.extend(self._reconcile_proposers())
         actions.extend(self._reconcile_experiments())
         actions.extend(self._reconcile_supervisor())
+        actions.extend(self._reconcile_integrator())
         return actions
 
     def _reconcile_supervisor(self) -> list[ReconcileAction]:
@@ -68,6 +69,26 @@ class Reconciler:
             else:
                 actions.append(self._wait_or_retry(
                     attempt.logical_work_id, "supervisor",
+                ))
+        return actions
+
+    def _reconcile_integrator(self) -> list[ReconcileAction]:
+        actions = []
+        for attempt in self.store.running_attempts("integrator"):
+            result_path = (
+                self.artifact_root / "integration_requests"
+                / attempt.logical_work_id / "result.json"
+            )
+            if result_path.exists():
+                actions.append(ReconcileAction(
+                    kind="ingest_result",
+                    logical_work_id=attempt.logical_work_id,
+                    work_kind="integrator",
+                    reason=f"Integrator result file exists: {result_path}",
+                ))
+            else:
+                actions.append(self._wait_or_retry(
+                    attempt.logical_work_id, "integrator",
                 ))
         return actions
 
