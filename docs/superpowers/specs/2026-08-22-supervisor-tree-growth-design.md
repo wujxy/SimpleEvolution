@@ -20,10 +20,35 @@ research and evaluation budget on Nodes with the highest prospective value.
 
 ## 2. Core definition
 
-> The Supervisor is the research tree's growth controller. As new research
-> evidence arrives, the same Supervisor uses its continuing global
-> understanding and actively queried public evidence to decide which Nodes, if
-> any, receive the next proposer leases.
+> **The Supervisor is the research tree's growth gate. Whenever a new Node is
+> created, the same Supervisor uses its continuously accumulated global
+> understanding and actively investigated public evidence to decide whether
+> that Node receives one more opportunity to be researched.**
+
+A non-root Node is a new research world produced by one completed Experiment;
+the seed root is the initial world presented to the same gate. The
+Supervisor's irreducible scientific decision is only:
+
+> Given all evidence accumulated across the research tree, is this Node worth
+> one more proposer cost so that research may continue growing from it?
+
+The judgment has three essential considerations, not three mandatory workflow
+steps:
+
+- does the Node show credible potential for further improvement;
+- does it offer a valuable research opportunity relative to existing
+  lineages;
+- is investing the next proposer lease in it worth the opportunity cost?
+
+If it is worthwhile, the Supervisor grants one proposer lease. Otherwise it
+does not. A refused Node remains part of the public research history and may be
+reconsidered if later evidence changes its value.
+
+This is the scientific invariant of the role. Runtime batching may apply the
+same judgment to several Nodes in one turn, and new evidence may cause the
+Supervisor to reconsider a historical Node. Neither changes the underlying
+decision from "does this Node receive another chance to grow?" into general
+workflow or resource management.
 
 The Supervisor is a global planner, but Node allocation is its only control
 over normal tree growth. The accumulated allocation decisions determine the
@@ -37,6 +62,44 @@ shape of the tree:
 Diversity has no guaranteed quota. Novelty, eligibility, and unused capacity
 are not sufficient reasons to invest. A new direction must have credible
 prospective or information value.
+
+The minimal scientific loop is:
+
+```text
+new Node is created
+        ↓
+the same Supervisor resumes
+        ↓
+it actively queries the global research history
+        ↓
+it decides whether the Node may continue growing
+        ↓
+node ID + rationale
+```
+
+Depth and breadth emerge from repeated instances of this decision; they are
+not separate modes or quotas. Consecutively approving promising descendants
+deepens a lineage. Approving a credible independent mechanism gives a new
+direction one chance. Novelty without potential is refused, an exhausted
+high-scoring direction may be refused, and the tree stops expanding when no
+Node justifies another lease.
+
+Three conditions are therefore foundational:
+
+1. **Cognitive continuity.** Every resumption restores the same logical
+   Supervisor, including what it previously inspected, funded, and judged.
+2. **Active investigation.** The Harness exposes read-only access to the
+   global Node, lineage, Proposal, Experiment, diff, failure, and allocation
+   history. It does not prepare a ranking or make the judgment on the
+   Supervisor's behalf.
+3. **Exclusive growth authority.** Only the Supervisor can grant proposer
+   leases. The Scheduler does not fill vacancies, Frontier does not take over,
+   and capacity may remain unused.
+
+Process lifetime, event batching, context compaction, stale decisions,
+integration triggers, sibling waiting, and step budgets are runtime design
+questions. They must preserve this definition and must not expand or redefine
+the Supervisor's scientific responsibility.
 
 ## 3. Role boundaries
 
@@ -176,7 +239,8 @@ When resumed, the Supervisor may inspect any part of the public environment and
 then select any currently allocatable Node, not only the Node named by the
 latest event. This is necessary for global planning: new evidence may make an
 older leader, a parked branch, or a different lineage the best next
-investment.
+investment. Selecting several Nodes in one turn only batches several instances
+of the same per-Node grow/do-not-grow judgment.
 
 No mandatory investigation workflow is prescribed. The standing objective is:
 
@@ -246,23 +310,27 @@ new automatic allocation while the Supervisor is unavailable.
 
 The implementation must demonstrate:
 
-1. all Supervisor turns in one run use the same stable identity and notebook;
-2. terminal Experiment events and proposer-without-Experiment outcomes are
+1. every proposer lease is the result of the Supervisor deciding that its Node
+   deserves another opportunity to grow;
+2. no Scheduler, Frontier, capacity-filling rule, or other role can grant a
+   proposer lease in a Supervisor run;
+3. all Supervisor turns in one run use the same stable identity and notebook;
+4. terminal Experiment events and proposer-without-Experiment outcomes are
    delivered durably and at least once;
-3. retries cannot create duplicate decisions or proposer leases;
-4. event batches contain only incremental facts, not a Harness-authored
+5. retries cannot create duplicate decisions or proposer leases;
+6. event batches contain only incremental facts, not a Harness-authored
    ranking or recommendation;
-5. the Supervisor can query every historical Node, including non-allocatable
+7. the Supervisor can query every historical Node, including non-allocatable
    and non-Frontier Nodes;
-6. the Supervisor can select a historical Node unrelated to the newest event;
-7. zero, one, and multiple Node selections are all accepted when valid;
-8. unused capacity remains idle and causes no repeated allocation request by
+8. the Supervisor can select a historical Node unrelated to the newest event;
+9. zero, one, and multiple Node selections are all accepted when valid;
+10. unused capacity remains idle and causes no repeated allocation request by
    itself;
-9. an empty selection waits while work remains and quiesces when none remains;
-10. stale or failed Supervisor work never silently falls back to Frontier;
-11. context compaction preserves the immutable archive and resumes from the
+11. an empty selection waits while work remains and quiesces when none remains;
+12. stale or failed Supervisor work never silently falls back to Frontier;
+13. context compaction preserves the immutable archive and resumes from the
     Supervisor-authored notebook plus new events;
-12. the semantic model output contains only `node_ids` and `rationale`.
+14. the semantic model output contains only `node_ids` and `rationale`.
 
 ## 11. Explicit non-goals
 

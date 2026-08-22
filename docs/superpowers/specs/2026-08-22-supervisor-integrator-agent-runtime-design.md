@@ -1,5 +1,27 @@
 # Supervisor、Integrator 与统一 Agent Runtime 设计
 
+> **状态更新（2026-08-22）**：本文的 Supervisor 分配模型已被
+> `2026-08-22-supervisor-tree-growth-design.md`（持久认知、事件驱动、唯一生长门）取代，
+> 实施见 `docs/superpowers/plans/2026-08-22-supervisor-tree-growth-implementation.md`。
+> 就此作废或修订的小节：
+>
+> - §6.3（Supervisor 无状态 session、不积累认知历史）→ 改为复用 Scientist 连续性模式的
+>   持久 session（session.jsonl / notebook.md / meta.json），公共 ledger 优先于 notebook；
+> - §8.1（GroupSnapshot 输入快照）→ 唤醒消息只含增量事件批次与稳定对象 ID，
+>   Supervisor 用只读工具拉式调查，Harness 不准备排名或推荐；
+> - §8.2（含 proposal_slots / evidence_refs / watermark 的决策输出）→ 生长决策收缩为
+>   `{node_ids, rationale}`，identity 与事件游标由 Harness 供给；
+> - §5.5 与 §8.5（Supervisor 失败/超时/非法输出时的 Frontier fallback）→ Supervisor run 内
+>   彻底移除 fallback：失败保持事件批次未消费、有界重试同一 session，耗尽记
+>   `supervisor_stalled` 并升级到人；Frontier 仅保留为非 Supervisor run 的显式基线模式
+>   与遥测视图；
+> - §17 MVP 第 3 条（"加入 Supervisor decision、持久化和 Frontier fallback"）与
+>   §15.3 中 fallback 相关测试 → 相应作废。
+>
+> 其余内容不变：Scientist / Integrator / Executor 职责、Scheduler 机械编排、integration
+> request 与 epoch promotion 协议本身仍然有效；统合触发与 epoch 评审保留为同一持久
+> Supervisor 的独立 terminal，不与生长决策捆绑。
+
 ## 1. 设计结论
 
 SimpleEvolution 增加两个组织级研究角色，并把现有 Scientist 的通用对话循环
