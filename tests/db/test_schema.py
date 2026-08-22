@@ -30,6 +30,8 @@ def test_schema_creates_all_tables():
             "frontier_axes",
             "proposer_allocations",
             "scheduler_events",
+            "epochs",
+            "integration_requests",
         }
         assert expected <= tables, f"missing tables: {expected - tables}"
         conn.close()
@@ -59,4 +61,6 @@ def test_schema_migrates_legacy_proposal_table():
         }
 
         assert "research_state_id" in columns
+        assert "research_operation" in columns
+        assert "donor_experiment_ids" in columns
         conn.close()

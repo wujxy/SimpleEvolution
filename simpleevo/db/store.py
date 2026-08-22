@@ -76,6 +76,16 @@ class Proposal:
     status: str
     created_at: float
     research_state_id: str | None = None
+    research_operation: str | None = None
+    donor_experiment_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class Epoch:
+    epoch_id: str
+    root_node_id: str
+    previous_epoch_id: str | None
+    created_at: float
 
 
 @dataclass(frozen=True)
@@ -147,6 +157,16 @@ class ResearchStore:
             ResearchDBSchema.apply(conn)
             conn.commit()
 
+            root = conn.execute(
+                "SELECT node_id FROM nodes WHERE parent_node_id IS NULL "
+                "ORDER BY created_at, node_id LIMIT 1"
+            ).fetchone()
+            has_epoch = conn.execute("SELECT 1 FROM epochs LIMIT 1").fetchone()
+            if root is not None and has_epoch is None:
+                conn.execute(
+                    "INSERT INTO epochs VALUES (?, ?, NULL, ?)",
+                    ("epoch-0", root["node_id"], time.time()),
+                )
     @contextmanager
     def transaction(self, *, immediate: bool = False):
         """Context manager yielding a Transaction object."""
@@ -301,6 +321,14 @@ class ResearchStore:
                     raise ValueError(
                         f"proposal_id {proposal_id} not in reserved pool"
                     )
+                operation = raw.get("research_operation")
+                donors = tuple(raw.get("donor_experiment_ids", ()))
+                if operation == "explore" and donors:
+                    raise ValueError("explore proposals cannot name donors")
+                if operation == "synthesize" and not donors:
+                    raise ValueError("synthesize proposals require donors")
+                if operation not in {None, "explore", "synthesize"}:
+                    raise ValueError("unknown research operation")
                 tx.create_proposal(
                     Proposal(
                         proposal_id=proposal_id,
@@ -310,6 +338,8 @@ class ResearchStore:
                         rationale=raw.get("rationale", {}),
                         status="queued",
                         created_at=now,
+                        research_operation=operation,
+                        donor_experiment_ids=donors,
                     )
                 )
                 created.append(tx.get_proposal(proposal_id))
@@ -793,6 +823,14 @@ class ResearchStore:
         finally:
             conn.close()
 
+    def current_epoch(self) -> Epoch | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM epochs ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+        return None if row is None else _epoch_from_row(row)
+
+
 
 class _Transaction:
     """Internal: one SQLite transaction boundary."""
@@ -834,6 +872,12 @@ class _Transaction:
                 now,
             ),
         )
+        if parent_node_id is None:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO epochs VALUES (?, ?, NULL, ?)",
+                ("epoch-0", nid, now),
+            )
+
         return self.get_node(nid)
 
     def get_node(self, node_id: str) -> Node | None:
@@ -1004,8 +1048,9 @@ class _Transaction:
             """
             INSERT INTO proposals
             (proposal_id, node_id, episode_id, instruction, rationale,
-             status, created_at, research_state_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             status, created_at, research_state_id, research_operation,
+             donor_experiment_ids)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 proposal.proposal_id,
@@ -1016,6 +1061,8 @@ class _Transaction:
                 proposal.status,
                 proposal.created_at,
                 getattr(proposal, "research_state_id", None),
+                getattr(proposal, "research_operation", None),
+                _json(list(getattr(proposal, "donor_experiment_ids", ()))),
             ),
         )
         return proposal
@@ -1253,6 +1300,8 @@ def _proposal_from_row(row: sqlite3.Row) -> Proposal:
         status=row["status"],
         created_at=row["created_at"],
         research_state_id=row["research_state_id"],
+        research_operation=row["research_operation"],
+        donor_experiment_ids=tuple(_unjson(row["donor_experiment_ids"])),
     )
 
 
@@ -1305,6 +1354,15 @@ def _proposer_allocation_from_row(row: sqlite3.Row) -> ProposerAllocation:
         started_at=row["started_at"],
         finished_at=row["finished_at"],
         proposals_produced=row["proposals_produced"],
+    )
+
+
+def _epoch_from_row(row: sqlite3.Row) -> Epoch:
+    return Epoch(
+        epoch_id=row["epoch_id"],
+        root_node_id=row["root_node_id"],
+        previous_epoch_id=row["previous_epoch_id"],
+        created_at=row["created_at"],
     )
 
 

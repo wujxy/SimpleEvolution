@@ -248,6 +248,23 @@ def test_publish_proposals_rejects_id_outside_reserved_pool(store: ResearchStore
         )
 
 
+def test_root_creates_epoch_zero(store: ResearchStore):
+    with store.transaction() as tx:
+        root = tx.create_node(
+            parent_node_id=None,
+            experiment_id=None,
+            sha="epoch-root",
+            metrics={},
+            gate_result=_gate(True),
+            depth=0,
+            status="active",
+        )
+
+    epoch = store.current_epoch()
+
+    assert epoch is not None
+    assert epoch.epoch_id == "epoch-0"
+    assert epoch.root_node_id == root.node_id
 def test_tree_lineage(store: ResearchStore):
     with store.transaction() as tx:
         root = tx.create_node(
@@ -336,4 +353,48 @@ def test_ingest_idempotency_rejects_double_terminal(store: ResearchStore):
             metrics={},
             gate_result=_gate(True),
             status="completed",
+        )
+
+def test_proposal_operations_require_correct_donor_provenance(store: ResearchStore):
+    with store.transaction() as tx:
+        root = tx.create_node(
+            parent_node_id=None, experiment_id=None, sha="operation-root",
+            metrics={}, gate_result=_gate(True), depth=0, status="active",
+        )
+        episode = tx.create_episode(
+            inherited_from_episode_id=None, node_id=root.node_id,
+        )
+
+    with pytest.raises(ValueError, match="explore.*donor"):
+        store.publish_proposals(
+            node_id=root.node_id, episode_id=episode.episode_id,
+            proposals=[{
+                "proposal_id": "explore-with-donor",
+                "instruction": "new mechanism",
+                "research_operation": "explore",
+                "donor_experiment_ids": ["exp-donor"],
+            }],
+        )
+
+    proposal = store.publish_proposals(
+        node_id=root.node_id, episode_id=episode.episode_id,
+        proposals=[{
+            "proposal_id": "synthesis-ok",
+            "instruction": "port result",
+            "research_operation": "synthesize",
+            "donor_experiment_ids": ["exp-donor"],
+        }],
+    )[0]
+
+    assert proposal.research_operation == "synthesize"
+    assert proposal.donor_experiment_ids == ("exp-donor",)
+
+    with pytest.raises(ValueError, match="synthesize.*donor"):
+        store.publish_proposals(
+            node_id=root.node_id, episode_id=episode.episode_id,
+            proposals=[{
+                "proposal_id": "synthesis-without-donor",
+                "instruction": "port result",
+                "research_operation": "synthesize",
+            }],
         )

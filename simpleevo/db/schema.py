@@ -26,6 +26,15 @@ class ResearchDBSchema:
             conn.execute(
                 "ALTER TABLE proposals ADD COLUMN research_state_id TEXT"
             )
+        if "research_operation" not in columns:
+            conn.execute(
+                "ALTER TABLE proposals ADD COLUMN research_operation TEXT"
+            )
+        if "donor_experiment_ids" not in columns:
+            conn.execute(
+                "ALTER TABLE proposals ADD COLUMN donor_experiment_ids TEXT "
+                "NOT NULL DEFAULT '[]'"
+            )
 
 
 _DDL = """
@@ -104,6 +113,8 @@ CREATE TABLE IF NOT EXISTS proposals (
     episode_id TEXT NOT NULL REFERENCES episodes(episode_id),
     instruction TEXT NOT NULL,
     rationale TEXT NOT NULL DEFAULT '{}',
+    research_operation TEXT CHECK (research_operation IN ('explore', 'synthesize')),
+    donor_experiment_ids TEXT NOT NULL DEFAULT '[]',
     research_state_id TEXT,
     status TEXT NOT NULL DEFAULT 'queued'
         CHECK (status IN (
@@ -194,6 +205,33 @@ CREATE TABLE IF NOT EXISTS proposer_allocations (
 
 CREATE INDEX IF NOT EXISTS idx_allocations_node ON proposer_allocations(node_id);
 CREATE INDEX IF NOT EXISTS idx_allocations_episode ON proposer_allocations(episode_id);
+
+-- Logical shared baselines. Nodes retain their original single-parent tree.
+CREATE TABLE IF NOT EXISTS epochs (
+    epoch_id TEXT PRIMARY KEY,
+    root_node_id TEXT NOT NULL REFERENCES nodes(node_id),
+    previous_epoch_id TEXT REFERENCES epochs(epoch_id),
+    created_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_epochs_root ON epochs(root_node_id);
+
+-- Durable request state for a temporary integration investigation.
+CREATE TABLE IF NOT EXISTS integration_requests (
+    integration_request_id TEXT PRIMARY KEY,
+    epoch_id TEXT NOT NULL REFERENCES epochs(epoch_id),
+    target_node_id TEXT NOT NULL REFERENCES nodes(node_id),
+    donor_experiment_ids TEXT NOT NULL,
+    selection_rationale TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open'
+        CHECK (status IN ('open', 'abstained', 'submitted', 'closed', 'promoted')),
+    integrator_episode_id TEXT,
+    proposal_id TEXT REFERENCES proposals(proposal_id),
+    experiment_id TEXT REFERENCES experiments(experiment_id),
+    created_at REAL NOT NULL,
+    closed_at REAL
+);
+
 
 -- Scheduler audit events.
 CREATE TABLE IF NOT EXISTS scheduler_events (
