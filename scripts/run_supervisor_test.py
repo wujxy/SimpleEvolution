@@ -13,6 +13,12 @@ Usage:
     --max-evals 14 --budget-usd 6.0
 
 Notes:
+- Before init the driver pre-flights both model channels (researcher and
+  executor) with one tiny completion each, failing fast with a diagnostic
+  when the launching shell's credentials do not match the configured
+  providers (the observed failure: a Claude Code settings.json pointing at
+  bigmodel forwards its token into every executor attempt → 401 from
+  api.deepseek.com, with no diagnostic at the driver level).
 - The Supervisor is the sole admission gate: each proposer allocation is a
   Supervisor worker decision; Frontier is telemetry only (there is no
   fallback — a failing gate retries and may park the run as stalled).
@@ -43,6 +49,8 @@ from simpleevo.db.store import ResearchStore
 from simpleevo.jobs.local import LocalSubmitter
 from simpleevo.scheduler.loop import Scheduler
 from simpleevo.scheduler.telemetry import spend_usd
+
+from proposer.model import build_chat_model
 
 _EVENT_KINDS = {
     "supervisor_decision_accepted",
@@ -92,9 +100,48 @@ def _latest_events(queries: ResearchQueries, seen: set[str]) -> list[str]:
     return out
 
 
+def _api_preflight(config) -> None:
+    """Fail fast when either model channel cannot talk to its provider.
+
+    The executor channel is the trap this guards: its base_url comes from
+    the task config while its token is forwarded from the launching shell
+    (ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY), so a shell provisioned for
+    a different provider authenticates 401 inside every experiment attempt
+    with no diagnostic at the driver level.
+    """
+    for role in ("researcher", "executor"):
+        spec = dict(getattr(config, role))
+        model = build_chat_model(spec)
+        try:
+            model.complete(
+                system="You are a connectivity pre-flight check.",
+                messages=[
+                    {"role": "user", "content": "Reply with exactly: OK"}
+                ],
+                timeout_seconds=90,
+                json_object=False,
+            )
+        except Exception as exc:
+            raise SystemExit(
+                f"[supervisor-int] api check FAILED for {role}: "
+                f"api={spec.get('api')} model={spec.get('model')} "
+                f"base_url={spec.get('base_url')}\n  {exc}\n"
+                "The key is resolved from the launching shell "
+                "(OPENAI_API_KEY / ANTHROPIC_AUTH_TOKEN) and must match the "
+                "configured provider — e.g. for DeepSeek, launch with the "
+                "DeepSeek settings env exported."
+            )
+        print(
+            f"[supervisor-int] api check ok: {role} api={spec.get('api')} "
+            f"model={spec.get('model')} base_url={spec.get('base_url')}",
+            flush=True,
+        )
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     random.seed(args.seed)
     config = load_config(args.config)
+    _api_preflight(config)
     run_dir = Path(args.run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
 
