@@ -886,7 +886,7 @@ class ResearchStore:
     def current_epoch(self) -> Epoch | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT * FROM epochs ORDER BY created_at DESC LIMIT 1"
+                "SELECT * FROM epochs ORDER BY created_at DESC, rowid DESC LIMIT 1"
             ).fetchone()
         return None if row is None else _epoch_from_row(row)
 
@@ -1012,6 +1012,44 @@ class ResearchStore:
             )
             if updated.rowcount > 1:
                 raise ValueError("proposal belongs to multiple integration requests")
+
+    def promote_integration_epoch(self, request_id: str) -> Epoch:
+        """Atomically append an epoch after checking immutable experiment facts."""
+        with self.transaction() as tx:
+            request = tx.get_integration_request(request_id)
+            if request is None or request.status != "submitted":
+                raise ValueError("integration request is not awaiting review")
+            row = tx._conn.execute(
+                "SELECT * FROM epochs ORDER BY created_at DESC, rowid DESC LIMIT 1"
+            ).fetchone()
+            current = _epoch_from_row(row)
+            if request.epoch_id != current.epoch_id:
+                raise ValueError("integration request belongs to an older epoch")
+            experiment = (
+                tx.get_experiment(request.experiment_id)
+                if request.experiment_id else None
+            )
+            if (
+                experiment is None or experiment.status != "completed"
+                or not experiment.gate_result.passed
+                or not experiment.child_node_id
+            ):
+                raise ValueError("epoch promotion requires a gate-passed candidate")
+            epoch_id = f"epoch-{_new_id()}"
+            now = time.time()
+            tx._conn.execute(
+                "INSERT INTO epochs VALUES (?, ?, ?, ?)",
+                (epoch_id, experiment.child_node_id, current.epoch_id, now),
+            )
+            tx._conn.execute(
+                "UPDATE integration_requests SET status = 'promoted', closed_at = ? "
+                "WHERE integration_request_id = ?",
+                (now, request_id),
+            )
+            row = tx._conn.execute(
+                "SELECT * FROM epochs WHERE epoch_id = ?", (epoch_id,),
+            ).fetchone()
+            return _epoch_from_row(row)
 
 
 

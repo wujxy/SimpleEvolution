@@ -164,6 +164,7 @@ class Scheduler:
 
         # 6. Poll running experiments for completed results.
         ingested = self._poll_experiments()
+        self._resolve_integration_outcomes()
 
         # 7. Record telemetry.
         self._telemetry.record(
@@ -264,6 +265,7 @@ class Scheduler:
                 self._accept_integration_request(
                     snapshot, decision.integration_request,
                 )
+                self._apply_epoch_review(decision.epoch_review)
                 directives = [
                     (item.node_id, item.proposal_slots)
                     for item in decision.allocations
@@ -383,6 +385,7 @@ class Scheduler:
                 self._accept_integration_request(
                     snapshot, decision.integration_request,
                 )
+                self._apply_epoch_review(decision.epoch_review)
             except Exception as exc:
                 self.store.mark_attempt_failed(attempt.attempt_id)
                 self.store.record_scheduler_event(
@@ -446,6 +449,67 @@ class Scheduler:
                 "donor_experiment_ids": list(request.donor_experiment_ids),
             },
         )
+
+    def _resolve_integration_outcomes(self) -> None:
+        """Close scientifically rejected integrations without semantic review."""
+        for request in self.store.integration_requests("submitted"):
+            if not request.experiment_id:
+                continue
+            experiment = self._queries.get_experiment(request.experiment_id)
+            if experiment is None:
+                continue
+            if experiment.status in {"gate_rejected", "no_change"}:
+                self.store.finish_integration_request(
+                    request.integration_request_id, status="closed",
+                )
+                self.store.record_scheduler_event(
+                    "integration_candidate_rejected",
+                    {
+                        "integration_request_id": request.integration_request_id,
+                        "experiment_id": experiment.experiment_id,
+                        "status": experiment.status,
+                    },
+                )
+
+    def _apply_epoch_review(self, review) -> None:
+        if review is None:
+            return
+        request_id = str(review.get("integration_request_id", "")).strip()
+        action = str(review.get("action", "")).strip()
+        rationale = str(review.get("rationale", "")).strip()
+        if not request_id or action not in {"promote", "retain"} or not rationale:
+            raise ValueError("invalid epoch review")
+        request = self.store.get_integration_request(request_id)
+        experiment = (
+            self._queries.get_experiment(request.experiment_id)
+            if request is not None and request.experiment_id else None
+        )
+        if (
+            request is None or request.status != "submitted"
+            or experiment is None or experiment.status != "completed"
+            or not experiment.gate_result.passed or not experiment.child_node_id
+        ):
+            raise ValueError("epoch review requires a gate-passed candidate")
+        if action == "promote":
+            epoch = self.store.promote_integration_epoch(request_id)
+            payload = {
+                "integration_request_id": request_id,
+                "epoch_id": epoch.epoch_id,
+                "root_node_id": epoch.root_node_id,
+                "rationale": rationale,
+                "evidence_refs": list(review.get("evidence_refs", ())),
+            }
+            self.store.record_scheduler_event("epoch_promoted", payload)
+        else:
+            self.store.finish_integration_request(request_id, status="closed")
+            self.store.record_scheduler_event(
+                "integration_candidate_retained",
+                {
+                    "integration_request_id": request_id,
+                    "rationale": rationale,
+                    "evidence_refs": list(review.get("evidence_refs", ())),
+                },
+            )
 
     # ------------------------------------------------------------------
     # Integration requests

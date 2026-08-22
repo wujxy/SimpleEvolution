@@ -32,6 +32,7 @@ class GroupSnapshot:
     epoch_root_node_id: str
     watermark: str
     eligible_nodes: tuple[SnapshotNode, ...]
+    integration_outcomes: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,7 @@ class SupervisorDecision:
     rationale: str
     evidence_refs: tuple[str, ...]
     integration_request: dict[str, Any] | None = None
+    epoch_review: dict[str, Any] | None = None
 
 
 def decision_from_dict(raw: dict[str, Any]) -> SupervisorDecision:
@@ -67,6 +69,7 @@ def decision_from_dict(raw: dict[str, Any]) -> SupervisorDecision:
         rationale=str(raw["rationale"]),
         evidence_refs=tuple(str(ref) for ref in raw["evidence_refs"]),
         integration_request=raw.get("integration_request"),
+        epoch_review=raw.get("epoch_review"),
     )
 
 
@@ -158,6 +161,7 @@ class SupervisorAgent(ResearchAgent):
                     rationale=str(action["rationale"]),
                     evidence_refs=tuple(str(ref) for ref in action["evidence_refs"]),
                     integration_request=action.get("integration_request"),
+                    epoch_review=action.get("epoch_review"),
                 )
 
             return AgentRuntime(self).run(
@@ -217,6 +221,22 @@ def build_group_snapshot(
             metrics=dict(node.metrics),
         ))
 
+    integration_outcomes = []
+    for request in store.integration_requests():
+        experiment = (
+            queries.get_experiment(request.experiment_id)
+            if request.experiment_id else None
+        )
+        child = (
+            queries.get_node(experiment.child_node_id)
+            if experiment is not None and experiment.child_node_id else None
+        )
+        integration_outcomes.append({
+            "request": asdict(request),
+            "experiment": None if experiment is None else asdict(experiment),
+            "candidate_node": None if child is None else asdict(child),
+        })
+
     facts = {
         "epoch": (epoch.epoch_id, epoch.root_node_id),
         "nodes": [
@@ -228,6 +248,7 @@ def build_group_snapshot(
             (item.experiment_id, item.status, item.result_sha)
             for item in queries.list_experiments()
         ],
+        "integration_outcomes": integration_outcomes,
     }
     watermark = hashlib.sha256(
         json.dumps(facts, sort_keys=True, separators=(",", ":")).encode()
@@ -237,6 +258,7 @@ def build_group_snapshot(
         epoch_root_node_id=epoch.root_node_id,
         watermark=watermark,
         eligible_nodes=tuple(eligible),
+        integration_outcomes=tuple(integration_outcomes),
     )
 
 
@@ -262,6 +284,8 @@ def validate_decision(
         selected.add(allocation.node_id)
     if len(decision.allocations) > proposer_capacity:
         raise ValueError("supervisor decision exceeds proposer capacity")
+    if decision.integration_request is not None and decision.epoch_review is not None:
+        raise ValueError("cannot open and review integration in one decision")
     return decision
 
 

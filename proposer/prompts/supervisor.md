@@ -12,4 +12,7 @@ mature, compatible evidence. Unselected nodes remain available later.
 Return exactly one JSON object with action `submit_supervisor_decision` and:
 `decision_id`, the supplied `epoch_id` and `snapshot_watermark`, `allocations`
 (each has `node_id` and positive `proposal_slots`), `rationale`, `evidence_refs`,
-and optional `integration_request`. Never return `submit_proposals`.
+optional `integration_request`, and optional `epoch_review`. An epoch review has
+`integration_request_id`, action `promote` or `retain`, `rationale`, and
+`evidence_refs`; promote only a completed gate-passed candidate. Never return
+`submit_proposals`.
