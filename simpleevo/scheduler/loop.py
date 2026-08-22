@@ -143,16 +143,17 @@ class Scheduler:
         # 2. Compute frontier.
         frontier = self._compute_frontier()
 
-        # 3. Allocate proposers to frontier nodes.  Suppressed once the driver
-        #    has hit its eval/budget cap — the run then only drains in-flight
-        #    work (running proposers publish; queued proposals become
-        #    experiments; running experiments complete) and quiesces.
-        proposer_jobs = (
-            [] if self.stop_allocating else self._allocate_proposers(frontier)
-        )
+        # 3. Allocation.  Once the driver has hit its eval/budget cap
+        #    (``stop_allocating``), the scheduler initiates no new logical
+        #    work — but a Supervisor result already on disk is still
+        #    harvested (closing the attempt, unapplied), so a capped run
+        #    drains instead of wedging on a running gate worker.
+        proposer_jobs = self._allocate_proposers(frontier)
 
         # A Supervisor-created integration request runs as an independent,
         # temporary main-writer job rather than consuming a Scientist lease.
+        # A capped run never *starts* one; jobs already in flight are still
+        # harvested by _poll_integrators.
         integrator_jobs = self._schedule_integrators()
 
         # 4. Poll proposer results and publish proposals.
@@ -196,11 +197,13 @@ class Scheduler:
         }
 
     def run(self, *, max_steps: int | None = None) -> dict[str, Any]:
-        """Run the scheduler until quiescence, stall, or max_steps.
+        """Run the scheduler until quiescence, stall, cap drain, or max_steps.
 
         ``stalled`` means the growth gate exhausted its bounded retries with
         an unconsumed batch: the run parks instead of silently quiescing or
-        falling back to Frontier.
+        falling back to Frontier.  ``capped`` means the driver declared
+        ``stop_allocating`` and in-flight work has drained — evidence left
+        unconsumed does not keep a capped run spinning.
         """
         telemetry: list[dict[str, Any]] = []
         status = "quiesced"
@@ -212,6 +215,9 @@ class Scheduler:
             telemetry.append(step_telemetry)
             if self._supervisor_stalled() and not self._in_flight():
                 status = "stalled"
+                break
+            if self.stop_allocating and not self._in_flight():
+                status = "capped"
                 break
             if self._quiescent():
                 break
@@ -268,9 +274,16 @@ class Scheduler:
 
     def _allocate_proposers(self, frontier):
         """Create proposer leases from the Supervisor growth gate, or from
-        the explicit Frontier baseline when no supervisor is configured."""
+        the explicit Frontier baseline when no supervisor is configured.
+
+        Under ``stop_allocating`` the baseline mode allocates nothing; the
+        Supervisor gate still runs because it owns result harvesting (a
+        completed worker must close its attempt even on a capped run).
+        """
         if self.submit_supervisor is not None:
             return self._run_supervisor_gate()
+        if self.stop_allocating:
+            return []
         return self._allocate_frontier_baseline(frontier)
 
     def _allocate_frontier_baseline(self, frontier):
@@ -344,10 +357,13 @@ class Scheduler:
         keeps the batch unconsumed and retries the same logical session,
         bounded by ``supervisor_max_retries``; exhaustion records
         ``supervisor_stalled`` and parks allocation visibly.
+
+        Once the driver has capped the run (``stop_allocating``), the gate
+        only harvests: a result already on disk closes its attempt and is
+        archived unapplied (``supervisor_decision_discarded``), and no new
+        gate worker is submitted — a judgment formed under a budget state
+        that no longer holds must not derive new work.
         """
-        pending = self.store.pending_supervisor_events()
-        if not pending:
-            return []
         running = self.store.running_attempts("supervisor")
         if running:
             attempt = running[-1]
@@ -357,8 +373,15 @@ class Scheduler:
             )
             if not result_path.exists():
                 return []
+            if self.stop_allocating:
+                return self._discard_supervisor_result(attempt, result_path)
             return self._ingest_supervisor_result(attempt, result_path)
 
+        if self.stop_allocating:
+            return []
+        pending = self.store.pending_supervisor_events()
+        if not pending:
+            return []
         head = pending[-1].event_id
         work_id = f"supervisor-{head}"
         if self._supervisor_exhausted(work_id):
@@ -410,6 +433,32 @@ class Scheduler:
         self.store.mark_attempt_succeeded(attempt.attempt_id)
         self._archive_result(result_path, attempt.attempt_id)
         return jobs
+
+    def _discard_supervisor_result(self, attempt, result_path) -> list[str]:
+        """Close a completed gate worker without applying its judgment.
+
+        Used when the run hit its cap mid-turn: the decision was made under
+        a budget state that no longer holds, so it must not create leases,
+        requests, or reviews.  The attempt succeeded (the worker did its
+        job), the artifact is archived, and the batch stays unconsumed — a
+        resumed run re-wakes on it.  Not a failure, not a retry.
+        """
+        try:
+            raw = json.loads(result_path.read_text(encoding="utf-8"))
+            decision_id = (raw.get("result") or {}).get("decision_id")
+        except Exception:
+            decision_id = None
+        self.store.mark_attempt_succeeded(attempt.attempt_id)
+        self.store.record_scheduler_event(
+            "supervisor_decision_discarded",
+            {
+                "work_id": attempt.logical_work_id,
+                "decision_id": decision_id,
+                "reason": "run capped (stop_allocating)",
+            },
+        )
+        self._archive_result(result_path, attempt.attempt_id)
+        return []
 
     def _reject_supervisor_result(self, attempt, result_path, reason) -> None:
         self.store.mark_attempt_failed(attempt.attempt_id)
@@ -643,6 +692,11 @@ class Scheduler:
 
     def _schedule_integrators(self) -> list[str]:
         if self.submit_integrator is None:
+            return []
+        # A capped run never starts integrator work (the request stays open
+        # for a resumed run); results of jobs already in flight are still
+        # harvested by _poll_integrators.
+        if self.stop_allocating:
             return []
         running_ids = {
             attempt.logical_work_id
@@ -1240,6 +1294,10 @@ class Scheduler:
     def _resubmit_supervisor(self, work_id: str) -> None:
         if self.submit_supervisor is None or self.store.running_attempts("supervisor"):
             return
+        # A capped run never re-runs the gate: its result could only be
+        # discarded unapplied.
+        if self.stop_allocating:
+            return
         if self._supervisor_exhausted(work_id):
             self._record_supervisor_stall(work_id)
             return
@@ -1264,6 +1322,9 @@ class Scheduler:
             item.logical_work_id == work_id
             for item in self.store.running_attempts("integrator")
         ):
+            return
+        # A capped run never (re-)starts integrator work.
+        if self.stop_allocating:
             return
         manifest_path = (
             self.run_dir / "integration_requests" / work_id / "manifest.json"

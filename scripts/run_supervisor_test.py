@@ -14,9 +14,13 @@ Usage:
 
 Notes:
 - The Supervisor is the sole admission gate: each proposer allocation is a
-  Supervisor worker decision; Frontier is telemetry / fallback only.
+  Supervisor worker decision; Frontier is telemetry only (there is no
+  fallback — a failing gate retries and may park the run as stalled).
 - Integration requests opened by the Supervisor run as request-scoped
   Integrator workers; gate-passed candidates may promote a new epoch.
+- Once the eval/budget cap is hit the scheduler only drains: a Supervisor
+  result already on disk is closed unapplied
+  (supervisor_decision_discarded) and no new gate/integrator work starts.
 """
 from __future__ import annotations
 
@@ -43,6 +47,7 @@ _EVENT_KINDS = {
     "supervisor_decision_accepted",
     "supervisor_decision_stale",
     "supervisor_decision_rejected",
+    "supervisor_decision_discarded",
     "supervisor_stalled",
     "integration_request_created",
     "integration_candidate_rejected",

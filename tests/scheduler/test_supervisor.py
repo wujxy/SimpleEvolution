@@ -43,6 +43,7 @@ class Submitter:
         self.run_dir = run_dir
         self.supervisor: list[tuple[str, dict]] = []
         self.proposer: list[tuple[str, dict]] = []
+        self.integrator: list[tuple[str, dict]] = []
 
     def submit_supervisor(self, work_id: str, payload: dict) -> str:
         self.supervisor.append((work_id, payload))
@@ -56,6 +57,7 @@ class Submitter:
         return str(self.run_dir / "experiments" / experiment_id / "result.json")
 
     def submit_integrator(self, request_id: str, payload: dict) -> str:
+        self.integrator.append((request_id, payload))
         return str(self.run_dir / "integration_requests" / request_id / "result.json")
 
     def write_decision(self, work_id: str, result: dict, *, status="completed"):
@@ -63,6 +65,17 @@ class Submitter:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({
             "kind": "supervisor", "request_id": work_id,
+            "status": status, "result": result, "error": None,
+            "execution": {},
+        }, ensure_ascii=False), encoding="utf-8")
+
+    def write_integrator_result(
+            self, request_id: str, result: dict, *, status="completed"):
+        path = (
+            self.run_dir / "integration_requests" / request_id / "result.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "kind": "integrator", "request_id": request_id,
             "status": status, "result": result, "error": None,
             "execution": {},
         }, ensure_ascii=False), encoding="utf-8")
@@ -547,3 +560,119 @@ def test_stale_epoch_review_has_zero_side_effects(tmp_path: Path):
     assert store.latest_scheduler_event("supervisor_decision_stale")[
         "work_id"] == work_id
     assert store.latest_scheduler_event("epoch_promoted") is None
+
+
+def test_capped_run_harvests_supervisor_result_without_applying(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    root, _, _ = _seed(store)
+    submitter = Submitter(tmp_path)
+    scheduler = _scheduler(store, tmp_path, submitter)
+
+    scheduler.step()
+    work_id, _ = submitter.supervisor[0]
+    # The driver hits its eval/budget cap while the gate worker is thinking.
+    scheduler.stop_allocating = True
+    submitter.write_decision(work_id, {
+        "decision_id": "d1", "decision_kind": "growth",
+        "node_ids": [root.node_id], "rationale": "made under the old budget.",
+        "detail": {}, "event_cursor_to": 1,
+    })
+    scheduler.step()
+
+    # The result is harvested: the attempt closes and the discard is visible.
+    assert store.running_attempts("supervisor") == []
+    assert store.latest_scheduler_event("supervisor_decision_discarded")[
+        "work_id"] == work_id
+    # But it is applied to nothing: no leases, no decision row, cursor
+    # unconsumed — the judgment cannot derive work under the new budget.
+    assert store.get_supervisor_decision("d1") is None
+    assert store.supervisor_event_cursor() == 0
+    assert store.open_allocations() == []
+    assert store.pending_supervisor_events()
+    # Not a failure, not a retry: the worker did its job, nothing resubmits.
+    attempts = store.attempts_for_work(work_id, "supervisor")
+    assert [item.status for item in attempts] == ["succeeded"]
+    assert store.latest_scheduler_event("supervisor_stalled") is None
+    assert len(submitter.supervisor) == 1
+    # The bounded driver's exit condition is reachable again...
+    assert scheduler._in_flight() is False
+    # ...and run() parks as capped instead of spinning on pending evidence.
+    outcome = scheduler.run(max_steps=5)
+    assert outcome["status"] == "capped"
+
+
+def _open_request(store, root):
+    epoch = store.current_epoch()
+    store.create_integration_request(
+        integration_request_id="req-open", epoch_id=epoch.epoch_id,
+        target_node_id=root.node_id,
+        donor_experiment_ids=("exp-donor",),
+        selection_rationale="branches matured",
+    )
+
+
+def test_capped_run_starts_no_new_gate_or_integrator_work(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    root, episode, _ = _seed(store)
+    _seed_donor(store, root, episode)
+    _open_request(store, root)
+    _sync_cursor(store)
+    submitter = Submitter(tmp_path)
+    scheduler = _scheduler(store, tmp_path, submitter)
+    scheduler.stop_allocating = True
+
+    # Pending evidence and an open request both exist; a capped run must
+    # start neither a gate turn nor an integrator job.
+    store.emit_supervisor_event("budget_changed", {"remaining_usd": 0.0})
+    scheduler.step()
+
+    assert submitter.supervisor == []
+    assert submitter.integrator == []
+    assert submitter.proposer == []
+    assert store.get_integration_request("req-open").status == "open"
+
+
+def test_capped_run_still_harvests_running_integrator(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    root, episode, _ = _seed(store)
+    _seed_donor(store, root, episode)
+    _open_request(store, root)
+    _sync_cursor(store)
+    submitter = Submitter(tmp_path)
+    scheduler = _scheduler(store, tmp_path, submitter)
+    # An integrator job already in flight when the cap lands.
+    store.prepare_integration_request("req-open")
+    store.record_attempt(
+        logical_work_id="req-open", kind="integrator",
+        status="running", started_at=0.0)
+    submitter.write_integrator_result("req-open", {
+        "outcome": "abstained", "reason": "donors conflict",
+    })
+    scheduler.stop_allocating = True
+
+    telemetry = scheduler.step()
+
+    # In-flight work is drained to completion, not abandoned mid-run.
+    assert telemetry["integrated"] == 1
+    assert store.get_integration_request("req-open").status == "abstained"
+    assert store.running_attempts("integrator") == []
+
+
+def test_baseline_mode_allocates_nothing_when_capped(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    root, _, _ = _seed(store)
+
+    submitted: list[tuple[str, dict]] = []
+    scheduler = Scheduler(
+        store, tmp_path,
+        SchedulerConfig(quiescence_window_proposals=1),
+        submit_proposer=lambda allocation_id, payload: submitted.append(
+            (allocation_id, payload)) or "",
+        submit_experiment=lambda experiment_id, payload: "",
+    )
+    scheduler.stop_allocating = True
+
+    scheduler._allocate_proposers(Frontier({root.node_id}, {}))
+
+    assert submitted == []
+    assert store.open_allocations() == []
