@@ -278,7 +278,7 @@ def test_group_workflow_allocates_divergent_branch_and_promotes_shared_epoch(env
         })
 
     scheduler.submit_experiment = execute
-    jobs = scheduler._drain_executor_queue(Frontier({root.node_id}, {}))
+    jobs = scheduler._drain_executor_queue()
     assert scheduler._poll_experiments() == jobs
     scheduler._apply_epoch_review({
         "integration_request_id": "request-1", "action": "promote",

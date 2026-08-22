@@ -6,7 +6,6 @@ import pytest
 from proposer.supervisor import validate_integration_request
 from simpleevo.db.store import GateDecision, GateResult, Proposal, ResearchStore
 from simpleevo.scheduler.loop import Scheduler, SchedulerConfig
-from simpleevo.scheduler.frontier import Frontier
 
 
 def _gate(passed=True):
@@ -125,7 +124,7 @@ def test_integrator_result_publishes_normal_synthesis_proposal(tmp_path: Path):
     submitted = []
     scheduler.submit_experiment = lambda work_id, job: submitted.append((work_id, job))
 
-    jobs = scheduler._drain_executor_queue(Frontier(set(), {}))
+    jobs = scheduler._drain_executor_queue()
 
     assert len(jobs) == 1
     request = store.get_integration_request("req-1")

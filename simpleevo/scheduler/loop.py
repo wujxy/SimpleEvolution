@@ -159,7 +159,7 @@ class Scheduler:
         #    L2, never turned into new experiments), so the run only drains
         #    experiments already in flight.
         experiment_jobs = (
-            [] if self.stop_allocating else self._drain_executor_queue(frontier)
+            [] if self.stop_allocating else self._drain_executor_queue()
         )
 
         # 6. Poll running experiments for completed results.
@@ -819,19 +819,12 @@ class Scheduler:
     def _experiment_capacity(self) -> int:
         return self.config.max_experiment_inflight - self.store.count_running_attempts("experiment")
 
-    def _drain_executor_queue(self, frontier):
-        """Submit queued proposals as experiment jobs up to capacity."""
-        integration_targets = {
-            request.target_node_id
-            for request in self.store.integration_requests("submitted")
-            if request.experiment_id is None
-        }
+    def _drain_executor_queue(self):
+        """Submit admitted queued proposals as experiment jobs up to capacity."""
         queue = ExecutorQueue(
             self.store,
-            set(frontier.node_ids) | integration_targets,
             self.config.queue or QueueConfig(),
         )
-        queue.cleanup()
         queue.enforce_bound()
         capacity = self._experiment_capacity()
         if capacity <= 0:

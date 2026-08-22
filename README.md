@@ -4,14 +4,17 @@ Event-driven Research Tree evolution: **Node → Scientist → Proposal →
 Experiment → New Node**. Scientists independently choose EXPLORE or SYNTHESIZE;
 an Executor implements proposals and the Harness measures them. A stateless
 Supervisor allocates attention across all eligible branches, using the old
-Frontier only when its decision worker fails.
+Frontier only for telemetry and when its decision worker fails. A legal
+Scientist lease admits its proposals once; the bounded FIFO Executor queue
+does not apply a second Frontier veto.
 
 When several branches have mature, compatible evidence, the Supervisor may
-open one integration request. A fresh request-scoped Integrator writes exactly
-one synthesis proposal (or abstains); that proposal passes through the normal
-Executor and Gate. A gate-passed candidate can then become a new logical epoch
-root. Promotion appends a shared trunk without rewriting or deleting old
-branches, so the Supervisor can revive them later.
+open one integration request. A fresh request-scoped, synthesis-only Scientist
+acts as Integrator and writes exactly one synthesis proposal (or abstains);
+that proposal passes through the normal Executor and Gate. A gate-passed
+candidate can then become a new logical epoch root. Promotion appends a shared
+trunk without rewriting or deleting old branches, so the Supervisor can revive
+them later.
 
 Design source of truth: [docs/simpleevolution_design.md](docs/simpleevolution_design.md).
 Implementation notes: [docs/simpleevolution_implementation.md](docs/simpleevolution_implementation.md).

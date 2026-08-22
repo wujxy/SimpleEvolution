@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from simpleevo.db.store import GateDecision, GateResult, ResearchStore
-from simpleevo.scheduler.frontier import Frontier
 from simpleevo.scheduler.queue import ExecutorQueue, QueueConfig
 
 
@@ -61,7 +60,7 @@ def _seed(store: ResearchStore):
 
 def test_enqueue_and_dequeue_fifo(store: ResearchStore):
     node_id = _seed(store)
-    queue = ExecutorQueue(store, {node_id}, QueueConfig(max_size=10))
+    queue = ExecutorQueue(store, QueueConfig(max_size=10))
 
     dequeued = queue.dequeue(2)
     assert dequeued == ["p1", "p2"]
@@ -69,7 +68,7 @@ def test_enqueue_and_dequeue_fifo(store: ResearchStore):
 
 def test_overflow_becomes_dormant(store: ResearchStore):
     node_id = _seed(store)
-    queue = ExecutorQueue(store, {node_id}, QueueConfig(max_size=1))
+    queue = ExecutorQueue(store, QueueConfig(max_size=1))
 
     # Two proposals are queued; max_size=1 keeps the oldest, overflows the newest.
     overflowed = queue.enforce_bound()
@@ -83,14 +82,8 @@ def test_overflow_becomes_dormant(store: ResearchStore):
         assert row["status"] == "overflowed_dormant"
 
 
-def test_parent_not_in_frontier_becomes_dormant(store: ResearchStore):
-    node_id = _seed(store)
-    queue = ExecutorQueue(store, set(), QueueConfig(max_size=10))
+def test_queue_does_not_second_guess_admitted_proposals(store: ResearchStore):
+    _seed(store)
+    queue = ExecutorQueue(store, QueueConfig(max_size=10))
 
-    cleaned = queue.cleanup()
-    assert cleaned == 2
-    with store.transaction() as tx:
-        row = tx._conn.execute(
-            "SELECT status FROM proposals WHERE proposal_id = 'p1'"
-        ).fetchone()
-        assert row["status"] == "dormant"
+    assert queue.dequeue(10) == ["p1", "p2"]

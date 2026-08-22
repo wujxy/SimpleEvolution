@@ -34,7 +34,7 @@
 - Produces: `ExecutorQueue(store, config)` with `dequeue`, `size`, and `enforce_bound`; no Frontier argument and no `cleanup` method.
 - Produces: `Scheduler._drain_executor_queue()` without a Frontier argument.
 
-- [ ] **Step 1: Write failing queue and scheduler tests**
+- [x] **Step 1: Write failing queue and scheduler tests**
 
 Replace the old Frontier-cleanup test with a test that constructs the queue without a Frontier and confirms all valid queued proposals remain FIFO-eligible:
 
@@ -59,7 +59,7 @@ assert store.get_proposal("non-frontier-proposal").status == "running"
 
 Update existing queue construction and `_drain_executor_queue` calls to the new signatures, without changing their assertions.
 
-- [ ] **Step 2: Run focused tests and verify the new contract is red**
+- [x] **Step 2: Run focused tests and verify the new contract is red**
 
 Run:
 
@@ -70,7 +70,7 @@ python -m pytest tests/scheduler/test_queue.py tests/scheduler/test_supervisor.p
 
 Expected: failures reporting that `ExecutorQueue` still requires `frontier`, `_drain_executor_queue` still requires an argument, or a non-Frontier proposal becomes dormant.
 
-- [ ] **Step 3: Implement the minimal queue boundary**
+- [x] **Step 3: Implement the minimal queue boundary**
 
 Change `ExecutorQueue` to accept only the store and queue config, and remove the Frontier-specific state and cleanup path:
 
@@ -96,11 +96,11 @@ def _drain_executor_queue(self):
 
 Change `step()` to call `_drain_executor_queue()`; remove the obsolete `integration_targets` exception because integration proposals now follow the same admitted-proposal path as Scientist proposals.
 
-- [ ] **Step 4: Clarify the public architecture description**
+- [x] **Step 4: Clarify the public architecture description**
 
 Update the README introduction to state that Supervisor grants normal Scientist admission, Frontier is telemetry/failure fallback only, and Executor consumes already-admitted proposals through bounded FIFO. Describe Integrator as a request-scoped synthesis-only Scientist; do not introduce new configuration.
 
-- [ ] **Step 5: Run focused and full verification**
+- [x] **Step 5: Run focused and full verification**
 
 Run:
 
@@ -113,7 +113,7 @@ git diff --check
 
 Expected: focused suite passes; full suite reports all selected tests passing; `git diff --check` emits no output. The pre-existing example-config baseline remains explicitly deselected.
 
-- [ ] **Step 6: Commit the implementation**
+- [x] **Step 6: Commit the implementation**
 
 ```bash
 git add README.md simpleevo/scheduler/queue.py simpleevo/scheduler/loop.py tests/scheduler/test_queue.py tests/scheduler/test_supervisor.py tests/scheduler/test_integration_requests.py tests/test_integration.py docs/superpowers/plans/2026-08-22-supervisor-sole-admission.md

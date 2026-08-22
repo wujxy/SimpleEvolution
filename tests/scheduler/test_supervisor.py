@@ -129,6 +129,46 @@ def test_scheduler_uses_supervisor_selection_before_frontier(tmp_path: Path):
     assert submitted[0]["node_id"] == dormant.node_id
     assert len(submitted[0]["proposal_ids"]) == 1
 
+    allocation = store.get_allocation(jobs[0])
+    proposal_id = submitted[0]["proposal_ids"][0]
+    state_id = f"rs-{allocation.episode_id}-supervisor-admission"
+    store.publish_research_batch(
+        node_id=dormant.node_id,
+        episode_id=allocation.episode_id,
+        transformations=(),
+        research_states=({
+            "research_state_id": state_id,
+            "node_id": dormant.node_id,
+            "episode_id": allocation.episode_id,
+            "working_model": "The low-base branch contains distinct evidence.",
+            "evidence_refs": [f"node:{dormant.node_id}"],
+        },),
+        proposals=({
+            "proposal_id": proposal_id,
+            "research_state_id": state_id,
+            "instruction": "test the distinct mechanism",
+            "rationale": {},
+            "research_operation": "explore",
+            "donor_experiment_ids": [],
+        },),
+        reserved_proposal_ids=allocation.reserved_proposal_ids,
+    )
+    store.deallocate_proposer(
+        allocation_id=allocation.allocation_id,
+        proposals_produced=1,
+    )
+    experiments = []
+    scheduler.submit_experiment = lambda work_id, payload: experiments.append(
+        (work_id, payload)
+    )
+
+    experiment_jobs = scheduler._drain_executor_queue()
+
+    assert len(experiment_jobs) == 1
+    assert experiments[0][1]["parent_node_id"] == dormant.node_id
+    assert experiments[0][1]["parent_sha"] == dormant.sha
+    assert store.get_proposal(proposal_id).status == "running"
+
 
 def test_scheduler_falls_back_to_frontier_when_supervisor_fails(tmp_path: Path):
     store = ResearchStore(tmp_path / "state.db")
