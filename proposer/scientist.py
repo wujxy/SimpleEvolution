@@ -34,9 +34,9 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from .model import ChatModel
+from .agent_runtime import AgentRuntime
 from .cognitive_transformer import CognitiveTransformer
 from .context import build_generator_catalog, build_research_state_seed_pack
 from simpleevo.generator import Generator, load_generator_basis
@@ -62,9 +62,7 @@ from .research_agent import (
     _build_telemetry,
     _build_trace,
     _fingerprint,
-    _register_evidence,
     _source_path_exists,
-    _stamp,
 )
 from .scientist_session import ScientistSession, read_expectations
 from .runtime import ApptainerRuntime, MountMap
@@ -2028,10 +2026,6 @@ def _validate_action_guard(
                 donors = set(action["donor_experiment_ids"])
                 if not donors.issubset(state.inspected_experiment_ids):
                     return "uninspected_donor"
-            if action.get("operation") == "synthesize":
-                donors = set(action["donor_experiment_ids"])
-                if not donors.issubset(state.inspected_experiment_ids):
-                    return "uninspected_donor"
         if action["action"] not in _RESEARCH_TOOL_ACTIONS:
             continue
         fingerprint = _fingerprint(action)
@@ -2603,23 +2597,22 @@ class ScientistAgent(ResearchAgent):
         they submit experiments, so only they pre-register expectations.
         """
         steps_budget = max_steps or self.max_steps
-        started = time.monotonic()
-        deadline = started + self.timeout_seconds
-        usages: list = []
         state = WorkingState()
-        budget_reminder_step = int(0.8 * steps_budget)
-        reminded = False
 
         try:
-            return self._deliberate_loop(
+            return AgentRuntime(
+                self, source_read_actions=_SOURCE_READ_ACTIONS,
+            ).run(
                 system_prompt=system_prompt, messages=messages,
                 session=session, current_round=current_round,
-                steps_budget=steps_budget, deadline=deadline,
-                usages=usages, state=state, source_root=source_root,
-                tools_factory=tools_factory, terminal_name=terminal_name,
-                budget_nudge=budget_nudge, make_result=make_result,
+                steps_budget=steps_budget,
+                source_root=source_root,
+                build_tools=tools_factory, terminal_name=terminal_name,
+                budget_nudge=budget_nudge, handle_terminal=make_result,
+                compact=self._maybe_compact,
+                checkpoint=self._suspension_checkpoint,
                 capture_expectations=capture_expectations,
-                budget_reminder_step=budget_reminder_step,
+                state=state,
             )
         except Exception as exc:
             # A protocol/infra death must still leave its witness: the trace
@@ -2630,115 +2623,6 @@ class ScientistAgent(ResearchAgent):
                 state, round_id=current_round, outcome="error",
             )
             raise
-
-    def _deliberate_loop(
-        self, *,
-        system_prompt, messages, session, current_round, steps_budget,
-        deadline, usages, state, source_root, tools_factory,
-        terminal_name, budget_nudge, make_result, capture_expectations,
-        budget_reminder_step,
-    ):
-        reminded = False
-        started = time.monotonic()
-        with TemporaryDirectory(prefix="simpleloop-scratch-") as scratch, \
-                TemporaryDirectory(prefix="simpleloop-session-") as session_root:
-            home = Path(session_root) / "home"
-            home.mkdir(mode=0o700)
-            tools = tools_factory(scratch, home)
-            # If the round STARTS already over threshold (a bloated resume tail
-            # of large prior-round observations — the cross-round stacking case),
-            # shed before the first model call so we never open a round already
-            # over the window. No usage yet → char-based estimate drives it.
-            self._maybe_compact(messages, [], state)
-            for _step_num in range(steps_budget):
-                step = _step_num + 1
-                print(f"[{_stamp()}] [scientist step {step}/{steps_budget}] "
-                      f"thinking",
-                      flush=True)
-                if (not reminded and budget_reminder_step > 0
-                        and step >= budget_reminder_step):
-                    messages.append({"role": "user", "content": budget_nudge})
-                    reminded = True
-
-                actions, reply_text = self._step(
-                    state, messages, system_prompt, deadline, usages, step,
-                    source_root=source_root, steps_budget=steps_budget,
-                )
-
-                if len(actions) == 1 and actions[0]["action"] == terminal_name:
-                    action = actions[0]
-                    name = action["action"]
-                    state.action_log.append({"action": name, "step": step})
-                    _bump(state, name)
-                    # The terminal reply enters BOTH the live context and the
-                    # archive, so the suspension checkpoint sees what the
-                    # Scientist just decided (it must recall its own decision
-                    # when writing the continuation note).
-                    messages.append({"role": "assistant", "content": reply_text})
-                    session.append_message("assistant", reply_text,
-                                           round_id=current_round)
-                    print(
-                        f"[scientist] {name} step={step} "
-                        f"elapsed={time.monotonic() - started:.1f}s",
-                        flush=True,
-                    )
-                    self._suspension_checkpoint(
-                        system_prompt, messages, state, session, deadline,
-                        usages, current_round,
-                        capture_expectations=capture_expectations,
-                    )
-                    return make_result(action, state, usages, step, "submit")
-
-                # tool calls: one step runs the reply's action(s) in order —
-                # a lone flat action or an {"actions": [...]} batch — and all
-                # observations return together as one user message.
-                results = []
-                for action in actions:
-                    name = action["action"]
-                    state.action_log.append({"action": name, "step": step})
-                    observation = tools.execute(
-                        action, deadline=deadline, working_state=state,
-                    )
-                    _bump(state, "tool")
-                    _register_evidence(state, action, observation)
-                    state.last_tool_fingerprint = _fingerprint(action)
-                    if (observation.get("ok")
-                            and name in _SOURCE_READ_ACTIONS):
-                        _bump(state, "source_read")
-                        state.located = True
-                    results.append(observation)
-                    print(
-                        f"[{_stamp()}] [scientist step {step}/{steps_budget}] "
-                        f"{name} ok={observation.get('ok')}",
-                        flush=True,
-                    )
-                obs_envelope = json.dumps(
-                    {"tool_results": results}, ensure_ascii=False,
-                )
-                messages.extend([
-                    {"role": "assistant", "content": reply_text},
-                    {"role": "user", "content": obs_envelope},
-                ])
-                session.append_message("assistant", reply_text,
-                                       round_id=current_round)
-                session.append_message("user", obs_envelope,
-                                       round_id=current_round)
-                # The live context grows by one (assistant, observation) pair
-                # per step. On source-heavy tasks this fills the window long
-                # before the step budget — shed oldest pairs when it does. The
-                # archive was just written in full above, so compacting the live
-                # list loses nothing from the Scientist's lived record.
-                self._maybe_compact(messages, usages, state)
-
-            # Budget exhausted without a terminal action.
-            print(f"[scientist] budget exhausted before {terminal_name}",
-                  flush=True)
-            self._suspension_checkpoint(
-                system_prompt, messages, state, session, deadline, usages,
-                current_round,
-                capture_expectations=capture_expectations,
-            )
-            return make_result(None, state, usages, steps_budget, "abstain")
 
     def _suspension_checkpoint(
         self, system_prompt: str, messages: list[dict], state: WorkingState,

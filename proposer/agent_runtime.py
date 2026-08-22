@@ -1,0 +1,146 @@
+"""Shared model/tool/session loop for cognitive research roles."""
+from __future__ import annotations
+
+import json
+import time
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from .research_agent import (
+    WorkingState,
+    _bump,
+    _fingerprint,
+    _register_evidence,
+    _stamp,
+)
+
+
+class AgentRuntime:
+    """Run one role episode while the role supplies semantics and tools.
+
+    The runtime owns iteration, budgets, tool dispatch, session archival and
+    terminal detection. A role supplies its tool registry, compaction/session
+    policy, checkpoint behavior, and typed terminal-result constructor.
+    """
+
+    def __init__(self, agent, *, source_read_actions=()):
+        self.agent = agent
+        self.source_read_actions = frozenset(source_read_actions)
+
+    def run(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict],
+        session,
+        current_round: int,
+        steps_budget: int,
+        source_root: Path,
+        build_tools,
+        terminal_name: str,
+        budget_nudge: str,
+        handle_terminal,
+        compact,
+        checkpoint,
+        capture_expectations: bool = False,
+        state: WorkingState | None = None,
+    ):
+        state = state or WorkingState()
+        deadline = time.monotonic() + self.agent.timeout_seconds
+        usages: list = []
+        reminder_step = int(0.8 * steps_budget)
+        reminded = False
+        started = time.monotonic()
+
+        with TemporaryDirectory(prefix="simpleloop-scratch-") as scratch, \
+                TemporaryDirectory(prefix="simpleloop-session-") as session_root:
+            home = Path(session_root) / "home"
+            home.mkdir(mode=0o700)
+            tools = build_tools(scratch, home)
+            compact(messages, [], state)
+
+            for index in range(steps_budget):
+                step = index + 1
+                print(
+                    f"[{_stamp()}] [agent runtime step {step}/{steps_budget}] "
+                    "thinking",
+                    flush=True,
+                )
+                if not reminded and reminder_step > 0 and step >= reminder_step:
+                    messages.append({"role": "user", "content": budget_nudge})
+                    reminded = True
+
+                actions, reply_text = self.agent._step(
+                    state,
+                    messages,
+                    system_prompt,
+                    deadline,
+                    usages,
+                    step,
+                    source_root=source_root,
+                    steps_budget=steps_budget,
+                )
+
+                if len(actions) == 1 and actions[0]["action"] == terminal_name:
+                    action = actions[0]
+                    state.action_log.append({"action": terminal_name, "step": step})
+                    _bump(state, terminal_name)
+                    messages.append({"role": "assistant", "content": reply_text})
+                    session.append_message(
+                        "assistant", reply_text, round_id=current_round,
+                    )
+                    checkpoint(
+                        system_prompt,
+                        messages,
+                        state,
+                        session,
+                        deadline,
+                        usages,
+                        current_round,
+                        capture_expectations=capture_expectations,
+                    )
+                    return handle_terminal(
+                        action, state, usages, step, "submit",
+                    )
+
+                results = []
+                for action in actions:
+                    name = action["action"]
+                    state.action_log.append({"action": name, "step": step})
+                    observation = tools.execute(
+                        action, deadline=deadline, working_state=state,
+                    )
+                    _bump(state, "tool")
+                    _register_evidence(state, action, observation)
+                    state.last_tool_fingerprint = _fingerprint(action)
+                    if observation.get("ok") and name in self.source_read_actions:
+                        _bump(state, "source_read")
+                        state.located = True
+                    results.append(observation)
+
+                envelope = json.dumps(
+                    {"tool_results": results}, ensure_ascii=False,
+                )
+                messages.extend([
+                    {"role": "assistant", "content": reply_text},
+                    {"role": "user", "content": envelope},
+                ])
+                session.append_message(
+                    "assistant", reply_text, round_id=current_round,
+                )
+                session.append_message("user", envelope, round_id=current_round)
+                compact(messages, usages, state)
+
+            checkpoint(
+                system_prompt,
+                messages,
+                state,
+                session,
+                deadline,
+                usages,
+                current_round,
+                capture_expectations=capture_expectations,
+            )
+            return handle_terminal(
+                None, state, usages, steps_budget, "abstain",
+            )
