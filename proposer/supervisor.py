@@ -77,6 +77,120 @@ class SupervisorError(AgentError):
     pass
 
 
+SUPERVISOR_TOOL_CONTRACT = """\
+## Read-only investigation tools
+
+You investigate the public research environment yourself.  Facts only are
+returned; nothing here ranks nodes or recommends an allocation.
+
+- `inspect_node` {node_id}: one Node and its direct children.
+- `compare_nodes` {node_ids: [..]}: factual side-by-side metrics.
+- `lineage` {node_id}: root-to-node ancestry.
+- `search_experiments` {query, filters?, limit?}: coverage-oriented search
+  over Experiment records.
+- `inspect_experiment` {experiment_id}: one Proposal/Experiment outcome.
+- `inspect_originating_research_state` {experiment_id}: the attributed
+  research memo behind an Experiment; you must `inspect_experiment` first.
+- `list_nodes` {}: every Node in the tree, including parked, dormant, and
+  prior-epoch Nodes, each with a mechanical `allocatable` flag.
+- `inspect_node_allocations` {node_id}: proposer investment and resulting
+  public outcomes for one Node.
+- `inspect_run_status` {}: mechanical run facts — in-flight work, queued
+  proposals, open leases, and configured capacity.
+
+These tools are read-only.  The public research ledger is authoritative; your
+notebook is your own revisable account and never overrides it.
+"""
+
+
+class SupervisorTools:
+    """Read-only dispatch over the public research environment (design §6)."""
+
+    def __init__(self, memory, *, runtime_facts: dict | None = None):
+        self.memory = memory
+        self.runtime_facts = dict(runtime_facts or {})
+        self.inspected_experiment_ids: set[str] = set()
+
+    def execute(self, action: dict, **_) -> dict:
+        try:
+            return self._execute(action or {})
+        except Exception as exc:  # never raise into the agent loop
+            return {"ok": False, "error": str(exc)}
+
+    def _execute(self, action: dict) -> dict:
+        name = action.get("action")
+        if name == "inspect_node":
+            return self.memory.inspect_node(str(action["node_id"]))
+        if name == "compare_nodes":
+            return self.memory.compare_nodes(
+                [str(item) for item in action["node_ids"]])
+        if name == "lineage":
+            return self.memory.lineage(str(action["node_id"]))
+        if name == "search_experiments":
+            return self.memory.search_experiments(
+                str(action.get("query", "")),
+                filters=action.get("filters") or None,
+                limit=int(action.get("limit", 10)),
+                buckets=bool(action.get("buckets", True)),
+            )
+        if name == "inspect_experiment":
+            result = self.memory.inspect_experiment(
+                str(action["experiment_id"]))
+            if result.get("ok", True):
+                self.inspected_experiment_ids.add(result["experiment_id"])
+            return result
+        if name == "inspect_originating_research_state":
+            experiment_id = str(action["experiment_id"])
+            if experiment_id not in self.inspected_experiment_ids:
+                return {
+                    "ok": False,
+                    "error": "inspect the experiment first",
+                }
+            return self.memory.inspect_originating_research_state(
+                experiment_id)
+        if name == "list_nodes":
+            return self._list_nodes()
+        if name == "inspect_node_allocations":
+            return self.memory.node_allocations(str(action["node_id"]))
+        if name == "inspect_run_status":
+            status = self.memory.run_status()
+            status["config"] = dict(self.runtime_facts)
+            running = status["running_attempts"].get("proposer", 0)
+            status["free_proposer_capacity"] = max(
+                0, int(self.runtime_facts.get("max_proposer_inflight", 0))
+                - running)
+            return status
+        return {"ok": False, "error": f"unsupported supervisor action: {name}"}
+
+    def _list_nodes(self) -> dict:
+        open_nodes = self.memory.open_allocation_node_ids()
+        max_research = int(self.runtime_facts.get("max_research_per_node", 0))
+        max_proposals = int(self.runtime_facts.get("max_proposals_per_node", 0))
+        rows = []
+        for node in self.memory.queries.list_nodes():
+            allocation_count = len(
+                self.memory.queries.allocations_for_node(node.node_id))
+            allocatable = bool(
+                node.status != "dead"
+                and node.node_id not in open_nodes
+                and (not max_research
+                     or allocation_count < max_research)
+                and (not max_proposals
+                     or self.memory.queries.proposal_count_for_node(
+                         node.node_id) < max_proposals)
+            )
+            rows.append({
+                "node_id": node.node_id,
+                "parent_node_id": node.parent_node_id,
+                "depth": node.depth,
+                "status": node.status,
+                "metrics": dict(node.metrics),
+                "gate_passed": node.gate_result.passed,
+                "allocatable": allocatable,
+            })
+        return {"ok": True, "nodes": rows}
+
+
 class _NoTools:
     def execute(self, action, **kwargs):  # pragma: no cover - parser forbids it
         raise SupervisorError(f"Supervisor has no tool action {action['action']!r}")

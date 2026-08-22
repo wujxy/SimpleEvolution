@@ -276,6 +276,42 @@ class L2MemoryService:
             "diverse": diverse,
         }
 
+    def open_allocation_node_ids(self) -> set[str]:
+        """Nodes that currently hold an open proposer lease."""
+        return self.queries.open_allocation_node_ids()
+
+    def node_allocations(self, node_id: str) -> dict:
+        """Proposer investment on one Node plus its public outcomes."""
+        allocations = self.queries.allocations_for_node(node_id)
+        experiments = [
+            {
+                "experiment_id": experiment.experiment_id,
+                "status": experiment.status,
+                "gate_passed": experiment.gate_result.passed,
+                "child_node_id": experiment.child_node_id,
+                "changed_paths": list(experiment.changed_paths),
+            }
+            for experiment in self.queries.list_experiments()
+            if experiment.parent_node_id == node_id
+        ]
+        return {
+            "ok": True,
+            "node_id": node_id,
+            "allocations": allocations,
+            "experiments": experiments,
+        }
+
+    def run_status(self) -> dict:
+        """Mechanical run facts only: no ranking, no recommendation."""
+        return {
+            "ok": True,
+            "running_attempts": self.queries.running_attempt_counts(),
+            "queued_proposals": self.queries.queued_proposal_count(),
+            "open_allocations": self.queries.open_allocation_count(),
+            "open_experiments": self.queries.open_experiment_count(),
+            "node_counts": self.queries.node_status_counts(),
+        }
+
     def list_findings(self, state: str = "active", limit: int = 20, **_) -> dict:
         return {"findings": []}
 

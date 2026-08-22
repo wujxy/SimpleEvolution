@@ -5,6 +5,7 @@ in store.py.
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -91,6 +92,52 @@ class ResearchQueries:
                 (node_id,),
             ).fetchone()
             return int(row["n"])
+
+    def running_attempt_counts(self) -> dict[str, int]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT kind, COUNT(*) AS n FROM attempts "
+                "WHERE status = 'running' GROUP BY kind"
+            ).fetchall()
+            return {row["kind"]: int(row["n"]) for row in rows}
+
+    def queued_proposal_count(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM proposals WHERE status = 'queued'"
+            ).fetchone()
+            return int(row["n"])
+
+    def open_allocation_node_ids(self) -> set[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT node_id FROM proposer_allocations "
+                "WHERE finished_at IS NULL"
+            ).fetchall()
+            return {row["node_id"] for row in rows}
+
+    def open_allocation_count(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM proposer_allocations "
+                "WHERE finished_at IS NULL"
+            ).fetchone()
+            return int(row["n"])
+
+    def open_experiment_count(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM experiments "
+                "WHERE status IN ('pending', 'running')"
+            ).fetchone()
+            return int(row["n"])
+
+    def node_status_counts(self) -> dict[str, int]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT status, COUNT(*) AS n FROM nodes GROUP BY status"
+            ).fetchall()
+            return {row["status"]: int(row["n"]) for row in rows}
 
     def get_research_state(self, research_state_id: str) -> ResearchState | None:
         with self._connect() as conn:
@@ -279,11 +326,19 @@ class ResearchQueries:
             rows = conn.execute(
                 """
                 SELECT allocation_id, node_id, episode_id, started_at,
-                       finished_at, proposals_produced
+                       finished_at, proposals_produced, decision_id,
+                       reserved_proposal_ids
                 FROM proposer_allocations
                 WHERE node_id = ?
                 ORDER BY started_at
                 """,
                 (node_id,),
             ).fetchall()
-            return [dict(row) for row in rows]
+            allocations = []
+            for row in rows:
+                item = dict(row)
+                item["reserved_proposal_count"] = len(
+                    json.loads(item.pop("reserved_proposal_ids") or "[]")
+                )
+                allocations.append(item)
+            return allocations
