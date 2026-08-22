@@ -133,6 +133,14 @@ class Scheduler:
         reconcile_actions = reconciler.reconcile()
         self._execute_reconcile_actions(reconcile_actions)
 
+        # 1b. Evidence change (tree-growth design §4): the seed world is
+        # presented to the growth gate exactly once.
+        if self.store.supervisor_event_head() == 0:
+            root = self._queries.root_node()
+            if root is not None:
+                self.store.emit_supervisor_event(
+                    "root_ready", {"root_node_id": root.node_id})
+
         # 2. Compute frontier.
         frontier = self._compute_frontier()
 

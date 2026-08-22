@@ -369,6 +369,21 @@ class ResearchStore:
                             )
                 tx.update_frontier_axes(axes)
 
+            # Evidence change (tree-growth design §4): an Experiment reached a
+            # terminal scientific outcome.  Emitted inside the same
+            # transaction so a crash can never lose the wake.
+            tx._conn.execute(
+                "INSERT INTO supervisor_events (type, payload, created_at) "
+                "VALUES ('experiment_terminal', ?, ?)",
+                (_json({
+                    "experiment_id": experiment_id,
+                    "status": status,
+                    "parent_node_id": exp.parent_node_id,
+                    "child_node_id": child.node_id if child else None,
+                    "gate_passed": bool(gate_result.passed),
+                }), time.time()),
+            )
+
             return child
 
     def publish_proposals(
@@ -672,7 +687,21 @@ class ResearchStore:
         """Close a proposer allocation."""
         now = time.time()
         with self.transaction() as tx:
+            allocation = tx.get_allocation(allocation_id)
             tx.finish_allocation(allocation_id, proposals_produced, now)
+            # Evidence change (tree-growth design §4): a lease ended without
+            # producing any Experiment.  Leases that published proposals are
+            # followed by the experiments' own terminal events instead.
+            if proposals_produced == 0:
+                tx._conn.execute(
+                    "INSERT INTO supervisor_events (type, payload, created_at) "
+                    "VALUES ('lease_terminal', ?, ?)",
+                    (_json({
+                        "allocation_id": allocation_id,
+                        "node_id": allocation.node_id if allocation else None,
+                        "outcome": "abstain",
+                    }), now),
+                )
 
     def get_allocation(self, allocation_id: str) -> ProposerAllocation | None:
         with self.transaction() as tx:

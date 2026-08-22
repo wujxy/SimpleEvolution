@@ -46,13 +46,13 @@
 ### Task 3: Event emission points (M2)
 
 **Files:**
-- Modify: `simpleevo/scheduler/loop.py`, `simpleevo/scheduler/reconcile.py`, `tests/scheduler/test_reconcile.py`
+- Modify: `simpleevo/scheduler/loop.py`, `simpleevo/db/store.py`, `tests/scheduler/test_supervisor_events.py`
 
-- [ ] **Step 1: Emit `root_ready`** on first step when the root exists and the event log is empty
-- [ ] **Step 2: Emit `experiment_terminal`** where an Experiment reaches a terminal status (completed / gate_rejected / no_change / failed), same transaction as the status write
-- [ ] **Step 3: Emit `lease_terminal`** where a proposer lease closes without producing any Experiment (abstain / error / zero proposals)
-- [ ] **Step 4: Emit terminal events from `Reconciler._mark_infra_failed`** for experiment/proposer kinds (lost jobs wake the gate); supervisor/integrator infra-failures emit nothing
-- [ ] **Step 5: Focused suite green; commit** — `feat: durable supervisor wake events with reconcile coverage`
+- [x] **Step 1: Emit `root_ready`** on first step when the root exists and the event log is empty
+- [x] **Step 2: Emit `experiment_terminal`** inside the `ingest_experiment_result` transaction (crash-safe) when an Experiment reaches a terminal scientific status (completed / gate_rejected / no_change)
+- [x] **Step 3: Emit `lease_terminal`** inside `deallocate_proposer` when a lease closes with zero proposals (abstain); leases that published proposals are followed by the experiments' own terminal events
+- [x] **Step 4: Scope correction** — `Reconciler._mark_infra_failed` marks work for *retry*, never declares scientific death, so it emits nothing: an infra failure is not an evidence change (design §4 excludes work-start/retry wakes). Supervisor-worker loss is covered by the bounded-retry machinery in Task 7. `goal_changed`/`budget_changed` are emittable via `store.emit_supervisor_event` by drivers; no automatic trigger this round
+- [x] **Step 5: Focused suite green; commit** — `feat: supervisor wake events at evidence changes`
 
 ### Task 4: Supervisor investigation tools (M3)
 
