@@ -105,7 +105,7 @@ def test_root_has_no_research_state_seed(store):
     assert _scheduler(store)._research_state_seed_for(root) == {}
 
 
-def test_seed_pack_gives_child_facts_before_predecessor_hypothesis(store):
+def test_seed_pack_gives_child_facts_before_predecessor_note(store):
     seed = _scheduler(store)._research_state_seed_for(
         _seed_completed_research_path(store)
     )
@@ -114,18 +114,19 @@ def test_seed_pack_gives_child_facts_before_predecessor_hypothesis(store):
     assert "Current Child Node — authoritative Harness facts" in text
     assert "Experiment outcome — authoritative Harness facts" in text
     assert "Predecessor proposal — prior intervention and expectation" in text
-    # The predecessor's DIRECTION is second-hand: a pointer, never inlined
-    # prose — an inlined direction statement anchors the candidate set onto
-    # one inherited plan (measured with the disposition probes).
-    assert "working model exists" in text
-    assert "inspect_originating_research_state" in text
-    # The working model's direction prose is absent; the proposal's own
-    # instruction and expectation are facts and stay.
-    assert "The boundary loses reusable state." not in text
+    # The predecessor's note travels first-hand, in full, after the facts
+    # (probe-verified: under the anti-anchor charter an inlined note does
+    # not collapse the candidate set; the v4 pointer measured 0/10 use).
+    # No framing is added — how to treat the note is the successor's own
+    # judgment, per its charter.
+    assert "Your predecessor left this note:" in text
+    assert "The boundary loses reusable state." in text
+    assert "deliberately NOT shown" not in text
     assert "Preserve reusable state across FCN calls." in text
     assert text.index("Current Child Node") < text.index("Experiment outcome")
     assert text.index("Experiment outcome") < text.index("Predecessor proposal")
-    assert text.index("Predecessor proposal") < text.index("working model exists")
+    assert text.index("Predecessor proposal") < text.index(
+        "Your predecessor left this note:")
 
 
 def test_generator_catalog_exposes_all_choices_without_a_recommendation():

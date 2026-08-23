@@ -713,6 +713,9 @@ class Scheduler:
         # First-hand budget facts: the limits say nothing without the
         # amounts already spent, and opportunity-cost reasoning needs both
         # on every wake (same numbers the durable cap derives).
+        # Capacity likewise: without the free count the gate cannot see
+        # the wall before hitting it (v3: 8 capacity rejections, 2 stalls).
+        runtime_facts["free_proposer_capacity"] = self._proposer_capacity()
         terminal_used = self._queries.terminal_experiment_count()
         runtime_facts["terminal_evals_used"] = terminal_used
         if self.config.max_terminal_evals is not None:
@@ -729,6 +732,18 @@ class Scheduler:
                     max(0.0, float(self.config.budget_usd) - spend), 6)
         return {
             "batch": {
+                # A retry wakes the same session on the same unconsumed
+                # batch; without the recorded reason the session cannot
+                # see why its previous decision was refused (v3: capacity
+                # rejections repeated until stall, blind to the cause).
+                **({
+                    "previous_rejection": (
+                        "Your previous decision for this batch was rejected "
+                        f"by the scheduler: {rejection}. Submit a corrected "
+                        "decision."
+                    ),
+                } if (rejection := self.store.scheduler_rejection_for_work(
+                        attempt.logical_work_id)) else {}),
                 "event_batch": {
                     "cursor_from": self.store.supervisor_event_cursor(),
                     "cursor_to": head,

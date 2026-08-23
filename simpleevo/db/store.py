@@ -1011,6 +1011,24 @@ class ResearchStore:
             ).fetchone()
         return None if row is None else json.loads(row["payload"])
 
+    def scheduler_rejection_for_work(self, work_id: str) -> str | None:
+        """The most recent rejection error recorded for one logical work id.
+
+        The gate retries a rejected decision on the same session; without
+        the reason in the retry's wake the session cannot see why its
+        previous attempt was refused and re-decides blind.
+        """
+        row = self._with_conn(lambda conn: conn.execute(
+            "SELECT payload FROM scheduler_events "
+            "WHERE type = 'supervisor_decision_rejected' "
+            "AND json_extract(payload, '$.work_id') = ? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (work_id,),
+        ).fetchone())
+        if row is None:
+            return None
+        return json.loads(row["payload"]).get("error")
+
     # ------------------------------------------------------------------
     # Supervisor growth gate: wake events, cursor, decisions (§4/§9)
     # ------------------------------------------------------------------

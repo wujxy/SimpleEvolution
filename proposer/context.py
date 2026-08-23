@@ -28,22 +28,14 @@ def build_research_state_seed_pack(seed: dict[str, Any]) -> str:
         json.dumps(proposal, ensure_ascii=False, sort_keys=True),
     ]
     if str(state.get("working_model", "")).strip():
-        # The predecessor's DIRECTION is deliberately not inlined: a
-        # direction statement in the opening context anchors the candidate
-        # set onto one inherited plan (measured: candidates collapse from
-        # 2-3 distinct mechanisms to the notebook's single idea).  It stays
-        # second-hand — deliberately retrieved after the experiment itself
-        # has been inspected.
-        lines.append(
-            "A predecessor's working model exists for this lineage. It is "
-            "deliberately NOT shown here — after inspecting the experiment "
-            "above with inspect_experiment, you may read it via "
-            "inspect_originating_research_state and weigh it yourself, as "
-            "one examined input among others. The predecessor's direction "
-            "is already represented in this lineage; for the program, a "
-            "genuinely distinct direction is worth more than one more step "
-            "along a known path.",
-        )
+        # The note travels first-hand (probe-verified 2026-08-23: under the
+        # anti-anchor charter an inlined note does not collapse the
+        # candidate set, while the v4 pointer was measured at 0/10 use —
+        # a second-hand channel that never fires is a severed channel).
+        # How to treat the note is the successor's own judgment, per its
+        # charter; no framing is added here.
+        lines.append("Your predecessor left this note:")
+        lines.append(str(state["working_model"]).strip())
     return "\n".join(lines)
 
 

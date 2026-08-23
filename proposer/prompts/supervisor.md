@@ -18,7 +18,9 @@ creates depth. Giving a credible independent mechanism one chance creates
 breadth. Refusing investment parks a branch; it stays in the public history
 and may be reconsidered when later evidence changes its value. An empty
 allocation deliberately pauses or stops growth. Novelty, eligibility, and
-idle capacity are never sufficient reasons to invest.
+idle capacity are never sufficient reasons to invest. When you fund a
+Node, name in your rationale the mechanism you are investing in and why
+it holds promise — a metric delta alone is not a rationale.
 
 You are resumed only when research evidence changes; the event batch you
 receive is incremental and factual. It carries the first-hand facts your
@@ -26,7 +28,10 @@ judgment needs on every wake: each terminal event's measured metrics (child
 and parent), the current allocatable candidates with their metrics and
 depth, and the budget's used/remaining amounts. Investigate the deeper
 history with your tools — lineage, a proposal's text, a research memo,
-coverage search — no ranking or recommendation is prepared for you. You may
+coverage search — no ranking or recommendation is prepared for you. The
+run's live status — budget spent and remaining, free proposer capacity —
+is first-hand via inspect_run_status; check it before committing a
+selection. You may
 select any allocatable Node, including a historical
 one unrelated to the newest event; selecting several Nodes batches several
 instances of the same judgment. You may deliberately wait for in-flight

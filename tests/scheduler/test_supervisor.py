@@ -112,10 +112,16 @@ def test_gate_batch_carries_first_hand_facts(tmp_path: Path):
     assert nodes[0]["metrics"] == {"score": 10}
     assert nodes[1]["metrics"] == {"score": 5}
 
+    # No prior rejection on this batch: nothing to correct.
+    assert "previous_rejection" not in batch
+
     # Budget facts: limits are useless without the spent amounts.
     facts = payload["runtime_facts"]
     assert facts["terminal_evals_used"] == 0
     assert facts["remaining_terminal_evals"] == 5
+    # Capacity facts: the free count, not just the ceiling — the gate
+    # must see the wall before hitting it (v3: 8 blind capacity hits).
+    assert facts["free_proposer_capacity"] == scheduler._proposer_capacity()
 
 
 def test_gate_wakes_on_events_and_creates_linked_leases(tmp_path: Path):
@@ -359,6 +365,17 @@ def test_over_capacity_decision_is_rejected_whole(tmp_path: Path):
     scheduler.step()
     assert store.get_supervisor_decision("d-cap") is None
     assert store.open_allocations() == []
+
+    # The retry wakes the same session on the same batch — it must carry
+    # the recorded reason, or the session re-decides blind (v3: capacity
+    # rejections repeated to stall, blind to the cause).
+    scheduler.step()
+    (retry_id, retry_payload) = submitter.supervisor[1]
+    assert retry_id == work_id
+    assert "exceeds proposer capacity" in retry_payload["batch"][
+        "previous_rejection"]
+    assert "Submit a corrected decision" in retry_payload["batch"][
+        "previous_rejection"]
 
 
 def _seed_donor(store, root, episode):
