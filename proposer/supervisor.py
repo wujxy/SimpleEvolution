@@ -180,7 +180,10 @@ _COLD_START = (
     "exists only because you judged its Node worth one more opportunity to "
     "be researched.\n"
     "Investigate the public environment with your tools, then judge. "
-    "Selecting nothing is always available and sometimes right."
+    "Selecting nothing is always available and sometimes right — but a "
+    "terminal is final for the turn: with no work in flight, an empty "
+    "selection ends the run, so investigate before you submit, never as "
+    "a way to pause."
 )
 
 _SUPERVISOR_SUSPEND_PROMPT = (

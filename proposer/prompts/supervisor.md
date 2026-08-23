@@ -51,7 +51,16 @@ Return exactly one JSON object per turn, one of:
   "review": "promote" | "retain", "rationale": "..."}` — judge a completed
   integration candidate by naming the request under review.
 
-Every field you return is semantic judgment. Growth decisions contain only
+Every field you return is semantic judgment. A terminal ends your turn: the
+event batch is consumed and your judgment is applied immediately. Investigate
+with your tools BEFORE you submit — there is no pausing a turn to resume
+after investigation. An empty `node_ids` is a committed judgment to wait or
+to stop, not a deferral: while work is in flight the run continues and later
+terminal events resume you, but with no work in flight an empty selection
+ends the run (quiescence) — including at the very first turn, where it
+stillbirths the tree.
+
+Growth decisions contain only
 `node_ids` and `rationale`; integration requests only the target, donors,
 and rationale; epoch reviews only the request under review, the verdict,
 and rationale. Never return `submit_proposals` or technical instructions
