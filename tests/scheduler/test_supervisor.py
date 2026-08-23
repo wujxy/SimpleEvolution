@@ -90,6 +90,34 @@ def _scheduler(store, run_dir, submitter, **config):
     )
 
 
+def test_gate_batch_carries_first_hand_facts(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    root, _, child = _seed(store, extra_child=True)
+    submitter = Submitter(tmp_path)
+    scheduler = _scheduler(
+        store, tmp_path, submitter, max_terminal_evals=5)
+
+    scheduler.step()
+    (_, payload) = submitter.supervisor[0]
+    batch = payload["batch"]
+
+    # Baseline metrics ride with root_ready.
+    assert batch["event_batch"]["events"][0]["payload"]["root_metrics"] == {
+        "score": 10}
+
+    # The candidate set carries measured metrics, in creation order —
+    # never ordered by any quality signal (invariant 6).
+    nodes = batch["allocatable_nodes"]
+    assert [n["node_id"] for n in nodes] == [root.node_id, child.node_id]
+    assert nodes[0]["metrics"] == {"score": 10}
+    assert nodes[1]["metrics"] == {"score": 5}
+
+    # Budget facts: limits are useless without the spent amounts.
+    facts = payload["runtime_facts"]
+    assert facts["terminal_evals_used"] == 0
+    assert facts["remaining_terminal_evals"] == 5
+
+
 def test_gate_wakes_on_events_and_creates_linked_leases(tmp_path: Path):
     store = ResearchStore(tmp_path / "state.db")
     root, _, _ = _seed(store)
@@ -828,3 +856,109 @@ def test_durable_budget_cap_blocks_allocation(tmp_path: Path):
     assert scheduler._allocation_disabled() is True
     assert submitter.supervisor == []
     assert store.pending_supervisor_events()
+
+
+class _GoneSubmitter(Submitter):
+    """Backend probe that reports every missing-result job as gone."""
+
+    def probe_job(self, work_id: str, work_kind: str) -> str:
+        return "gone"
+
+    def remove_job(self, work_id: str, work_kind: str) -> None:
+        return None
+
+
+def _write_work_manifest(
+    run_dir: Path, directory: str, work_id: str,
+) -> None:
+    path = run_dir / directory / work_id / "manifest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"payload": {"attempt_id": "old"}}))
+
+
+def test_durable_cap_blocks_reconcile_resubmissions(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    root, episode, _ = _seed(store)
+    _seed_donor(store, root, episode)  # terminal evals == cap == 1
+    _open_request(store, root)
+    store.prepare_integration_request("req-open")
+    store.install_run_limits(
+        {"max_terminal_evals": 1, "budget_usd": None})
+    _sync_cursor(store)
+    store.emit_supervisor_event("goal_changed", {"goal": "faster"})
+    work_id = f"supervisor-{store.supervisor_event_head()}"
+    store.record_attempt(
+        logical_work_id=work_id, kind="supervisor",
+        status="running", started_at=0.0)
+    _write_work_manifest(
+        tmp_path, "supervisor_decisions", work_id)
+    store.record_attempt(
+        logical_work_id="req-open", kind="integrator",
+        status="running", started_at=0.0)
+    _write_work_manifest(
+        tmp_path, "integration_requests", "req-open")
+    submitter = _GoneSubmitter(tmp_path)
+    scheduler = _scheduler(
+        store, tmp_path, submitter, max_terminal_evals=1)
+
+    scheduler.step()
+
+    assert scheduler._allocation_disabled() is True
+    assert submitter.supervisor == []
+    assert submitter.integrator == []
+    assert [
+        attempt.status
+        for attempt in store.attempts_for_work(work_id, "supervisor")
+    ] == ["failed"]
+    assert [
+        attempt.status
+        for attempt in store.attempts_for_work("req-open", "integrator")
+    ] == ["failed"]
+
+
+def test_terminal_ingest_caps_before_reconcile_resubmission(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    root, episode, _ = _seed(store)
+    store.emit_supervisor_event(
+        "root_ready", {"root_node_id": root.node_id})
+    _sync_cursor(store)
+    with store.transaction() as tx:
+        tx.create_proposal(Proposal(
+            proposal_id="p-cap", node_id=root.node_id,
+            episode_id=episode.episode_id, instruction="finish",
+            rationale={}, status="running", created_at=0,
+        ))
+        tx.create_experiment(
+            experiment_id="exp-cap", proposal_id="p-cap",
+            parent_node_id=root.node_id, status="running")
+    store.record_attempt(
+        logical_work_id="exp-cap", kind="experiment",
+        status="running", started_at=0.0)
+    result_path = tmp_path / "experiments" / "exp-cap" / "result.json"
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.write_text(json.dumps({
+        "status": "completed",
+        "result": {
+            "outcome": "COMPLETED", "sha": "cap-child",
+            "metrics": {}, "gate": {"passed": True, "results": {}},
+            "changed_paths": [],
+        },
+    }))
+    store.install_run_limits(
+        {"max_terminal_evals": 1, "budget_usd": None})
+    store.emit_supervisor_event("goal_changed", {"goal": "faster"})
+    work_id = f"supervisor-{store.supervisor_event_head()}"
+    store.record_attempt(
+        logical_work_id=work_id, kind="supervisor",
+        status="running", started_at=0.0)
+    _write_work_manifest(
+        tmp_path, "supervisor_decisions", work_id)
+    submitter = _GoneSubmitter(tmp_path)
+    scheduler = _scheduler(
+        store, tmp_path, submitter, max_terminal_evals=1)
+
+    scheduler.step()
+
+    assert scheduler._queries.terminal_experiment_count() == 1
+    assert scheduler._allocation_disabled() is True
+    assert submitter.supervisor == []

@@ -371,7 +371,14 @@ class ResearchStore:
 
             # Evidence change (tree-growth design §4): an Experiment reached a
             # terminal scientific outcome.  Emitted inside the same
-            # transaction so a crash can never lose the wake.
+            # transaction so a crash can never lose the wake.  The measured
+            # metrics ride along as first-hand facts — the growth gate's core
+            # judgment needs them on every wake, so they are delivered with
+            # the event instead of waiting for a tool round-trip.
+            parent = (
+                tx.get_node(exp.parent_node_id)
+                if exp.parent_node_id else None
+            )
             tx._conn.execute(
                 "INSERT INTO supervisor_events (type, payload, created_at) "
                 "VALUES ('experiment_terminal', ?, ?)",
@@ -381,6 +388,12 @@ class ResearchStore:
                     "parent_node_id": exp.parent_node_id,
                     "child_node_id": child.node_id if child else None,
                     "gate_passed": bool(gate_result.passed),
+                    "parent_metrics": (
+                        dict(parent.metrics) if parent else None
+                    ),
+                    "child_metrics": (
+                        dict(metrics) if child is not None else None
+                    ),
                 }), time.time()),
             )
 
@@ -691,8 +704,14 @@ class ResearchStore:
             tx.finish_allocation(allocation_id, proposals_produced, now)
             # Evidence change (tree-growth design §4): a lease ended without
             # producing any Experiment.  Leases that published proposals are
-            # followed by the experiments' own terminal events instead.
+            # followed by the experiments' own terminal events instead.  The
+            # node's current metrics ride along so the growth gate can weigh
+            # what an abstention on this world means without a tool call.
             if proposals_produced == 0:
+                node = (
+                    tx.get_node(allocation.node_id)
+                    if allocation else None
+                )
                 tx._conn.execute(
                     "INSERT INTO supervisor_events (type, payload, created_at) "
                     "VALUES ('lease_terminal', ?, ?)",
@@ -700,6 +719,9 @@ class ResearchStore:
                         "allocation_id": allocation_id,
                         "node_id": allocation.node_id if allocation else None,
                         "outcome": "abstain",
+                        "node_metrics": (
+                            dict(node.metrics) if node else None
+                        ),
                     }), now),
                 )
 

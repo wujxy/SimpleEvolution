@@ -670,6 +670,55 @@ def test_commit_rejects_mixed_decision_payloads(store: ResearchStore):
     assert store.open_allocations() == []
 
 
+def test_terminal_events_carry_first_hand_metrics(store: ResearchStore):
+    root, episode = _seed_root_episode(store)
+    store.set_node_metrics(root.node_id, {"lookups_per_sec": 100.0})
+    head = store.emit_supervisor_event("root_ready", {"root_node_id": root.node_id})
+    with store.transaction() as tx:
+        proposal = tx.create_proposal(
+            type("P", (), {
+                "proposal_id": "prop-m", "node_id": root.node_id,
+                "episode_id": episode.episode_id, "instruction": "try M",
+                "rationale": {}, "status": "queued", "created_at": 0.0,
+            })()
+        )
+        experiment = tx.create_experiment(
+            experiment_id="exp-m",
+            proposal_id=proposal.proposal_id,
+            parent_node_id=root.node_id,
+            status="running",
+        )
+    store.commit_supervisor_decision(
+        decision_id="d1", work_id=f"supervisor-{head}",
+        node_ids=[root.node_id], rationale="metrics facts", cursor_to=head,
+        leases=[LeaseSpec(root.node_id, episode.episode_id, 1)],
+    )
+
+    store.ingest_experiment_result(
+        experiment_id=experiment.experiment_id,
+        result_sha="child-m",
+        metrics={"lookups_per_sec": 90.0},
+        gate_result=_gate(True),
+        status="completed",
+    )
+    terminal = [
+        e for e in store.pending_supervisor_events()
+        if e.type == "experiment_terminal"
+    ][-1]
+    assert terminal.payload["parent_metrics"] == {"lookups_per_sec": 100.0}
+    assert terminal.payload["child_metrics"] == {"lookups_per_sec": 90.0}
+
+    # An abstaining lease carries the node's own metrics.
+    (allocation,) = store.open_allocations()
+    store.deallocate_proposer(
+        allocation_id=allocation.allocation_id, proposals_produced=0)
+    lease = [
+        e for e in store.pending_supervisor_events()
+        if e.type == "lease_terminal"
+    ][-1]
+    assert lease.payload["node_metrics"] == {"lookups_per_sec": 100.0}
+
+
 def test_budget_change_event_shares_the_limit_transaction(
     store: ResearchStore,
 ):

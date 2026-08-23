@@ -182,6 +182,15 @@ Every event remains individually identifiable and ordered; batching avoids
 forcing several partial judgments over sibling results that completed close
 together.
 
+The wake batch carries the first-hand facts the growth judgment needs on
+every wake: each terminal event's measured metrics (child and parent), the
+current allocatable candidates with their metrics and depth (in creation
+order — never ordered by any quality signal), and the budget's
+used/remaining amounts. Deeper history — lineage, a proposal's text,
+research memos, coverage search — remains behind the read-only tools. This
+layering is deliberate: the core judgment's inputs are delivered with the
+wake, and only occasionally-needed depth costs a tool round-trip.
+
 ## 5. Persistent cognition and context
 
 The Supervisor reuses the existing Scientist continuity pattern rather than a
@@ -219,8 +228,10 @@ still preserves everything for audit.
 The Harness provides facts and bounded read-only tools, not a prepared ranking,
 potential score, explore/exploit label, or recommended allocation.
 
-The wake-up message contains only the new event batch and stable object IDs.
-The Supervisor decides what else to inspect.
+The wake-up message carries the event batch — with each terminal event's
+measured metrics — plus the current allocatable candidates with their
+metrics and the budget's used/remaining amounts: the first-hand layer.
+The Supervisor decides what deeper history to inspect through tools.
 
 The public tool environment reuses the existing L2 evidence tools:
 

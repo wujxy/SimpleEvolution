@@ -141,7 +141,19 @@ class Scheduler:
         # jobs are still alive vs HELD/gone (which get retried).
         reconciler = Reconciler(self.store, self.run_dir, submitter=self._submitter)
         reconcile_actions = reconciler.reconcile()
-        self._execute_reconcile_actions(reconcile_actions)
+        # Harvest durable results first.  Reattach/resubmit is deliberately
+        # deferred until after the durable cap is recomputed: a result ingested
+        # here may itself consume the last eval/budget, while a run that was
+        # already capped must not restart a backend-reported lost worker.
+        ingest_actions = [
+            action for action in reconcile_actions
+            if action.kind == "ingest_result"
+        ]
+        retry_actions = [
+            action for action in reconcile_actions
+            if action.kind != "ingest_result"
+        ]
+        self._execute_reconcile_actions(ingest_actions)
 
         # 1b. Evidence change (tree-growth design §4): the seed world is
         # presented to the growth gate exactly once.
@@ -149,7 +161,12 @@ class Scheduler:
             root = self._queries.root_node()
             if root is not None:
                 self.store.emit_supervisor_event(
-                    "root_ready", {"root_node_id": root.node_id})
+                    "root_ready", {
+                        "root_node_id": root.node_id,
+                        # The baseline is first-hand: every later judgment
+                        # weighs nodes against it (design §6 facts-only).
+                        "root_metrics": dict(root.metrics),
+                    })
 
         # 1c. Budget policy is durable and rebuildable: install the
         # configured limits each step and wake the gate only when an
@@ -159,6 +176,11 @@ class Scheduler:
         # 1d. Derive the durable cap from the same eval/spend data the
         # budget view reads — before any new work starts this step.
         self._durable_cap_reached = self._compute_durable_run_limit()
+
+        # Only now may dead work be considered for reattachment.  Supervisor
+        # and Integrator retries observe the freshly derived cap and therefore
+        # cannot start after the run has become allocation-disabled.
+        self._execute_reconcile_actions(retry_actions)
 
         # 2. Compute frontier.
         frontier = self._compute_frontier()
@@ -688,10 +710,23 @@ class Scheduler:
             "max_terminal_evals": self.config.max_terminal_evals,
             "budget_usd": self.config.budget_usd,
         }
+        # First-hand budget facts: the limits say nothing without the
+        # amounts already spent, and opportunity-cost reasoning needs both
+        # on every wake (same numbers the durable cap derives).
+        terminal_used = self._queries.terminal_experiment_count()
+        runtime_facts["terminal_evals_used"] = terminal_used
+        if self.config.max_terminal_evals is not None:
+            runtime_facts["remaining_terminal_evals"] = max(
+                0, int(self.config.max_terminal_evals) - terminal_used)
         if cfg is not None and cfg.pricing:
             # Token pricing so the worker's budget view can price the
             # run's usage ledger itself.
             runtime_facts["pricing"] = dict(cfg.pricing)
+            spend = spend_usd(self.run_dir, cfg.pricing)
+            runtime_facts["spend_usd"] = round(spend, 6)
+            if self.config.budget_usd is not None:
+                runtime_facts["remaining_usd"] = round(
+                    max(0.0, float(self.config.budget_usd) - spend), 6)
         return {
             "batch": {
                 "event_batch": {
@@ -706,6 +741,12 @@ class Scheduler:
                         for item in pending
                     ],
                 },
+                # First-hand candidate facts: the mechanical decision set
+                # with each node's measured metrics, in creation order —
+                # facts only, no ranking, no recommendation (design §6:
+                # ordering by any quality signal would be the Harness
+                # judging on the gate's behalf).
+                "allocatable_nodes": self._allocatable_node_facts(),
                 "epoch": None if epoch is None else {
                     "epoch_id": epoch.epoch_id,
                     "root_node_id": epoch.root_node_id,
@@ -717,6 +758,34 @@ class Scheduler:
             "runtime_facts": runtime_facts,
             "run_context": {"goal": cfg.goal} if cfg is not None else {},
         }
+
+    def _allocatable_node_facts(self) -> list[dict[str, Any]]:
+        """The mechanical decision set with measured metrics, creation order.
+
+        Mirrors the allocatable computation in ``SupervisorTools._list_nodes``
+        so the batch and the tool never disagree about eligibility.  Facts
+        only — no ranking, no ordering by any quality signal (design §6).
+        """
+        open_nodes = self._queries.open_allocation_node_ids()
+        max_research = self._max_research_per_node()
+        max_proposals = self._max_proposals_per_node()
+        rows: list[dict[str, Any]] = []
+        for node in self._queries.list_nodes():
+            if node.status == "dead" or node.node_id in open_nodes:
+                continue
+            if max_research and len(self._queries.allocations_for_node(
+                    node.node_id)) >= max_research:
+                continue
+            if max_proposals and self._queries.proposal_count_for_node(
+                    node.node_id) >= max_proposals:
+                continue
+            rows.append({
+                "node_id": node.node_id,
+                "depth": node.depth,
+                "status": node.status,
+                "metrics": dict(node.metrics),
+            })
+        return rows
 
     def _supervisor_max_retries(self) -> int:
         if self.evolution_config is not None:

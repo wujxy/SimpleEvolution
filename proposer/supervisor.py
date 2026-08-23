@@ -29,7 +29,12 @@ class SupervisorError(AgentError):
 SUPERVISOR_TOOL_CONTRACT = """\
 ## Read-only investigation tools
 
-You investigate the public research environment yourself.  Facts only are
+You investigate the public research environment yourself.  Your wake batch
+already carries the first-hand facts — each terminal event's measured
+metrics, the allocatable candidates with their metrics, and the budget's
+used/remaining amounts — so reach for these tools only when you need deeper
+history: lineage, a proposal's text, a research memo, or coverage search.
+Facts only are
 returned; nothing here ranks nodes or recommends an allocation.
 
 - `inspect_node` {node_id}: one Node and its direct children.
