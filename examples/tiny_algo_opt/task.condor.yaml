@@ -79,6 +79,18 @@ jobs:
   accounting_group: JUNO.juno.default
   accounting_group_user: lidian
   request_os: AlmaLinux9
+  # Measurement comparability: every worker job must run on the same CPU
+  # generation (and the same physical machine, so identical clock/memory
+  # behaviour across nodes). Both lines are AND-joined into Requirements —
+  # keep them consistent (see SimpleLoop ihep-htcondor skill: a cpu_model
+  # that contradicts the pinned Machine idles forever). bws1013 is Zen5
+  # (CpuFamily 26 / CpuModelNumber 2, EPYC 9755) with 256 static 1-CPU
+  # slots, no START-policy restrictions; the big lhws3xx partitionable
+  # slots are LHAASO-reserved on slot1 and fragmented on slot2, so pinning
+  # there idles. Re-verify with condor_status before long runs: if the
+  # pinned machine fills, either wait or repoint BOTH lines consistently.
+  cpu_model: zen5
+  machine_constraint: 'Machine == "bws1013.ihep.ac.cn"'
   memory_mb: 4096
   cpus: 1
   python_executable: /lustrefs/juno26/users/lidian/py_venv/miniconda3/bin/python3
