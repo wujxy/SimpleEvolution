@@ -30,6 +30,9 @@ def build_research_state_seed_pack(seed: dict[str, Any]) -> str:
         json.dumps(proposal, ensure_ascii=False, sort_keys=True),
         "Predecessor hypothesis — Scientist judgment to examine, not an established fact:",
         str(state.get("working_model", "")),
+        "The predecessor's direction is already represented in this lineage; "
+        "for the program, a genuinely distinct direction is worth more than "
+        "one more step along a known path — weigh that before continuing it.",
     ])
 
 
