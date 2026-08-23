@@ -470,7 +470,9 @@ Terminal actions (choose exactly one research operation):
   already validated implementation is not EXPLORE. If two proposals
   are merely variants of the same bet, keep the stronger one. An unverified
   but well-motivated direction is a legitimate use of a slot — finding out
-  is what the experiment is for.
+  is what the experiment is for. Each proposal is an independent branch:
+  it costs exactly one evaluation, it does not affect its siblings, and a
+  gate rejection becomes ledger evidence, not damage.
 
 - SYNTHESIZE brings inspected, validated branch results into this world:
   {"action":"submit_synthesis","proposal":

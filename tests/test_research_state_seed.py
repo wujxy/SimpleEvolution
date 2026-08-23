@@ -111,15 +111,21 @@ def test_seed_pack_gives_child_facts_before_predecessor_hypothesis(store):
     )
     text = build_research_state_seed_pack(seed)
     assert "You are a newly assigned Scientist" in text
-    assert "not your notebook" in text
     assert "Current Child Node — authoritative Harness facts" in text
     assert "Experiment outcome — authoritative Harness facts" in text
     assert "Predecessor proposal — prior intervention and expectation" in text
-    assert "Predecessor hypothesis — Scientist judgment to examine" in text
+    # The predecessor's DIRECTION is second-hand: a pointer, never inlined
+    # prose — an inlined direction statement anchors the candidate set onto
+    # one inherited plan (measured with the disposition probes).
+    assert "working model exists" in text
+    assert "inspect_originating_research_state" in text
+    # The working model's direction prose is absent; the proposal's own
+    # instruction and expectation are facts and stay.
+    assert "The boundary loses reusable state." not in text
     assert "Preserve reusable state across FCN calls." in text
     assert text.index("Current Child Node") < text.index("Experiment outcome")
     assert text.index("Experiment outcome") < text.index("Predecessor proposal")
-    assert text.index("Predecessor proposal") < text.index("Predecessor hypothesis")
+    assert text.index("Predecessor proposal") < text.index("working model exists")
 
 
 def test_generator_catalog_exposes_all_choices_without_a_recommendation():
