@@ -20,9 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Thread
 
-from simpleevo.research_state import CognitiveTransformation, ResearchState
+from simpleevo.research_state import ResearchState
 
-from .cognitive_transformer import CognitiveTransformer
 from .research_agent import WorkingState
 from .runtime import MountMap
 from .child_processes import CHILD_PROCESSES
@@ -211,24 +210,11 @@ RESEARCH_TOOL_SPECS = (
         schema=(
             '{"action":"register_research_state",'
             '"working_model":"your current scientific understanding",'
-            '"evidence_refs":[],"derived_from_research_state_id":null,'
-            '"transformation_id":null}'
+            '"evidence_refs":[],"derived_from_research_state_id":null}'
         ),
         description=(
             "Register one immutable working model. The Host assigns identity; "
             "this records your judgment and does not promote it to fact."
-        ),
-    ),
-    ResearchToolSpec(
-        action="transform_worldview",
-        schema=(
-            '{"action":"transform_worldview",'
-            '"operator_id":"G...","source_research_state_id":null}'
-        ),
-        description=(
-            "Ask a stateless mentor to apply exactly one cognitive generator "
-            "to a local ResearchState or the Episode seed. The returned "
-            "challenge is advice, not a ResearchState or Proposal."
         ),
     ),
 )
@@ -497,14 +483,12 @@ class ResearchTools:
         current_round: int | None = None,
         node_id: str | None = None,
         episode_id: str | None = None,
-        cognitive_transformer: CognitiveTransformer | None = None,
         inherited_research_states: dict[str, str] | None = None,
     ):
         self.memory = memory_service
         self.command_timeout_seconds = command_timeout_seconds
         self.node_id = node_id
         self.episode_id = episode_id
-        self.cognitive_transformer = cognitive_transformer
         self.inherited_research_states = inherited_research_states or {}
         self.files = ResearchFiles(
             work=workspace,
@@ -544,10 +528,6 @@ class ResearchTools:
                 }
             if name == "register_research_state":
                 return self._register_research_state(action, working_state)
-            if name == "transform_worldview":
-                return self._transform_worldview(
-                    action, working_state, deadline=deadline,
-                )
             if name == "run_research_command":
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -661,15 +641,6 @@ class ResearchTools:
                 raise ValueError(f"unknown research state: {derived_from}")
             if local is not None and local.episode_id != self.episode_id:
                 raise ValueError(f"research state belongs to another episode: {derived_from}")
-        transformation_id = action.get("transformation_id")
-        if transformation_id:
-            transformation = state.transformations.get(transformation_id)
-            if transformation is None:
-                raise ValueError(f"unknown transformation: {transformation_id}")
-            if transformation.episode_id != self.episode_id:
-                raise ValueError(
-                    f"transformation belongs to another episode: {transformation_id}"
-                )
         evidence_refs = tuple(action.get("evidence_refs", ()))
         for evidence_ref in evidence_refs:
             if evidence_ref.startswith("source:"):
@@ -683,75 +654,9 @@ class ResearchTools:
             node_id=self.node_id,
             episode_id=self.episode_id,
             derived_from_research_state_id=derived_from,
-            transformation_id=transformation_id,
             working_model=action["working_model"],
             evidence_refs=evidence_refs,
             created_at=time.time(),
         )
         state.research_states[research_state_id] = record
         return {"ok": True, "research_state_id": research_state_id}
-
-    def _transform_worldview(
-        self,
-        action: dict,
-        working_state: WorkingState | None,
-        *,
-        deadline: float,
-    ) -> dict:
-        state = self._require_cognitive_state(working_state)
-        if self.cognitive_transformer is None:
-            raise ValueError("cognitive transformer is unavailable")
-        source_id = action.get("source_research_state_id")
-        source_text = ""
-        if source_id:
-            local = state.research_states.get(source_id)
-            if local is not None:
-                if local.episode_id != self.episode_id:
-                    raise ValueError(
-                        f"research state belongs to another episode: {source_id}"
-                    )
-                source_text = local.working_model
-            elif source_id in self.inherited_research_states:
-                source_text = self.inherited_research_states[source_id]
-            else:
-                raise ValueError(f"unknown research state: {source_id}")
-        used = {item.operator_id for item in state.transformations.values()}
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise ValueError("proposer deadline exceeded")
-        try:
-            operator_id, challenge, _usage = self.cognitive_transformer.transform(
-                source_text,
-                action.get("operator_id"),
-                used,
-                remaining,
-            )
-        except ValueError:
-            # Protocol/validation errors (unknown generator, empty challenge,
-            # deadline exceeded) keep their actionable message via execute()'s
-            # normal error path.
-            raise
-        except Exception as exc:
-            # A mentor consultation must never kill the research round: a
-            # gateway 400, a dead stream, or an empty reply come back as an
-            # ok=False observation the Scientist can continue from.
-            return {"ok": False, "error": f"cognitive transformation failed: {exc}"}
-        transformation_id = (
-            f"ct-{self.episode_id}-{len(state.transformations) + 1:03d}"
-        )
-        record = CognitiveTransformation(
-            transformation_id=transformation_id,
-            node_id=self.node_id,
-            episode_id=self.episode_id,
-            source_research_state_id=source_id,
-            operator_id=operator_id,
-            challenge=challenge,
-            created_at=time.time(),
-        )
-        state.transformations[transformation_id] = record
-        return {
-            "ok": True,
-            "transformation_id": transformation_id,
-            "operator_id": operator_id,
-            "challenge": challenge,
-        }

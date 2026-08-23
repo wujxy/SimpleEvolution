@@ -282,8 +282,19 @@ class L2MemoryService:
         return self.queries.open_allocation_node_ids()
 
     def node_allocations(self, node_id: str) -> dict:
-        """Proposer investment on one Node plus its public outcomes."""
+        """Seat investment on one Node plus its public outcomes.
+
+        Each allocation carries the lens of the seat episode it leased, so
+        the outcome of a purchase is readable per lens.
+        """
         allocations = self.queries.allocations_for_node(node_id)
+        lens_by_episode = {
+            row["episode_id"]: row["lens"]
+            for row in self.queries.episode_operator_rows()
+        }
+        for allocation in allocations:
+            allocation["lens"] = lens_by_episode.get(
+                allocation.get("episode_id"))
         experiments = [
             {
                 "experiment_id": experiment.experiment_id,

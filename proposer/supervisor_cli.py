@@ -53,7 +53,10 @@ def main(argv: list[str] | None = None) -> int:
             "decision_id": payload.get("decision_id") or uuid.uuid4().hex,
             "work_id": manifest["request_id"],
             "decision_kind": turn.decision_kind,
-            "node_ids": list(turn.node_ids),
+            "seat_purchases": [
+                {"node_id": node_id, "lens": lens}
+                for node_id, lens in turn.seat_purchases
+            ],
             "rationale": turn.rationale,
             "detail": dict(turn.detail or {}),
             "event_cursor_to": cursor_to,

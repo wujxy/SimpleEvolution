@@ -31,11 +31,13 @@ SUPERVISOR_TOOL_CONTRACT = """\
 
 You investigate the public research environment yourself.  Your wake batch
 already carries the first-hand facts — each terminal event's measured
-metrics, the allocatable candidates with their metrics, and the budget's
+metrics, the allocatable candidates with their metrics and open seat
+counts, the seat ledger (what has been bought where, with what outcome),
+the untried lens set per node, per-lens output statistics, and the budget's
 used/remaining amounts — so reach for these tools only when you need deeper
 history: lineage, a proposal's text, a research memo, or coverage search.
 Facts only are
-returned; nothing here ranks nodes or recommends an allocation.
+returned; nothing here ranks nodes, lenses, or purchases.
 
 - `inspect_node` {node_id}: one Node and its direct children.
 - `compare_nodes` {node_ids: [..]}: factual side-by-side metrics.
@@ -46,11 +48,13 @@ returned; nothing here ranks nodes or recommends an allocation.
 - `inspect_originating_research_state` {experiment_id}: the attributed
   research memo behind an Experiment; you must `inspect_experiment` first.
 - `list_nodes` {}: every Node in the tree, including parked, dormant, and
-  prior-epoch Nodes, each with a mechanical `allocatable` flag.
-- `inspect_node_allocations` {node_id}: proposer investment and resulting
-  public outcomes for one Node.
+  prior-epoch Nodes, with a mechanical `allocatable` flag and the lenses
+  its own episodes have burned (lineage-dedup is computed against the full
+  ancestry — see the untried fact in your batch).
+- `inspect_node_allocations` {node_id}: seat investment (each allocation
+  with its lens) and resulting public outcomes for one Node.
 - `inspect_run_status` {}: mechanical run facts — in-flight work, queued
-  proposals, open leases, configured capacity, and (when the driver set
+  proposals, open seats, configured capacity, and (when the driver set
   budget policy) the `budget` block: terminal evals vs the eval cap,
   spend vs the USD budget, remaining amounts, and whether the run is
   already capped.
@@ -121,22 +125,15 @@ class SupervisorTools:
         return {"ok": False, "error": f"unsupported supervisor action: {name}"}
 
     def _list_nodes(self) -> dict:
-        open_nodes = self.memory.open_allocation_node_ids()
-        max_research = int(self.runtime_facts.get("max_research_per_node", 0))
-        max_proposals = int(self.runtime_facts.get("max_proposals_per_node", 0))
+        # Own burned lenses from the same projection the batch facts use;
+        # open seats counted from allocations directly (a lens-less
+        # frontier lease is still a seat in flight).
+        seats_open = self.memory.queries.open_allocation_counts_by_node()
+        burned_own: dict[str, set[str]] = {}
+        for row in self.memory.queries.episode_operator_rows():
+            burned_own.setdefault(row["node_id"], set()).add(row["lens"])
         rows = []
         for node in self.memory.queries.list_nodes():
-            allocation_count = len(
-                self.memory.queries.allocations_for_node(node.node_id))
-            allocatable = bool(
-                node.status != "dead"
-                and node.node_id not in open_nodes
-                and (not max_research
-                     or allocation_count < max_research)
-                and (not max_proposals
-                     or self.memory.queries.proposal_count_for_node(
-                         node.node_id) < max_proposals)
-            )
             rows.append({
                 "node_id": node.node_id,
                 "parent_node_id": node.parent_node_id,
@@ -144,12 +141,19 @@ class SupervisorTools:
                 "status": node.status,
                 "metrics": dict(node.metrics),
                 "gate_passed": node.gate_result.passed,
-                "allocatable": allocatable,
+                # Seat semantics: a living node is purchasable for any lens
+                # its lineage has not burned (the untried batch fact holds
+                # the exact per-node set).  There are no per-node research
+                # or proposal caps — the budget is the boundary.
+                "allocatable": node.status != "dead",
+                "seats_inflight": seats_open.get(node.node_id, 0),
+                "lenses_burned_here": sorted(
+                    burned_own.get(node.node_id, ())),
             })
         return {"ok": True, "nodes": rows}
 
 
-SUPERVISOR_PROMPT_VERSION = "supervisor-v1"
+SUPERVISOR_PROMPT_VERSION = "supervisor-v2-seats"
 
 
 def load_supervisor_session(
@@ -170,10 +174,15 @@ def load_supervisor_session(
 
 @dataclass(frozen=True)
 class SupervisorTurnResult:
-    """One committed judgment; identity and cursor come from the harness."""
+    """One committed judgment; identity and cursor come from the harness.
+
+    ``seat_purchases`` is the growth decision: (node_id, lens) pairs, each
+    one seat.  Empty purchases = wait for in-flight evidence (the scheduler
+    rejects an empty stop while untried seats remain).
+    """
 
     decision_kind: str  # growth | integration_request | epoch_review
-    node_ids: tuple[str, ...] = ()
+    seat_purchases: tuple[tuple[str, str], ...] = ()
     rationale: str = ""
     detail: dict[str, Any] | None = None
 
@@ -181,13 +190,14 @@ class SupervisorTurnResult:
 _COLD_START = (
     "You are the Supervisor of this research tree, resumed for the first "
     "time. The seed world (root Node) is ready, and you hold exclusive "
-    "authority over the tree's growth: every proposer lease in this run "
-    "exists only because you judged its Node worth one more opportunity to "
-    "be researched.\n"
+    "authority over the tree's growth: every research seat in this run "
+    "exists only because you bought it — a node and a lens, worth one "
+    "seat's cost.\n"
     "Investigate the public environment with your tools, then judge. "
-    "Selecting nothing is always available and sometimes right — but a "
-    "terminal is final for the turn: with no work in flight, an empty "
-    "selection ends the run, so investigate before you submit, never as "
+    "Buying nothing is available and sometimes right while evidence is in "
+    "flight — but a terminal is final for the turn: with no work in flight "
+    "and untried seats still on the board, an empty purchase list is "
+    "rejected by the harness, so investigate before you submit, never as "
     "a way to pause."
 )
 
@@ -212,8 +222,9 @@ class SupervisorAgent(ResearchAgent):
     _error_class = SupervisorError
     _protocol_reminder = (
         "Return exactly one JSON object: submit_growth_decision "
-        "{node_ids, rationale} (empty node_ids waits), "
-        "submit_integration_request, or submit_epoch_review."
+        "{seat_purchases, rationale} (each purchase is {node_id, lens}; an "
+        "empty list waits), submit_integration_request, or "
+        "submit_epoch_review."
     )
     _TERMINALS = (
         "submit_growth_decision",
@@ -257,17 +268,28 @@ class SupervisorAgent(ResearchAgent):
         if name in self._TOOL_ACTIONS:
             return [action]
         if name == "submit_growth_decision":
-            extra = set(action) - {"action", "node_ids", "rationale"}
+            extra = set(action) - {
+                "action", "seat_purchases", "rationale"}
             if extra:
                 raise SupervisorError(
-                    "growth decision may contain only node_ids and rationale; "
-                    f"unexpected: {sorted(extra)}"
+                    "growth decision may contain only seat_purchases and "
+                    f"rationale; unexpected: {sorted(extra)}"
                 )
-            node_ids = action.get("node_ids")
-            if not isinstance(node_ids, list) or not all(
-                isinstance(item, str) and item for item in node_ids
-            ):
-                raise SupervisorError("node_ids must be a list of node ids")
+            purchases = action.get("seat_purchases")
+            if not isinstance(purchases, list):
+                raise SupervisorError(
+                    "seat_purchases must be a list of {node_id, lens}")
+            for item in purchases:
+                if not isinstance(item, dict) or set(item) != {
+                        "node_id", "lens"}:
+                    raise SupervisorError(
+                        "each seat purchase must be exactly "
+                        "{node_id, lens}"
+                    )
+                if not isinstance(item["node_id"], str) or not item["node_id"]:
+                    raise SupervisorError("purchase node_id must be non-empty")
+                if not isinstance(item["lens"], str) or not item["lens"]:
+                    raise SupervisorError("purchase lens must be non-empty")
             if not str(action.get("rationale", "")).strip():
                 raise SupervisorError("rationale is required")
             return [action]
@@ -333,7 +355,10 @@ class SupervisorAgent(ResearchAgent):
             if name == "submit_growth_decision":
                 return SupervisorTurnResult(
                     decision_kind="growth",
-                    node_ids=tuple(str(item) for item in action["node_ids"]),
+                    seat_purchases=tuple(
+                        (str(item["node_id"]), str(item["lens"]))
+                        for item in action["seat_purchases"]
+                    ),
                     rationale=str(action["rationale"]),
                 )
             if name == "submit_integration_request":
@@ -371,8 +396,9 @@ class SupervisorAgent(ResearchAgent):
             build_tools=lambda scratch, home: tools,
             terminal_name=self._TERMINALS,
             budget_nudge=(
-                "Return your judgment now: submit_growth_decision, "
-                "submit_integration_request, or submit_epoch_review."
+                "Return your judgment now: submit_growth_decision "
+                "(seat_purchases), submit_integration_request, or "
+                "submit_epoch_review."
             ),
             handle_terminal=terminal,
             compact=self._compact,

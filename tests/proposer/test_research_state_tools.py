@@ -1,4 +1,4 @@
-"""Scientist-local ResearchState and CognitiveTransformation tools."""
+"""Seat-local ResearchState tools (transform_worldview path removed)."""
 from __future__ import annotations
 
 import json
@@ -7,9 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from proposer.cognitive_transformer import CognitiveTransformer
 from proposer.cli import _enrich_proposals, _proposal_to_dict, _result_to_dict
-from proposer.model import ModelReply
 from proposer.research_agent import (
     WorkingState, _build_telemetry, _build_trace, _register_evidence,
 )
@@ -21,18 +19,7 @@ from proposer.scientist import (
     _validate_action_guard,
     parse_response,
 )
-from simpleevo.generator import Generator
 from simpleevo.research_state import CognitiveTransformation, ResearchState
-
-
-class FakeModel:
-    def __init__(self, text: str):
-        self.text = text
-        self.calls: list[dict] = []
-
-    def complete(self, **kwargs):
-        self.calls.append(kwargs)
-        return ModelReply(self.text, {"completion_tokens": 7})
 
 
 class FakeMemory:
@@ -63,11 +50,9 @@ class FakeMemory:
 def _tools(
     tmp_path: Path,
     *,
-    model: FakeModel | None = None,
     episode_id: str = "ep-1",
     node_id: str = "node-1",
     inherited_research_states: dict[str, str] | None = None,
-    suggested_operator_id: str | None = None,
 ) -> ResearchTools:
     workspace = tmp_path / "work"
     repo = tmp_path / "repo"
@@ -75,11 +60,6 @@ def _tools(
     home = tmp_path / "home"
     for path in (workspace, repo, scratch, home):
         path.mkdir(exist_ok=True)
-    model = model or FakeModel("Challenge the current boundary.")
-    generators = {
-        "G1": Generator("G1", "Assumption Attack", "Attack an assumption."),
-        "G2": Generator("G2", "Boundary Shift", "Shift the boundary."),
-    }
     return ResearchTools(
         runtime=object(),
         workspace=workspace,
@@ -93,12 +73,6 @@ def _tools(
         command_output_cap_chars=1000,
         node_id=node_id,
         episode_id=episode_id,
-        cognitive_transformer=CognitiveTransformer(
-            model=model,
-            generators=generators,
-            episode_seed="The current world has repeated FCN work.",
-            suggested_operator_id=suggested_operator_id,
-        ),
         inherited_research_states=inherited_research_states,
     )
 
@@ -149,75 +123,10 @@ def test_register_research_state_assigns_host_identity(tmp_path):
     assert state.research_states[result["research_state_id"]].node_id == "node-1"
 
 
-def test_transform_worldview_uses_one_generator_and_records_challenge(tmp_path):
-    model = FakeModel("Question whether FCN is the natural ownership boundary.")
-    state = WorkingState()
-    result = _tools(tmp_path, model=model).execute(
-        {"action": "transform_worldview", "operator_id": "G2"},
-        deadline=time.monotonic() + 10,
-        working_state=state,
-    )
-    assert result["transformation_id"] == "ct-ep-1-001"
-    assert state.transformations[result["transformation_id"]].operator_id == "G2"
-    assert len(model.calls) == 1
-    assert "Do not generate implementation proposals" in model.calls[0]["system"]
-
-
-def test_transform_worldview_requests_plain_text(tmp_path):
-    """The transformer consumes free-text challenges, so it must NOT force
-    DeepSeek's json_object response mode (which 400s when the prompt lacks
-    'json', and is exactly the crash that killed a whole research round)."""
-    model = FakeModel("Question whether FCN is the natural ownership boundary.")
-    _tools(tmp_path, model=model).execute(
-        {"action": "transform_worldview", "operator_id": "G2"},
-        deadline=time.monotonic() + 10,
-        working_state=WorkingState(),
-    )
-    assert model.calls[0]["json_object"] is False
-
-
-class ExplodingModel(FakeModel):
-    """A model that blows up mid-call (as DeepSeek did on the 400)."""
-
-    def complete(self, **kwargs):
-        raise RuntimeError(
-            "Error code: 400 - prompt must contain 'json' for json_object"
-        )
-
-
-def test_transform_worldview_failure_degrades_gracefully(tmp_path):
-    """A failing transform must come back as an ok=False observation the
-    Scientist can continue from, never crash the whole research round."""
-    result = _tools(tmp_path, model=ExplodingModel("")).execute(
-        {"action": "transform_worldview", "operator_id": "G2"},
-        deadline=time.monotonic() + 10,
-        working_state=WorkingState(),
-    )
-    assert result["ok"] is False
-    assert "400" in result["error"]
-
-
-def test_transform_worldview_rejects_unknown_generator(tmp_path):
-    result = _tools(tmp_path).execute(
-        {"action": "transform_worldview", "operator_id": "G99"},
-        deadline=time.monotonic() + 10,
-        working_state=WorkingState(),
-    )
-    assert result == {"ok": False, "error": "unknown generator: G99"}
-
-
-def test_transform_worldview_requires_proposer_selected_generator():
-    with pytest.raises(ProposerError, match="operator_id"):
-        parse_response(
-            '{"action":"transform_worldview"}', proposal_slots=3,
-        )
-
-
 def test_registration_rejects_unknown_local_references(tmp_path):
     tools = _tools(tmp_path)
     for field, value in (
         ("derived_from_research_state_id", "rs-missing"),
-        ("transformation_id", "ct-missing"),
     ):
         result = tools.execute(
             {
@@ -238,64 +147,6 @@ def test_registration_rejects_empty_working_model():
             '{"action":"register_research_state","working_model":"  "}',
             proposal_slots=3,
         )
-
-
-def test_transform_rejects_state_owned_by_another_episode(tmp_path):
-    state = WorkingState()
-    state.research_states["rs-other-001"] = ResearchState(
-        research_state_id="rs-other-001",
-        node_id="node-1",
-        episode_id="other-episode",
-        derived_from_research_state_id=None,
-        transformation_id=None,
-        working_model="A state from another episode.",
-        evidence_refs=(),
-        created_at=1.0,
-    )
-    result = _tools(tmp_path).execute(
-        {
-            "action": "transform_worldview",
-            "source_research_state_id": "rs-other-001",
-            "operator_id": "G1",
-        },
-        deadline=time.monotonic() + 10,
-        working_state=state,
-    )
-    assert result["ok"] is False
-    assert "another episode" in result["error"]
-
-
-def test_child_can_transform_and_derive_from_inherited_state(tmp_path):
-    parent_id = "rs-parent-001"
-    parent_model = "The parent boundary loses reusable state."
-    model = FakeModel("Reconsider the lifetime boundary.")
-    tools = _tools(
-        tmp_path,
-        model=model,
-        inherited_research_states={parent_id: parent_model},
-    )
-    state = WorkingState()
-    transformed = tools.execute(
-        {
-            "action": "transform_worldview",
-            "source_research_state_id": parent_id,
-            "operator_id": "G2",
-        },
-        deadline=time.monotonic() + 10,
-        working_state=state,
-    )
-    registered = tools.execute(
-        {
-            "action": "register_research_state",
-            "working_model": "The Child should own state at event lifetime.",
-            "derived_from_research_state_id": parent_id,
-            "transformation_id": transformed["transformation_id"],
-        },
-        deadline=time.monotonic() + 10,
-        working_state=state,
-    )
-    assert registered["ok"] is True
-    assert parent_model in model.calls[0]["messages"][0]["content"]
 
 
 def _proposal_payload(research_state_id: str, instruction: str) -> dict:
@@ -460,19 +311,12 @@ def test_cognitive_telemetry_and_trace_include_ids_not_working_model(tmp_path):
         deadline=time.monotonic() + 10,
         working_state=state,
     )
-    transformed = _tools(tmp_path).execute(
-        {"action": "transform_worldview", "operator_id": "G1"},
-        deadline=time.monotonic() + 10,
-        working_state=state,
-    )
     state.counts["proposed_research_states"] = 1
     telemetry = _build_telemetry(state, steps=2, outcome="submit")
     trace = _build_trace(state, round_id=1, outcome="submit")
     assert telemetry["research_states_registered"] == 1
-    assert telemetry["transformations_requested"] == 1
     assert telemetry["proposed_research_states"] == 1
     assert trace["research_state_ids"] == [registered["research_state_id"]]
-    assert trace["transformation_ids"] == [transformed["transformation_id"]]
     assert "working_model" not in json.dumps(trace)
 
 
@@ -577,3 +421,45 @@ def test_research_state_can_cite_two_inspected_experiments(tmp_path):
     assert registered["ok"] is True
     record = state.research_states[registered["research_state_id"]]
     assert record.evidence_refs == ("experiment:exp-a", "experiment:exp-b")
+
+
+def test_abstain_without_registered_state_is_rejected():
+    """Empty-seat exit contract: an abstain must leave its memo behind."""
+    action = parse_response(
+        '{"action":"abstain","reason":"Nothing to ask here."}',
+        proposal_slots=1,
+    )
+    assert _validate_action_guard(
+        WorkingState(), [action], Path("."),
+    ) == (
+        "empty_seat_memo_missing: register your research "
+        "state first (what you checked along your lens's "
+        "axes and why they are all empty), then abstain — "
+        "an empty exit without a memo erases your seat's "
+        "investigation"
+    )
+
+
+def test_abstain_with_registered_state_passes(tmp_path):
+    state = WorkingState()
+    _tools(tmp_path).execute(
+        {"action": "register_research_state", "working_model": "Lens axes "
+         "audited; all empty on this world."},
+        deadline=time.monotonic() + 10,
+        working_state=state,
+    )
+    action = parse_response(
+        '{"action":"abstain","reason":"All lens axes empty."}',
+        proposal_slots=1,
+    )
+    assert _validate_action_guard(state, [action], Path(".")) is None
+
+
+def test_transform_worldview_is_gone():
+    """The advice-level lens infrastructure is removed; a lens is seat
+    identity in the system prompt, not a tool."""
+    with pytest.raises(ProposerError, match="unknown action"):
+        parse_response(
+            '{"action":"transform_worldview","operator_id":"G1"}',
+            proposal_slots=1,
+        )

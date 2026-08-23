@@ -39,9 +39,25 @@ python -m ablation.driver all \
   --openai-keys k1,k2,k3 --anthropic-keys k1,k2,k3
 
 # The figure: budget (cumulative USD) on x, lookups/s vs baseline on y,
-# median +/- min/max band per arm.
+# median +/- min/max band per arm.  --x-axis time projects the same running
+# best onto elapsed hours (the axis that matters for time-capped runs).
 python -m ablation.driver plot --runs-root runs/ablation --out ablation.png
+python -m ablation.driver plot --runs-root runs/ablation-v5 --x-axis time --out ablation-v5.png
 ```
+
+## Time-capped comparison (ablation-v5)
+
+`bash scripts/run_ablation_v5.sh` launches the three-way XSBench comparison —
+coding-agent and loop via this driver, the Supervisor-gated tree via
+`scripts/run_supervisor_test.py` (v3 parameters: slots=4, proposer-inflight=6,
+experiment-inflight=4, max_research_per_node=2) — under a 4h wall-clock cap
+(`--max-seconds`; eval/budget caps far out of reach).  Concurrent tree evals
+lease exclusive benchmark cores from a pool above the run's `BENCH_PIN`
+(`simpleevo/jobs/local.py`), so parallel evals never time-share one core; an
+inflight=1 run always lands on the base pin, unchanged.  The detached plot
+daemon (`scripts/plot_ablation_v5_hourly.sh`) renders the time-axis figure
+hourly and the final time+cost pair once every arm's driver prints its
+`done:` line.
 
 Per-seed API keys: `--openai-keys k1,k2,k3` / `--anthropic-keys k1,k2,k3`
 (cycled across seeds). Unset → the ambient `OPENAI_API_KEY` /

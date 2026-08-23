@@ -165,11 +165,17 @@ class SupervisorEvent:
 
 @dataclass(frozen=True)
 class LeaseSpec:
-    """What the Scheduler turns one growth-decision node into."""
+    """What the Scheduler turns one growth-decision node into.
+
+    ``lens`` names the seat's generator (variation factor): it is stamped
+    onto the episode atomically with the allocation, so a seat's lens is
+    durable before its worker starts (seat design §7.1).
+    """
 
     node_id: str
     episode_id: str
     proposal_slots: int = 1
+    lens: str | None = None
 
 
 @dataclass(frozen=True)
@@ -630,17 +636,20 @@ class ResearchStore:
         node_id: str,
         episode_id: str,
         proposal_slots: int = 1,
-        max_proposals_per_node: int = 9,
+        max_proposals_per_node: int | None = None,
+        lens: str | None = None,
     ) -> ProposerAllocation | None:
         """Record that a proposer slot was allocated to a node/episode.
 
         Pre-reserves ``proposal_slots`` proposal ids (§2.4 identity-first):
         the ids are issued here by the single writer and handed to the worker.
+        ``max_proposals_per_node`` None means unlimited (seat design §4: the
+        per-node proposal cap is dissolved — the budget is the boundary).
         """
         with self.transaction(immediate=True) as tx:
             return self._allocate_on_tx(
                 tx,
-                LeaseSpec(node_id, episode_id, proposal_slots),
+                LeaseSpec(node_id, episode_id, proposal_slots, lens),
                 max_proposals_per_node,
             )
 
@@ -648,7 +657,7 @@ class ResearchStore:
         self,
         tx: "_Transaction",
         spec: LeaseSpec,
-        max_proposals_per_node: int,
+        max_proposals_per_node: int | None,
         decision_id: str | None = None,
     ) -> ProposerAllocation | None:
         node = tx.get_node(spec.node_id)
@@ -657,22 +666,40 @@ class ResearchStore:
             raise ValueError(f"unknown node: {spec.node_id}")
         if episode is None or episode.node_id != spec.node_id:
             raise ValueError("episode belongs to another node")
-        published = tx._conn.execute(
-            "SELECT COUNT(*) FROM proposals WHERE node_id = ?",
-            (spec.node_id,),
-        ).fetchone()[0]
-        open_rows = tx._conn.execute(
-            "SELECT reserved_proposal_ids FROM proposer_allocations "
-            "WHERE node_id = ? AND finished_at IS NULL",
-            (spec.node_id,),
-        ).fetchall()
-        open_reserved = sum(
-            len(_unjson(row["reserved_proposal_ids"])) for row in open_rows
-        )
-        remaining = max(
-            0, max_proposals_per_node - published - open_reserved,
-        )
-        reserved_count = min(max(0, spec.proposal_slots), remaining)
+        if spec.lens is not None:
+            # Stamp the seat's lens onto its episode atomically with the
+            # allocation.  Only a lens-less episode may be stamped: an
+            # episode that already carries a different lens belongs to
+            # another seat (seat design §7.1 — one episode, one lens).
+            current = episode.variation_operator
+            if current is not None and current != spec.lens:
+                raise ValueError(
+                    f"episode {spec.episode_id} already holds lens {current}"
+                )
+            tx._conn.execute(
+                "UPDATE episodes SET variation_operator = ? "
+                "WHERE episode_id = ?",
+                (spec.lens, spec.episode_id),
+            )
+        if max_proposals_per_node is None:
+            reserved_count = max(0, spec.proposal_slots)
+        else:
+            published = tx._conn.execute(
+                "SELECT COUNT(*) FROM proposals WHERE node_id = ?",
+                (spec.node_id,),
+            ).fetchone()[0]
+            open_rows = tx._conn.execute(
+                "SELECT reserved_proposal_ids FROM proposer_allocations "
+                "WHERE node_id = ? AND finished_at IS NULL",
+                (spec.node_id,),
+            ).fetchall()
+            open_reserved = sum(
+                len(_unjson(row["reserved_proposal_ids"])) for row in open_rows
+            )
+            remaining = max(
+                0, max_proposals_per_node - published - open_reserved,
+            )
+            reserved_count = min(max(0, spec.proposal_slots), remaining)
         if reserved_count == 0:
             return None
         now = time.time()
@@ -752,12 +779,9 @@ class ResearchStore:
             return {row["episode_id"] for row in rows}
 
     def count_allocations_for_node(self, node_id: str) -> int:
-        """Total proposer allocations a node has received over its lifetime.
+        """Total proposer allocations (seats) a node has received over its
+        lifetime."""
 
-        Used as the reseed budget: a frontier node whose fresh episodes are
-        exhausted may be programmatically re-studied until this count reaches
-        ``max_research_per_node``.
-        """
         with self.transaction() as tx:
             row = tx._conn.execute(
                 "SELECT COUNT(*) AS n FROM proposer_allocations WHERE node_id = ?",
@@ -1150,7 +1174,7 @@ class ResearchStore:
         detail: Mapping[str, Any] | None = None,
         cursor_to: int,
         leases: Sequence[LeaseSpec] = (),
-        max_proposals_per_node: int = 9,
+        max_proposals_per_node: int | None = None,
         integration_request: Mapping[str, Any] | None = None,
         epoch_review: Mapping[str, Any] | None = None,
     ) -> SupervisorCommit:
@@ -1178,7 +1202,12 @@ class ResearchStore:
         if decision_kind == "epoch_review" and not epoch_review:
             raise ValueError("epoch_review decision requires the review payload")
         ids = list(node_ids)
-        self._validate_unique_ids(ids, "node_ids")
+        # Duplicate node ids are legal under seats: one growth decision may
+        # buy several seats (different lenses) on the same node.  The
+        # decisions row records the involved nodes; per-seat multiplicity
+        # lives in detail["seat_purchases"].
+        if any(not isinstance(value, str) or not value for value in ids):
+            raise ValueError("missing node_ids")
         with self.transaction(immediate=True) as tx:
             existing = tx._conn.execute(
                 "SELECT decision_id FROM supervisor_decisions "

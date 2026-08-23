@@ -120,11 +120,5 @@ quiescence_window_proposals: 2
 frontier_policy: gepa
 # Width for the "topk" policy.
 frontier_top_k: 3
-# Total proposer allocations a single frontier node may receive over its
-# lifetime. A frontier node whose fresh episodes are exhausted is
-# programmatically reseeded (fresh episode inheriting its most recent one)
-# until this budget is spent.
-max_research_per_node: 3
-max_proposals_per_node: 9
-# Suggest one untried generator to the optional mentor tool on each reseed.
-generator_reseed: true
+# Seat design v6: per-node research/proposal caps are dissolved; the
+# frontier baseline re-studies nodes from the pool without a lifetime cap.

@@ -24,8 +24,8 @@ plot
 Design notes
 ------------
 * The arms differ ONLY in ``frontier_top_k`` (1 vs 3) and, for coding-agent,
-  in the injected no-op researcher; ``proposal_slots=1`` and
-  ``generator_reseed=false`` for all arms isolate frontier breadth as the
+  in the injected no-op researcher; ``proposal_slots=1`` for all arms
+  isolates frontier breadth as the
   single ablation variable (the shipped default config sweeps those separately).
 * coding-agent reuses the entire scheduler — the researcher slot is filled by
   a trivial proposer that immediately publishes one "continue improving"
@@ -55,6 +55,11 @@ from simpleevo.scheduler.loop import Scheduler
 
 ARMS = ("coding-agent", "loop", "topk")
 
+# Arms the plotter accepts beyond the runnable set: "tree" is the
+# Supervisor-gated tree run (scripts/run_supervisor_test.py), which shares
+# the standard run-dir layout but not this driver.
+PLOT_ARMS = ARMS + ("tree",)
+
 # Terminal scientific statuses of an experiment (mirrors the scheduler map).
 _TERMINAL_STATUSES = frozenset({"completed", "gate_rejected", "no_change"})
 
@@ -65,13 +70,7 @@ _COMMON_ARM_KNOBS = dict(
     proposal_slots=1,
     max_proposer_inflight=1,
     max_experiment_inflight=1,
-    generator_reseed=False,
     poll_seconds=2.0,
-    # Large per-node research budget so a single-lineage run keeps studying
-    # the current best node instead of stalling when descendants fail to
-    # improve (with the default 3, a chain whose children gate-reject would
-    # quiesce before the eval cap).
-    max_research_per_node=100,
     # Bound the researcher's per-study step budget.  The chain-test round
     # showed the loop researcher submitting a strong direction at step 69 of
     # the default 200; capping at 80 bounds worst-case research cost
@@ -199,14 +198,36 @@ def _trivial_proposer(run_dir: Path, config: EvolutionConfig):
             f"reference (VERIFY=PASS).\n\n"
             f"Gates:\n{config.gate_block}"
         )
+        # The publish contract requires every proposal to reference a research
+        # state from the same batch (publish_research_batch validates
+        # research_state_id), so the no-op researcher still files one honest
+        # state: the executor's own running understanding of the kernel.
+        state_id = f"rs-{payload['episode_id']}-noop"
         result = {
             "status": "completed",
             "result": {
                 "node_id": payload["node_id"],
                 "episode_id": payload["episode_id"],
+                "research_states": [
+                    {
+                        "research_state_id": state_id,
+                        "node_id": payload["node_id"],
+                        "episode_id": payload["episode_id"],
+                        "derived_from_research_state_id": None,
+                        "transformation_id": None,
+                        "working_model": (
+                            "coding-agent arm: no researcher — the executor is "
+                            "self-directed; working model is simply the current "
+                            "best node and its measured objective"
+                        ),
+                    },
+                ],
                 "proposals": [
                     {
                         "proposal_id": proposal_ids[0],
+                        "research_operation": "explore",
+                        "donor_experiment_ids": [],
+                        "research_state_id": state_id,
                         "instruction": instruction,
                         "rationale": {"arm": "coding-agent", "kind": "continue"},
                     }
@@ -224,6 +245,40 @@ def _trivial_proposer(run_dir: Path, config: EvolutionConfig):
 # ---------------------------------------------------------------------------
 
 
+def _api_preflight(config) -> None:
+    """Fail fast when either model channel cannot talk to its provider.
+
+    Same trap ``scripts/run_supervisor_test.py`` guards: the executor
+    channel's base_url comes from the task config while its token is
+    forwarded from the launching shell, so a shell provisioned for a
+    different provider authenticates 401 inside every experiment attempt
+    with no diagnostic at the driver level.
+    """
+    from proposer.model import build_chat_model
+
+    for role in ("researcher", "executor"):
+        spec = dict(getattr(config, role))
+        model = build_chat_model(spec)
+        try:
+            model.complete(
+                system="You are a connectivity pre-flight check.",
+                messages=[{"role": "user", "content": "Reply with exactly: OK"}],
+                timeout_seconds=90,
+                json_object=False,
+            )
+        except Exception as exc:
+            raise SystemExit(
+                f"[ablation] api check FAILED for {role}: "
+                f"api={spec.get('api')} model={spec.get('model')} "
+                f"base_url={spec.get('base_url')}\n  {exc}\n"
+                "The key is resolved from the launching shell "
+                "(OPENAI_API_KEY / ANTHROPIC_AUTH_TOKEN) and must match the "
+                "configured provider — e.g. for DeepSeek, launch with the "
+                "DeepSeek settings env exported."
+            )
+        print(f"api check ok: {role} api={spec.get('api')} model={spec.get('model')}", flush=True)
+
+
 def run_one(
     config_path: Path,
     run_dir: Path,
@@ -232,15 +287,21 @@ def run_one(
     seed: int = 1,
     max_evals: int = 10,
     budget_usd: float = 4.0,
+    max_seconds: float = 0.0,
     no_arm_override: bool = False,
+    preflight: bool = True,
 ) -> int:
-    """Run one arm instance to completion under eval/budget caps.
+    """Run one arm instance to completion under eval/budget/time caps.
 
     ``no_arm_override`` runs the config AS-IS (skipping ``arm_config``'s
     ``_COMMON_ARM_KNOBS`` / ``_ARM_TOP_K``), so a config that already declares
     its own tree-shape knobs (e.g. ``task-fractal.yaml``: proposal_slots=3,
     max_research_per_node=1) takes effect. The ``arm`` value still picks the
     proposer lane (real researcher vs the coding-agent no-op).
+
+    ``max_seconds`` (when > 0) is a wall-clock cap with the same drain
+    semantics as the eval/budget caps: at the deadline no new work is
+    allocated and the run stops once the in-flight experiments finish.
     """
     from simpleevo.cli import (
         _build_scheduler_config,
@@ -248,9 +309,12 @@ def run_one(
         _init_run,
     )
 
+    t0 = time.monotonic()
     random.seed(seed)
     base = load_config(config_path)
     config = base if no_arm_override else arm_config(base, arm)
+    if preflight:
+        _api_preflight(config)
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -276,6 +340,9 @@ def run_one(
         submit_experiment=submitter.submit_experiment,
     )
 
+    def _fmt_elapsed() -> str:
+        return f"{(time.monotonic() - t0) / 3600:.2f}h"
+
     step = 0
     last_proposal_step = 0
     while True:
@@ -283,11 +350,17 @@ def run_one(
         step += 1
         n_term = _terminal_count(queries)
         spend = _spend_usd(run_dir, config.pricing)
+        elapsed = time.monotonic() - t0
         log(
             f"[{arm}/seed-{seed}] step={step} terminal_evals={n_term} "
-            f"spend=${spend:.4f} frontier={telemetry.get('frontier_size')}"
+            f"spend=${spend:.4f} elapsed={elapsed / 3600:.2f}h "
+            f"frontier={telemetry.get('frontier_size')}"
         )
-        capped = n_term >= max_evals or (budget_usd and spend >= budget_usd)
+        capped = (
+            n_term >= max_evals
+            or (budget_usd and spend >= budget_usd)
+            or (max_seconds and elapsed >= max_seconds)
+        )
         if capped:
             # Stop allocating NEW research AND stop turning queued proposals
             # into experiments: a tree (k=3) never quiesces on its own while
@@ -299,7 +372,8 @@ def run_one(
         if capped and not scheduler._in_flight():
             log(
                 f"[{arm}/seed-{seed}] cap reached "
-                f"(evals={n_term}/{max_evals}, spend=${spend:.2f}/{budget_usd}); "
+                f"(evals={n_term}/{max_evals}, spend=${spend:.2f}/{budget_usd}, "
+                f"elapsed={_fmt_elapsed()}/{max_seconds / 3600:.2f}h); "
                 f"in-flight drained, stopping"
             )
             break
@@ -310,7 +384,10 @@ def run_one(
             break
         time.sleep(config.poll_seconds)
 
-    log(f"[{arm}/seed-{seed}] done: {n_term} terminal evals, ${spend:.2f} spent")
+    log(
+        f"[{arm}/seed-{seed}] done: {n_term} terminal evals, ${spend:.2f} spent, "
+        f"{_fmt_elapsed()} elapsed"
+    )
     return 0
 
 
@@ -433,7 +510,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         seed=args.seed,
         max_evals=args.max_evals,
         budget_usd=args.budget_usd,
+        max_seconds=args.max_seconds,
         no_arm_override=args.no_arm_override,
+        preflight=not args.no_preflight,
     )
 
 
@@ -458,6 +537,7 @@ def _cmd_plot(args: argparse.Namespace) -> int:
         args.runs_root,
         out_path=args.out,
         arms=args.arms,
+        x_axis=args.x_axis,
     )
     print(f"wrote {out}")
     return 0
@@ -477,6 +557,16 @@ def main(argv: list[str] | None = None) -> int:
     run_p.add_argument("--seed", type=int, default=1)
     run_p.add_argument("--max-evals", type=int, default=10)
     run_p.add_argument("--budget-usd", type=float, default=4.0)
+    run_p.add_argument(
+        "--max-seconds", type=float, default=0.0,
+        help="wall-clock cap in seconds (0 = no time cap); same drain "
+             "semantics as the eval/budget caps — at the deadline no new "
+             "work starts and the run stops once in-flight evals finish",
+    )
+    run_p.add_argument(
+        "--no-preflight", action="store_true",
+        help="skip the model-channel connectivity pre-flight (offline tests)",
+    )
     run_p.add_argument(
         "--no-arm-override", action="store_true",
         help="use the config as-is, skipping _COMMON_ARM_KNOBS / _ARM_TOP_K "
@@ -499,7 +589,11 @@ def main(argv: list[str] | None = None) -> int:
     plot_p = sub.add_parser("plot", help="render the ablation figure")
     plot_p.add_argument("--runs-root", default="runs/ablation", type=Path)
     plot_p.add_argument("--out", default="ablation.png", type=Path)
-    plot_p.add_argument("--arms", nargs="*", choices=ARMS)
+    plot_p.add_argument("--arms", nargs="*", choices=PLOT_ARMS)
+    plot_p.add_argument(
+        "--x-axis", default="cost", choices=("cost", "time"),
+        help="x projection: cumulative LLM spend or elapsed wall-clock hours",
+    )
     plot_p.set_defaults(func=_cmd_plot)
 
     args = parser.parse_args(argv)

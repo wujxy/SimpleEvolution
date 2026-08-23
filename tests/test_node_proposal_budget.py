@@ -1,4 +1,8 @@
-"""Node-lifetime Proposal capacity and allocation reservations."""
+"""Node-lifetime Proposal capacity and allocation reservations.
+
+The per-node proposal cap is dissolved for scheduling (seat design v4);
+these tests pin the store-level reservation mechanics, which remain for
+explicit callers that pass ``max_proposals_per_node``."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
@@ -80,7 +84,10 @@ def test_closing_allocation_releases_unused_reservations(store):
     assert len(a2.reserved_proposal_ids) == 3
 
 
-def test_scheduler_skips_node_when_proposal_capacity_is_exhausted(store):
+def test_scheduler_no_longer_skips_on_published_proposals(store):
+    """Seat design §4: the per-node proposal cap is dissolved for
+    scheduling — published proposals never make a node unallocatable; the
+    budget is the only boundary."""
     node, (episode, _second, _third) = _node_with_episodes(store)
     store.publish_proposals(
         node_id=node.node_id,
@@ -100,7 +107,6 @@ def test_scheduler_skips_node_when_proposal_capacity_is_exhausted(store):
         eval_commands=(),
         metrics_schema={"objective": {"key": "total_ms"}},
         axes=("total_ms",),
-        max_proposals_per_node=1,
     )
     scheduler = Scheduler(
         store,
@@ -108,8 +114,10 @@ def test_scheduler_skips_node_when_proposal_capacity_is_exhausted(store):
         SchedulerConfig(max_proposer_inflight=1, max_experiment_inflight=0),
         evolution_config=evolution,
     )
-    assert scheduler._allocate_proposers(scheduler._compute_frontier()) == []
-    assert store.open_allocations() == []
+    scheduler.submit_proposer = lambda _aid, _payload: ""
+    assert len(
+        scheduler._allocate_proposers(scheduler._compute_frontier())) == 1
+    assert len(store.open_allocations()) == 1
 
 
 def test_concurrent_allocations_cannot_exceed_node_budget(store):

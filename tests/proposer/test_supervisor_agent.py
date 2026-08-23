@@ -60,7 +60,10 @@ def test_growth_turn_investigates_then_decides(tmp_path: Path):
         model=FakeModel([
             {"action": "list_nodes"},
             {"action": "submit_growth_decision",
-             "node_ids": ["root"], "rationale": "root deserves growth."},
+             "seat_purchases": [{"node_id": "root", "lens": "G5"}],
+             "rationale": "root deserves growth through inversion; not "
+             "buying G10 — the price-list script is the default bet "
+             "anyway."},
         ]),
         timeout_seconds=30,
         max_steps=6,
@@ -72,7 +75,7 @@ def test_growth_turn_investigates_then_decides(tmp_path: Path):
     )
 
     assert result.decision_kind == "growth"
-    assert result.node_ids == ("root",)
+    assert result.seat_purchases == (("root", "G5"),)
     assert result.rationale.startswith("root deserves")
     assert session.meta["supervisor_turn"] == 1
     assert (tmp_path / "supervisor" / "session" / "session.jsonl").exists()
@@ -82,7 +85,7 @@ def test_notebook_checkpoint_persists_across_turns(tmp_path: Path):
     session = load_supervisor_session(tmp_path)
     first = SupervisorAgent(
         model=FakeModel([
-            {"action": "submit_growth_decision", "node_ids": [],
+            {"action": "submit_growth_decision", "seat_purchases": [],
              "rationale": "wait."},
             {"notebook": "Root is the only lineage; no evidence yet."},
         ]),
@@ -96,7 +99,7 @@ def test_notebook_checkpoint_persists_across_turns(tmp_path: Path):
 
     second = SupervisorAgent(
         model=FakeModel([
-            {"action": "submit_growth_decision", "node_ids": [],
+            {"action": "submit_growth_decision", "seat_purchases": [],
              "rationale": "still waiting."},
         ]),
         timeout_seconds=30,
@@ -118,7 +121,7 @@ def test_growth_output_rejects_extra_fields(tmp_path: Path):
     # so the rejection (not a step-budget stop) is what surfaces.
     invalid = {
         "action": "submit_growth_decision",
-        "node_ids": ["root"],
+        "seat_purchases": [{"node_id": "root", "lens": "G5"}],
         "rationale": "ok",
         "proposal_slots": 2,
     }
@@ -193,7 +196,7 @@ def test_integration_and_epoch_review_terminals(tmp_path: Path):
 def test_empty_selection_is_a_valid_wait(tmp_path: Path):
     agent = SupervisorAgent(
         model=FakeModel([{
-            "action": "submit_growth_decision", "node_ids": [],
+            "action": "submit_growth_decision", "seat_purchases": [],
             "rationale": "siblings in flight; wait.",
         }]),
         timeout_seconds=30, max_steps=2,
@@ -203,7 +206,7 @@ def test_empty_selection_is_a_valid_wait(tmp_path: Path):
         batch=_batch(),
     )
     assert result.decision_kind == "growth"
-    assert result.node_ids == ()
+    assert result.seat_purchases == ()
 
 
 def test_step_budget_exhaustion_is_an_error_not_a_default(tmp_path: Path):
@@ -226,7 +229,7 @@ def test_live_context_compaction_keeps_archive_complete(tmp_path: Path):
     agent = SupervisorAgent(
         model=FakeModel([
             {"action": "list_nodes"},
-            {"action": "submit_growth_decision", "node_ids": [],
+            {"action": "submit_growth_decision", "seat_purchases": [],
              "rationale": "wait."},
             {"notebook": "compacted turn survives in the archive."},
         ]),

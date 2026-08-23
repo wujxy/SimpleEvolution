@@ -5,8 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from proposer.context import build_generator_catalog, build_research_state_seed_pack
-from simpleevo.generator import Generator
+from proposer.context import build_research_state_seed_pack
 from simpleevo.db.store import GateDecision, Proposal, ResearchStore
 from simpleevo.research_state import ResearchState
 from simpleevo.scheduler.loop import Scheduler, SchedulerConfig
@@ -110,7 +109,7 @@ def test_seed_pack_gives_child_facts_before_predecessor_note(store):
         _seed_completed_research_path(store)
     )
     text = build_research_state_seed_pack(seed)
-    assert "You are a newly assigned Scientist" in text
+    assert "You are newly assigned to this Child world" in text
     assert "Current Child Node — authoritative Harness facts" in text
     assert "Experiment outcome — authoritative Harness facts" in text
     assert "Predecessor proposal — prior intervention and expectation" in text
@@ -127,16 +126,6 @@ def test_seed_pack_gives_child_facts_before_predecessor_note(store):
     assert text.index("Experiment outcome") < text.index("Predecessor proposal")
     assert text.index("Predecessor proposal") < text.index(
         "Your predecessor left this note:")
-
-
-def test_generator_catalog_exposes_all_choices_without_a_recommendation():
-    text = build_generator_catalog([
-        Generator("G1", "Assumption Attack", "Attack a critical assumption."),
-        Generator("G2", "Boundary Shift", "Shift the problem boundary."),
-    ])
-    assert "G1 — Assumption Attack" in text
-    assert "G2 — Boundary Shift" in text
-    assert "recommended" not in text.lower()
 
 
 def test_child_proposer_payload_uses_research_state_seed(store):

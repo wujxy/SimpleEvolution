@@ -52,7 +52,7 @@ class _GateSubmitter:
     def submit_integrator(self, request_id: str, payload: dict) -> str:
         return str(self.run_dir / "integration_requests" / request_id / "result.json")
 
-    def decide(self, *, node_ids=(), rationale="", decision_id="d",
+    def decide(self, *, purchases=(), rationale="", decision_id="d",
                decision_kind="growth", detail=None):
         work_id, payload = self.supervisor[-1]
         _write_json(self.run_dir / "supervisor_decisions" / work_id / "result.json", {
@@ -61,7 +61,11 @@ class _GateSubmitter:
             "result": {
                 "decision_id": decision_id, "work_id": work_id,
                 "decision_kind": decision_kind,
-                "node_ids": list(node_ids), "rationale": rationale,
+                "seat_purchases": [
+                    {"node_id": node_id, "lens": lens}
+                    for node_id, lens in purchases
+                ],
+                "rationale": rationale,
                 "detail": detail or {},
                 "event_cursor_to": payload["batch"]["event_batch"]["cursor_to"],
             },
@@ -101,7 +105,6 @@ def test_scheduler_closes_proposer_experiment_loop(env):
 
     def write_proposer_result(allocation_id: str, payload: dict) -> None:
         state_id = f"rs-{episode.episode_id}-001"
-        transformation_id = f"ct-{episode.episode_id}-001"
         _write_json(
             run_dir / "proposer_allocations" / allocation_id / "result.json",
             {
@@ -113,21 +116,11 @@ def test_scheduler_closes_proposer_experiment_loop(env):
                     "episode_id": episode.episode_id,
                     "node_id": root.node_id,
                     "outcome": "submit",
-                    "transformations": [{
-                        "transformation_id": transformation_id,
-                        "node_id": root.node_id,
-                        "episode_id": episode.episode_id,
-                        "source_research_state_id": None,
-                        "operator_id": "G2",
-                        "challenge": "Question the call boundary.",
-                        "created_at": 0.5,
-                    }],
                     "research_states": [{
                         "research_state_id": state_id,
                         "node_id": root.node_id,
                         "episode_id": episode.episode_id,
                         "derived_from_research_state_id": None,
-                        "transformation_id": transformation_id,
                         "working_model": "Repeated setup crosses the call boundary.",
                         "evidence_refs": ["source:src/fcn.cc:FCN"],
                         "created_at": 1.0,
@@ -138,15 +131,6 @@ def test_scheduler_closes_proposer_experiment_loop(env):
                             "research_state_id": state_id,
                             "instruction": "inline a small helper to reduce total_ms",
                             "rationale": {"expectation": "total_ms decreases"},
-                        },
-                        {
-                            "proposal_id": payload["proposal_ids"][1],
-                            "research_state_id": state_id,
-                            "instruction": "cache the invariant at call scope",
-                            "rationale": {
-                                "expectation": "total_ms decreases differently",
-                                "material_difference": "Tests caching, not ownership.",
-                            },
                         },
                     ],
                 },
@@ -182,7 +166,8 @@ def test_scheduler_closes_proposer_experiment_loop(env):
     t1 = scheduler.step()
     assert t1["proposer_jobs"] == 0
     submitter.decide(
-        node_ids=[root.node_id], rationale="root deserves growth.",
+        purchases=[(root.node_id, "G5")],
+        rationale="root deserves growth through inversion.",
         decision_id="decision-1")
 
     # Step 2: the decision commits and the proposer lease is launched.
@@ -217,23 +202,18 @@ def test_scheduler_closes_proposer_experiment_loop(env):
     queries = ResearchQueries(store.path)
     states = queries.research_states_for_episode(episode.episode_id)
     assert len(states) == 1
-    transformations = queries.transformations_for_episode(episode.episode_id)
-    assert len(transformations) == 1
-    proposals = [
-        proposal for proposal in queries.queued_proposals()
-        if proposal.node_id == root.node_id
-    ]
+    assert queries.queued_proposals() == []
     experiment_proposal = queries.get_proposal(
         submitter.experiments[0][1]["proposal_id"])
     assert experiment_proposal.research_state_id == states[0].research_state_id
-    assert len(proposals) == 1
-    assert proposals[0].research_state_id == states[0].research_state_id
     seed = scheduler._research_state_seed_for(
         queries.get_node(children[0]["node_id"])
     )
     assert seed["originating_research_state"]["working_model"] == (
         "Repeated setup crosses the call boundary."
     )
+    # The memo is signed with its author seat's lens (seat design §2.3).
+    assert seed["originating_lens"] == "G5"
     assert seed["experiment"]["metrics"] == {"total_ms": 90.0}
 
     # The terminal experiment event re-wakes the gate for the next judgment.
@@ -287,7 +267,7 @@ def test_group_workflow_allocates_divergent_branch_and_promotes_shared_epoch(env
     # low-base lineage rather than the frontier leader.
     scheduler.step()
     submitter.decide(
-        node_ids=[divergent.node_id],
+        purchases=[(divergent.node_id, "G7")],
         rationale="fund the distinct low-base lineage",
         decision_id="decision-1")
     scheduler.step()

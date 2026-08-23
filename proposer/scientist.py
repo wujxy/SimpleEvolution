@@ -37,9 +37,7 @@ from pathlib import Path
 
 from .model import ChatModel
 from .agent_runtime import AgentRuntime
-from .cognitive_transformer import CognitiveTransformer
-from .context import build_generator_catalog, build_research_state_seed_pack
-from simpleevo.generator import Generator, load_generator_basis
+from .context import build_research_state_seed_pack
 from simpleevo.research_state import CognitiveTransformation, ResearchState
 
 from .memory.reflection_views import (
@@ -185,7 +183,6 @@ class ReflectionResult:
 _RESEARCH_TOOL_ACTIONS = frozenset({
     "run_research_command", "read_file", "grep_files", "glob_files",
     "write_scratch_file", "use_research_skill", "register_research_state",
-    "transform_worldview",
 } | MEMORY_TOOL_ACTIONS)
 
 # Terminal actions end the deliberation; they are always sent alone, never
@@ -211,7 +208,7 @@ _TAIL_TURNS = 8
 
 # Prompt-version stamp recorded in meta.json so a prompt change is observable
 # per Scientist across rounds.
-SCIENTIST_PROMPT_VERSION = "scientist-v6"
+SCIENTIST_PROMPT_VERSION = "seat-v1"
 
 
 # --- Live-context compaction (Option A: deterministic shedding) -----------
@@ -446,12 +443,10 @@ always sent ALONE as a single action object, never inside a batch.
 
 A ResearchState is your revisable working model of the current world, not a
 Harness fact and not a form to complete. Register it when it is useful to make
-the understanding behind an experiment explicit. transform_worldview is an
-optional, stateless mentor consultation: it challenges a framing but cannot
-register a state or submit a Proposal for you. Prefer breadth across viable
-ResearchStates before spending multiple Proposals under one state. Submit
-every materially distinct experiment worth its cost — an unused slot is a
-branch the program never gets. Do not pad slots with variants of one bet.
+the understanding behind an experiment explicit — including when you exit
+empty: the memo is the record that your angle was actually investigated. Your
+proposal needs a reason it deserves an answer, not a proof; do not pad it
+with a second mechanism.
 
 Terminal actions (choose exactly one research operation):
 - EXPLORE expands the tested mechanism space:
@@ -463,16 +458,14 @@ Terminal actions (choose exactly one research operation):
                          "mechanisms":[...],"code_regions":[...]},
      "evidence_refs":["source:src/foo.cc:FunctionName"],
      "material_difference":"..."}]}
-  Submit 1 to {n} proposals. Every mechanism or causal direction in your
-  ResearchState that you judge worth testing should occupy its own slot. When
-  you submit more than one, spend the slots as BREADTH, not repetition: target
-  different mechanisms, code regions, or hypotheses. A direct port of an
-  already validated implementation is not EXPLORE. If two proposals
-  are merely variants of the same bet, keep the stronger one. An unverified
-  but well-motivated direction is a legitimate use of a slot — finding out
-  is what the experiment is for. Each proposal is an independent branch:
-  it costs exactly one evaluation, it does not affect its siblings, and a
-  gate rejection becomes ledger evidence, not damage.
+  This carries YOUR proposal — the direction your lens found worth its cost.
+  State in the proposal (in material_difference or the instruction) how the
+  direction embodies your lens; your lens's 提交自检 is the bar it must clear.
+  An unverified but well-motivated direction is legitimate — finding out is
+  what the experiment is for. The proposal is an independent branch: it costs
+  exactly one evaluation, and a gate rejection becomes ledger evidence, not
+  damage. A direct port of an already validated implementation is not
+  EXPLORE — that is SYNTHESIZE's job, not your lens's.
 
 - SYNTHESIZE brings inspected, validated branch results into this world:
   {"action":"submit_synthesis","proposal":
@@ -481,23 +474,24 @@ Terminal actions (choose exactly one research operation):
      "evidence_refs":["experiment:..."],
      "material_difference":"..."},
    "donor_experiment_ids":["exp-..."]}
-  Submit exactly one proposal and name every donor Experiment. Necessary glue
-  and compatibility adaptation are allowed; an unrelated new optimization
-  mechanism is not. A validated result may be combined with your current
-  world, but it must not replace a distinct exploratory direction you still
-  judge worth testing in a later EXPLORE episode. If the donors are not
-  compatible, abstain rather than forcing a combination.
+  Your proposal names every donor Experiment the combination rests on.
+  Necessary glue and compatibility adaptation are allowed; an unrelated new
+  optimization mechanism is not. If the donors are not compatible, abstain
+  rather than forcing a combination.
 
 - {"action":"abstain","reason":"...","blocking_unknown":"...optional..."}
-  Use this when no experiment is currently worth its execution cost.
+  The empty-seat exit: your angle provably has nothing here. It requires a
+  registered ResearchState first — register the memo naming what you checked
+  along your lens's axes and why they are all empty, then abstain. An
+  abstain with no registered state is a protocol violation: the
+  investigation evaporates and the program learns nothing from your seat.
 
-You are one Scientist in a research program spanning many worlds; new
-branches of the program grow from your proposal slots, so spread EXPLORE
-bets across genuinely distinct directions. Proposal
-instructions state WHAT to try and WHY it may move the goal; the executor reads
-the real code and decides the concrete implementation. evidence_refs and
-material_difference are optional; research_state_id and expectation are
-required for every Proposal. expectation is your honest pre-registered
+You are one seat in a research program spanning many worlds; the branch that
+grows from your proposal carries your school's view forward. Proposal
+instructions state WHAT to try and WHY it may move the goal; the executor
+reads the real code and decides the concrete implementation. evidence_refs
+and material_difference are optional; research_state_id and expectation are
+required for your Proposal. expectation is your honest pre-registered
 prior — a quantitative prediction when you have grounds for one, otherwise
 the discriminating question the experiment would answer.
 """
@@ -529,11 +523,13 @@ _RUNTIME_BOUNDARIES = """Runtime boundaries:
 
 _COLD_START = (
     "You are beginning this research. The goal, the gates, and the current "
-    "accepted revision are in your standing context above. Begin working on "
-    "the research problem. Use the laboratory as your judgment requires — "
-    "investigate, probe, and form your own understanding. When you have "
-    "directions you believe should be tried, submit them. There is no phase "
-    "you must rush through; take the time your judgment needs."
+    "accepted revision are in your standing context above; your lens names "
+    "the angle this seat was hired for. Begin working on the research "
+    "problem from that angle. Use the laboratory as your judgment requires "
+    "— investigate, probe, and form your own understanding. When you find "
+    "the direction your lens judges worth an experiment, submit your "
+    "proposal. There is no phase you must rush through; take the time your "
+    "judgment needs."
 )
 
 def _build_research_start_messages(
@@ -554,43 +550,44 @@ def _build_research_start_messages(
 
 
 _BUDGET_NUDGE = (
-    "Your research turn is nearing its computation budget. If you have "
-    "directions you currently believe are worth an experiment, submit them now "
-    "via submit_explorations or submit_synthesis. If none is worth the cost, "
-    "abstain honestly. This is a resource notice, not a required phase — "
-    "keep researching if your best judgment says nothing yet clears the bar."
+    "Your research turn is nearing its computation budget. If you have a "
+    "direction you currently believe is worth an experiment, submit your "
+    "proposal now via submit_explorations or submit_synthesis. If your angle "
+    "provably has nothing here, register your memo state and abstain "
+    "honestly. This is a resource notice, not a required phase — keep "
+    "researching if your best judgment says nothing yet clears the bar."
 )
 
 _SUSPEND_PROMPT = (
-    "Your research is being paused while the directions you submitted are "
-    "executed as experiments. Leave a continuation note for your resumed self "
-    "— first person, as your own running account. Capture what would let you "
-    "re-enter this investigation after the world may have changed:\n"
+    "Your research is being paused while the direction you submitted is "
+    "executed as an experiment. Leave a continuation note for your resumed "
+    "self — first person, as your own running account. Capture what would "
+    "let you re-enter this investigation after the world may have changed:\n"
     "\n"
-    "  - what you currently understand about the problem, and why you believe "
-    "it;\n"
+    "  - what you currently understand about the problem, and why you "
+    "believe it;\n"
     "  - the specific code regions, mechanisms, or measurements your current "
     "view rests on — so you can re-check them against the world that exists "
     "when you resume, not rely on this note as fact;\n"
     "  - what remains unresolved or uncertain.\n"
     "\n"
-    "Separately — and this part is recorded verbatim and replayed next to the "
-    "results before you see them — register what you expect from each "
-    "direction you submitted. For each proposal slot (0-based, in submission "
-    "order): what outcome you honestly expect and why, and what outcome would "
-    "WEAKEN the belief that motivated that direction. Write your honest prior, "
-    "not a safe prediction — a pre-registration you hedged cannot discipline "
-    "your future judgment.\n"
+    "Separately — and this part is recorded verbatim and replayed next to "
+    "the results before you see them — register what you expect from the "
+    "direction you submitted: what outcome you honestly expect and why, and "
+    "what outcome would WEAKEN the belief that motivated it. Write your "
+    "honest prior, not a safe prediction — a pre-registration you hedged "
+    "cannot discipline your future judgment.\n"
     "\n"
     "This is autobiographical memory, not an established account of the "
-    "present or future world, and not a plan your future self must follow. You "
-    "may revise or reject any of it when you resume. Return one JSON object:\n"
+    "present or future world, and not a plan your future self must follow. "
+    "You may revise or reject any of it when you resume. Return one JSON "
+    "object:\n"
     '  {"notebook": "<your continuation note>",\n'
     '   "expectations": [{"slot": 0,\n'
     '                     "expectation": "<what outcome I expect and why>",\n'
     '                     "would_weaken": "<what outcome would weaken the '
     'belief motivating this direction>"}]}\n'
-    "(one expectations entry per submitted proposal slot)"
+    "(one expectations entry, for your submitted proposal)"
 )
 
 
@@ -998,6 +995,35 @@ def _build_self_review_prompt(
     return "\n\n".join(parts)
 
 
+def _seat_identity_block(lens: dict | None, node_id: str | None) -> str:
+    """The seat's identity: system-prompt line one (seat design §7.3).
+
+    The lens is stated as identity — the angle this seat was hired for —
+    with its three parts verbatim from the basis.  A session compaction
+    never sheds the system layer, so the identity survives the long tail of
+    a round.  ``None`` (frontier-baseline leases without a lens) degrades
+    to the plain control identity.
+    """
+    if not lens:
+        return (
+            "You are a Scientist assigned to this node."
+        )
+    lens_id = lens.get("lens_id") or "?"
+    name = lens.get("name_zh") or lens_id
+    parts = [
+        f"You are the {lens_id}（{name}）seat of node "
+        f"{node_id or 'this world'}. Your lens is your identity: it is the "
+        "angle you were hired for, not advice you may weigh.",
+    ]
+    if lens.get("directive"):
+        parts.append(f"透镜操作指令：{lens['directive']}")
+    if lens.get("forbidden"):
+        parts.append(f"透镜禁令：{lens['forbidden']}")
+    if lens.get("self_check"):
+        parts.append(f"提交自检：{lens['self_check']}")
+    return "\n\n".join(parts)
+
+
 def _build_system_prompt(
     *,
     charter: str,
@@ -1008,23 +1034,28 @@ def _build_system_prompt(
     proposal_slots: int,
     hints: list[str] | None,
     notebook: str,
+    lens: dict | None = None,
+    node_id: str | None = None,
 ) -> str:
-    """Assemble the Scientist's standing context.
+    """Assemble the seat's standing context.
 
-    The notebook is embedded here (not as a user message) so it is framed as
-    the Scientist's OWN standing self-account — and explicitly labelled
-    revisable autobiographical memory, not instruction or established fact.
+    The seat identity block leads (line one), then the charter, the world,
+    tools, protocol, boundaries.  The notebook is embedded here (not as a
+    user message) so it is framed as the seat's OWN standing self-account —
+    and explicitly labelled revisable autobiographical memory, not
+    instruction or established fact.
     """
     world = build_generation_context(
         goal=goal, editable=editable, frozen=[], base_sha=base_sha,
         gate_block=gate_block,
     )
     parts = [
+        _seat_identity_block(lens, node_id),
         charter.rstrip(),
         world,
         _TOOL_BLOCK,
         _SKILL_BLOCK,
-        _PROTOCOL_BLOCK.replace("{n}", str(proposal_slots)),
+        _PROTOCOL_BLOCK,
         _RUNTIME_BOUNDARIES,
     ]
     if hints:
@@ -1689,7 +1720,6 @@ def _dispatch(action: dict, proposal_slots: int) -> dict:
             {
                 "evidence_refs",
                 "derived_from_research_state_id",
-                "transformation_id",
             },
         )
         working_model = action["working_model"]
@@ -1705,29 +1735,12 @@ def _dispatch(action: dict, proposal_slots: int) -> dict:
             "working_model": working_model.strip(),
             "evidence_refs": evidence_refs,
         }
-        for key in ("derived_from_research_state_id", "transformation_id"):
+        for key in ("derived_from_research_state_id",):
             value = action.get(key)
             if value is not None:
                 if not isinstance(value, str) or not value.strip():
                     raise ProposerError(f"{key} must be a non-empty string")
                 parsed[key] = value.strip()
-        return parsed
-    if name == "transform_worldview":
-        if "operator_id" not in action:
-            raise ProposerError("transform_worldview.operator_id is required")
-        _require_keys(
-            action,
-            {"action", "operator_id"},
-            {"source_research_state_id"},
-        )
-        parsed = {"action": name}
-        for key in ("source_research_state_id", "operator_id"):
-            value = action.get(key)
-            if value is None and key == "source_research_state_id":
-                continue
-            if not isinstance(value, str) or not value.strip():
-                raise ProposerError(f"{key} must be a non-empty string")
-            parsed[key] = value.strip()
         return parsed
 
     # --- terminal action ---
@@ -2032,6 +2045,18 @@ def _validate_action_guard(
             if not state_ids.issubset(state.research_states):
                 return "unknown_research_state"
             state.counts["proposed_research_states"] = len(state_ids)
+            if not action["proposals"] and action.get("operation") is None:
+                # Empty-seat exit contract (seat design §7.6): an abstain
+                # must first register its memo — the investigation does not
+                # evaporate.  The scheduler re-checks this on ingest.
+                if not state.research_states:
+                    return (
+                        "empty_seat_memo_missing: register your research "
+                        "state first (what you checked along your lens's "
+                        "axes and why they are all empty), then abstain — "
+                        "an empty exit without a memo erases your seat's "
+                        "investigation"
+                    )
             if action.get("operation") == "synthesize":
                 donors = set(action["donor_experiment_ids"])
                 if not donors.issubset(state.inspected_experiment_ids):
@@ -2138,13 +2163,17 @@ class ScientistAgent(ResearchAgent):
         max_steps: int | None = None,
         world_transition: str | None = None,
         research_state_seed: dict | None = None,
-        generator_basis: list[dict] | None = None,
-        suggested_operator_id: str | None = None,
+        lens: dict | None = None,
         node_id: str | None = None,
         episode_id: str | None = None,
     ) -> ScientistRound:
-        """Run one round of this Scientist's research, persisting its lived
-        trajectory and notebook into ``session`` as it goes."""
+        """Run one round of this seat's research, persisting its lived
+        trajectory and notebook into ``session`` as it goes.
+
+        ``lens`` is the seat's identity block (lens_id / name_zh /
+        directive / forbidden / self_check) from the lease payload; None
+        degrades to the plain control identity.
+        """
         self._proposal_slots = proposal_slots
         resolved_node_id = node_id or base_sha
         resolved_episode_id = episode_id or (
@@ -2159,29 +2188,13 @@ class ScientistAgent(ResearchAgent):
         inherited_model = originating_state.get("working_model")
         if inherited_id and inherited_model:
             inherited_research_states[inherited_id] = inherited_model
-        if generator_basis is None:
-            basis = load_generator_basis()
-        else:
-            basis = [
-                Generator(
-                    id=item["id"],
-                    name=item.get("name") or item["id"],
-                    description=item.get("description") or "",
-                )
-                for item in generator_basis
-                if isinstance(item, dict) and item.get("id")
-            ]
-        generators = {item.id: item for item in basis}
-        generator_catalog = build_generator_catalog(basis)
-        episode_seed = world_context or (
-            f"Goal: {goal}\nAccepted revision: {base_sha}"
-        )
         charter = load_semantic("proposer", prompt_dir)
         system_prompt = _build_system_prompt(
             charter=charter, goal=goal, editable=editable, base_sha=base_sha,
             gate_block=gate_block, proposal_slots=proposal_slots,
-            hints=[*(hints or ()), generator_catalog],
+            hints=hints,
             notebook=session.notebook,
+            lens=lens, node_id=resolved_node_id,
         )
 
         # --- assemble the live context (cold start vs resume) ---
@@ -2290,12 +2303,6 @@ class ScientistAgent(ResearchAgent):
                 current_round=current_round,
                 node_id=resolved_node_id,
                 episode_id=resolved_episode_id,
-                cognitive_transformer=CognitiveTransformer(
-                    model=self.model,
-                    generators=generators,
-                    episode_seed=episode_seed,
-                    suggested_operator_id=None,
-                ),
                 inherited_research_states=inherited_research_states,
             )
 

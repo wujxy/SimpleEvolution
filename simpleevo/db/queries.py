@@ -108,6 +108,15 @@ class ResearchQueries:
             ).fetchone()
             return int(row["n"])
 
+    def open_allocation_counts_by_node(self) -> dict[str, int]:
+        """Open (in-flight) leases per node — seats in flight."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT node_id, COUNT(*) AS n FROM proposer_allocations "
+                "WHERE finished_at IS NULL GROUP BY node_id"
+            ).fetchall()
+            return {row["node_id"]: int(row["n"]) for row in rows}
+
     def open_allocation_node_ids(self) -> set[str]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -243,6 +252,84 @@ class ResearchQueries:
                     "max_proposals_per_state": row[
                         "max_proposals_per_state"
                     ],
+                }
+                for row in rows
+            ]
+
+    def episode_operator_rows(self) -> list[dict[str, Any]]:
+        """Every episode carrying a lens, with its seat bookkeeping.
+
+        One row per (node, episode): the lens id (``variation_operator``),
+        whether the episode ever held a lease, whether one is open right
+        now, and how many proposals it produced.  The seat ledger / lineage
+        dedup / lens stats facts are all derived from this projection.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT e.node_id,
+                       e.episode_id,
+                       e.variation_operator,
+                       (SELECT COUNT(*) FROM proposer_allocations a
+                         WHERE a.episode_id = e.episode_id) AS leases,
+                       (SELECT COUNT(*) FROM proposer_allocations a
+                         WHERE a.episode_id = e.episode_id
+                           AND a.finished_at IS NULL) AS open_leases,
+                       (SELECT COUNT(*) FROM proposals p
+                         WHERE p.episode_id = e.episode_id) AS proposals
+                FROM episodes e
+                WHERE e.variation_operator IS NOT NULL
+                ORDER BY e.created_at, e.episode_id
+                """
+            ).fetchall()
+            return [
+                {
+                    "node_id": row["node_id"],
+                    "episode_id": row["episode_id"],
+                    "lens": row["variation_operator"],
+                    "leases": int(row["leases"]),
+                    "open_leases": int(row["open_leases"]),
+                    "proposals": int(row["proposals"]),
+                }
+                for row in rows
+            ]
+
+    def proposal_outcome_rows(self) -> list[dict[str, Any]]:
+        """Every proposal with its experiment outcome (if any yet).
+
+        Carries the seat attribution chain the lens stats need:
+        proposal → episode → lens, plus the experiment's measured outcome
+        against its parent node.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT p.proposal_id,
+                       p.node_id,
+                       p.episode_id,
+                       e.variation_operator,
+                       x.experiment_id,
+                       x.status,
+                       x.gate_result,
+                       x.metrics,
+                       x.parent_node_id
+                FROM proposals p
+                LEFT JOIN episodes e ON e.episode_id = p.episode_id
+                LEFT JOIN experiments x ON x.proposal_id = p.proposal_id
+                ORDER BY p.created_at, p.proposal_id
+                """
+            ).fetchall()
+            return [
+                {
+                    "proposal_id": row["proposal_id"],
+                    "node_id": row["node_id"],
+                    "episode_id": row["episode_id"],
+                    "lens": row["variation_operator"],
+                    "experiment_id": row["experiment_id"],
+                    "status": row["status"],
+                    "gate_result": json.loads(row["gate_result"] or "{}"),
+                    "metrics": json.loads(row["metrics"] or "{}"),
+                    "parent_node_id": row["parent_node_id"],
                 }
                 for row in rows
             ]

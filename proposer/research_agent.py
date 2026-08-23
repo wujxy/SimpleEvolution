@@ -132,11 +132,6 @@ def _fingerprint(action: dict) -> str:
     if name == "register_research_state":
         digest = hashlib.sha1(action["working_model"].encode()).hexdigest()[:12]
         return f"{name}:{digest}"
-    if name == "transform_worldview":
-        return (
-            f"{name}:{action.get('source_research_state_id')}:"
-            f"{action.get('operator_id')}"
-        )
     if name in ("search_findings", "search_experiments"):
         return f"{name}:{action.get('query')}"
     if name == "list_findings":
@@ -284,8 +279,6 @@ def _action_summary(action: dict) -> str:
         return f"action={name}{extra}"
     if name == "register_research_state":
         return f"action={name} working_model_chars={len(action['working_model'])}"
-    if name == "transform_worldview":
-        return f"action={name} operator_id={action.get('operator_id', 'auto')}"
     if name == "submit_proposals":
         return f"action={name} count={len(action['proposals'])}"
     if name == "submit_hypothesis":

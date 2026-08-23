@@ -1,10 +1,12 @@
-"""Ablation figure: performance vs budget across SimpleEvolution arms.
+"""Ablation figure: performance vs budget (or vs time) across SimpleEvolution arms.
 
 One run-dir is one seed of one arm; every run-dir is a standard SimpleEvolution
 run-dir, so we reuse ``load_tree_view`` + ``budget_series`` for the
 (cumulative_cost, best_so_far) projection and normalise the y-axis to the
-run's own measured root baseline (× multiple). Per arm, seed curves are stepped
-onto a shared cost grid and aggregated as median ± min/max band.
+run's own measured root baseline (× multiple). ``x_axis="time"`` projects the
+same running best onto elapsed hours since the run's root node was created —
+the axis that matters for time-capped comparisons. Per arm, seed curves are
+stepped onto a shared x grid and aggregated as median ± min/max band.
 
 Palette: validated categorical slots 1-3 (blue / orange / aqua) from the
 project dataviz palette, light surface. The aqua slot sits below 3:1 contrast
@@ -25,15 +27,32 @@ from matplotlib.lines import Line2D
 from simpleevo.reporting.data import budget_series, load_tree_view
 
 # Validated categorical palette (light surface), slots 1-3 in arm order.
+# "tree" is the Supervisor-gated tree (sole admission gate, no frontier
+# fallback); it inherits the aqua slot the old frontier topk tree wore.
 ARM_COLORS = {
     "coding-agent": "#2a78d6",  # blue
     "loop": "#eb6834",          # orange
     "topk": "#1baf7a",          # aqua
+    "tree": "#1baf7a",          # aqua (successor of topk's slot)
 }
 ARM_LABELS = {
     "coding-agent": "coding agent",
     "loop": "serial loop (k=1)",
     "topk": "top-k tree (k=3)",
+    "tree": "supervisor tree",
+}
+# Short label + scheduling shape for the title/footer, per arm.
+ARM_SHORT = {
+    "coding-agent": "coding agent",
+    "loop": "serial loop",
+    "topk": "top-k tree",
+    "tree": "supervisor tree",
+}
+ARM_SHAPE = {
+    "coding-agent": "slots=1·inflight=1",
+    "loop": "slots=1·inflight=1",
+    "topk": "k=3 frontier·slots=1",
+    "tree": "supervisor gate·slots=4·inflight=4",
 }
 
 # Ink / chrome tokens.
@@ -45,28 +64,64 @@ BASELINE = "#c3c2b7"
 SURFACE = "#fcfcfb"
 
 
-def _run_points(run_dir: Path) -> tuple[list[tuple[float, float]], str, float] | None:
-    """(cost, ×multiple) series for one run-dir, or None if unusable."""
+def _run_points(
+    run_dir: Path, x_axis: str = "cost"
+) -> tuple[list[tuple[float, float]], str, float] | None:
+    """(x, ×multiple) series for one run-dir, or None if unusable.
+
+    ``x_axis="cost"`` projects onto cumulative LLM spend (usage ledger replayed
+    at the run's configured prices); ``x_axis="time"`` onto elapsed wall-clock
+    hours since the root node's creation.  Both apply the same acceptance rule
+    as ``best_so_far``: only gate-passed nodes with a measured objective enter
+    the running best.
+    """
     try:
         view = load_tree_view(run_dir)
     except Exception as exc:  # malformed / incomplete run-dir
         print(f"  [plot] skip {run_dir}: {exc}", flush=True)
         return None
-    series = budget_series(view, run_dir).get("total", [])
     root = view.root_objective.get(view.objective_key)
     if root in (None, 0) or not math.isfinite(root):
         print(f"  [plot] skip {run_dir}: no root baseline", flush=True)
         return None
-    if not series:
-        print(f"  [plot] skip {run_dir}: no completed experiments", flush=True)
-        return None
+
+    if x_axis == "cost":
+        series = budget_series(view, run_dir).get("total", [])
+        if not series:
+            print(f"  [plot] skip {run_dir}: no completed experiments", flush=True)
+            return None
+    else:
+        created = [v.created_at for v in view.nodes]
+        if len(created) < 2:
+            print(f"  [plot] skip {run_dir}: no completed experiments", flush=True)
+            return None
+        t0 = min(created)
+        # Running best over gate-passed measured nodes in completion order —
+        # the same envelope best_so_far builds on the experiment-ordinal axis.
+        best = None
+        series = []
+        for v in sorted(
+            (v for v in view.nodes if v.experiment_idx is not None),
+            key=lambda v: v.created_at,
+        ):
+            if not v.passed or v.objective is None or not math.isfinite(v.objective):
+                continue
+            if best is None or (
+                v.objective < best if view.lower_is_better else v.objective > best
+            ):
+                best = v.objective
+            series.append(((v.created_at - t0) / 3600.0, best))
+        if not series:
+            print(f"  [plot] skip {run_dir}: no completed experiments", flush=True)
+            return None
+
     lower = view.lower_is_better
     points = [
         (
-            float(cost),
+            float(x),
             (root / best) if lower else (best / root),
         )
-        for cost, best in series
+        for x, best in series
         if math.isfinite(best) and best > 0
     ]
     return points, view.objective_key, float(root)
@@ -96,8 +151,11 @@ def render_ablation(
     out_path: str | Path = "ablation.png",
     arms: list[str] | None = None,
     log_y: bool = False,
+    x_axis: str = "cost",
 ) -> str:
-    """Render the budget-vs-performance overlay and return the output path."""
+    """Render the performance overlay (vs cost or vs time) and return the path."""
+    if x_axis not in ("cost", "time"):
+        raise ValueError(f"unknown x_axis {x_axis!r}; expected 'cost' or 'time'")
     runs_root = Path(runs_root)
     arms = arms or list(ARM_LABELS)
 
@@ -108,7 +166,7 @@ def render_ablation(
             (runs_root / arm).glob("seed-*"), key=lambda p: p.name
         ) if (runs_root / arm).exists() else []
         for run_dir in seed_dirs:
-            result = _run_points(run_dir)
+            result = _run_points(run_dir, x_axis)
             if result is None:
                 continue
             points, _obj, _root = result
@@ -173,10 +231,15 @@ def render_ablation(
         ax.spines[spine].set_visible(False)
     for spine in ("left", "bottom"):
         ax.spines[spine].set_color(BASELINE)
-    ax.set_xlabel("cumulative LLM cost (USD)", color=INK_PRIMARY)
+    ax.set_xlabel(
+        "elapsed time (h)" if x_axis == "time" else "cumulative LLM cost (USD)",
+        color=INK_PRIMARY,
+    )
     ax.set_ylabel("lookups/s vs baseline (×)", color=INK_PRIMARY)
+    plotted = " vs ".join(ARM_SHORT[arm] for arm in arm_info)
     ax.set_title(
-        "XSBench: performance vs budget — coding agent vs serial loop vs top-k tree",
+        f"XSBench: performance vs "
+        f"{'time' if x_axis == 'time' else 'budget'} — {plotted}",
         color=INK_PRIMARY,
         fontsize=12,
     )
@@ -197,7 +260,8 @@ def render_ablation(
     )
     fig.text(
         0.99, 0.01,
-        f"{total_runs} runs · proposal_slots=1 · inflight=1 · generator_reseed=off",
+        f"{total_runs} runs · "
+        + " | ".join(f"{ARM_SHORT[arm]}: {ARM_SHAPE[arm]}" for arm in arm_info),
         ha="right", va="bottom", color=INK_MUTED, fontsize=8,
     )
 

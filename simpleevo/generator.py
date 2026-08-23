@@ -1,9 +1,11 @@
-"""Variation-factor basis (生成元基).
+"""Variation-factor basis (生成元基 / lens basis).
 
-A generator is a re-framing / mutation operation available to a re-studied
-Scientist episode (see ``episodes.variation_operator``). The basis is a static
-``generator.json`` at the repo root; the harness suggests one untried generator
-per reseed, and the optional mentor tool records whether the Scientist used it.
+A generator is a LENS: the identity a research seat is hired for (seat
+design §2.2).  The basis is a static ``generator.json`` at the repo root;
+each entry follows the three-part standard — 操作指令 (directive) /
+负面禁令 (forbidden) / 提交自检 (self_check).  The Supervisor buys seats
+naming a lens id; the harness validates the purchase (lineage dedup) and
+stamps the seat episode's ``variation_operator``.
 """
 from __future__ import annotations
 
@@ -18,18 +20,22 @@ _DEFAULT_PATH = Path(__file__).resolve().parents[1] / "generator.json"
 
 @dataclass(frozen=True)
 class Generator:
-    """One re-framing directive in the basis."""
+    """One lens in the basis."""
 
     id: str
     name: str
     description: str
+    directive: str = ""
+    forbidden: str = ""
+    self_check: str = ""
 
 
 def load_generator_basis(path: Path | None = None) -> list[Generator]:
-    """Load the generator basis from ``path`` (default: repo-root generator.json).
+    """Load the lens basis from ``path`` (default: repo-root generator.json).
 
-    A missing or malformed file degrades to an empty basis (reseed then runs
-    with no variation factor, i.e. today's behavior).
+    A missing or malformed file degrades to an empty basis (no supervisor
+    seat purchase can then be validated — the run stays honest rather than
+    guessing lenses).
     """
     target = Path(path) if path is not None else _DEFAULT_PATH
     try:
@@ -43,14 +49,17 @@ def load_generator_basis(path: Path | None = None) -> list[Generator]:
         if not isinstance(item, dict):
             continue
         generator_id = item.get("id")
-        description = item.get("description")
         if not isinstance(generator_id, str) or not generator_id:
             continue
+        directive = str(item.get("directive") or "")
         basis.append(
             Generator(
                 id=generator_id,
                 name=str(item.get("name_zh") or generator_id),
-                description=str(description or ""),
+                description=str(item.get("description") or directive),
+                directive=directive,
+                forbidden=str(item.get("forbidden") or ""),
+                self_check=str(item.get("self_check") or ""),
             )
         )
     return basis
@@ -63,7 +72,7 @@ def sample_generators(
     k: int = 2,
     rng: random.Random | None = None,
 ) -> list[Generator]:
-    """Sample up to ``k`` generators not yet tried (per node).
+    """Sample up to ``k`` lenses not yet tried, uniformly at random.
 
     Untried = ids not in ``tried_ids``.  When none remain (or the basis is
     empty) returns ``[]`` so the caller degrades to no variation factor.
@@ -74,11 +83,3 @@ def sample_generators(
     rng = rng if rng is not None else random
     chosen = rng.sample(untried, min(k, len(untried)))
     return list(chosen)
-
-
-def select_one_generator(
-    basis: Sequence[Generator],
-    tried_ids: set[str] | frozenset[str],
-) -> Generator | None:
-    """Return the first generator not yet used, or ``None`` when exhausted."""
-    return next((item for item in basis if item.id not in tried_ids), None)

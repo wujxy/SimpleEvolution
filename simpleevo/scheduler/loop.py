@@ -18,7 +18,7 @@ from simpleevo.db.store import (
     StaleSupervisorDecision,
 )
 from simpleevo.db.queries import ResearchQueries
-from simpleevo.generator import Generator, load_generator_basis, select_one_generator
+from simpleevo.generator import Generator, load_generator_basis
 from simpleevo.jobs.base import BaseSubmitter
 from simpleevo.research_state import research_state_to_dict
 from proposer.supervisor import validate_integration_request
@@ -358,8 +358,7 @@ class Scheduler:
             episode = self._idle_episode_for_node(node_id)
             if episode is None:
                 # Node whose episodes are all terminal: re-study it by
-                # reseeding a fresh episode (GEPA pool semantics), bounded
-                # by max_research_per_node. Skip when the budget is spent.
+                # reseeding a fresh episode (GEPA pool semantics).
                 episode = self._reseed_episode(node_id)
                 if episode is None:
                     continue
@@ -370,7 +369,6 @@ class Scheduler:
                 node_id=node_id,
                 episode_id=episode.episode_id,
                 proposal_slots=proposal_slots,
-                max_proposals_per_node=self._max_proposals_per_node(),
             )
             if allocation is None:
                 continue
@@ -526,23 +524,37 @@ class Scheduler:
         detail = dict(result.get("detail") or {})
 
         if decision_kind == "growth":
-            leases = self._growth_leases(node_ids)
+            purchases = self._seat_purchases(result)
+            if not purchases and self._untried_seats_remain() and not (
+                    self._work_in_flight()):
+                # Honest quiescence (seat design §2.4): an empty selection
+                # is a wait while evidence is in flight, and a completion
+                # only when no purchasable seat remains.  With untried
+                # seats on the table and nothing in flight, empty would
+                # stillbirth the program with questions unasked — reject
+                # it back with the fact that makes it wrong.
+                raise ValueError(
+                    "empty growth decision while untried seats remain and "
+                    "no work is in flight: waiting needs in-flight "
+                    "evidence; completing requires the untried set to be "
+                    "empty. Buy a seat, or name what you are waiting for "
+                    "by leaving work running."
+                )
+            leases = self._seat_leases(purchases)
             commit = self.store.commit_supervisor_decision(
                 decision_id=decision_id,
                 work_id=attempt.logical_work_id,
                 decision_kind="growth",
-                node_ids=node_ids,
+                node_ids=[node_id for node_id, _lens in purchases],
                 rationale=rationale,
+                detail={
+                    "seat_purchases": [
+                        {"node_id": node_id, "lens": lens}
+                        for node_id, lens in purchases
+                    ],
+                },
                 cursor_to=cursor_to,
-                leases=[
-                    LeaseSpec(
-                        node_id=node_id,
-                        episode_id=episode_id,
-                        proposal_slots=self.config.proposal_slots,
-                    )
-                    for node_id, episode_id in leases
-                ],
-                max_proposals_per_node=self._max_proposals_per_node(),
+                leases=leases,
             )
             return self._launch_decision_leases(commit.allocations)
         if decision_kind == "integration_request":
@@ -592,41 +604,152 @@ class Scheduler:
             return []
         raise ValueError(f"unknown decision kind: {decision_kind}")
 
-    def _growth_leases(self, node_ids) -> list[tuple[str, str]]:
-        """Mechanical allocatability for every selected node (design §9).
+    @staticmethod
+    def _seat_purchases(result) -> list[tuple[str, str]]:
+        """Parse a growth decision's ``seat_purchases`` into (node, lens)."""
+        raw = result.get("seat_purchases")
+        if raw is None:
+            raise ValueError(
+                "growth decision must carry seat_purchases "
+                '[{"node_id": ..., "lens": ...}] (the node_ids field is '
+                "gone)"
+            )
+        if not isinstance(raw, list):
+            raise ValueError("seat_purchases must be a list")
+        purchases: list[tuple[str, str]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                raise ValueError("each seat purchase must be an object")
+            node_id = item.get("node_id")
+            lens = item.get("lens")
+            extra = set(item) - {"node_id", "lens"}
+            if extra:
+                raise ValueError(
+                    f"seat purchase may carry only node_id and lens; "
+                    f"unexpected: {sorted(extra)}"
+                )
+            if not isinstance(node_id, str) or not node_id:
+                raise ValueError("seat purchase node_id must be non-empty")
+            if not isinstance(lens, str) or not lens:
+                raise ValueError("seat purchase lens must be non-empty")
+            purchases.append((node_id, lens))
+        return purchases
+
+    def _seat_leases(self, purchases) -> list[LeaseSpec]:
+        """Mechanical legality for every purchased seat (seat design §7.2).
 
         Whole-decision validation: any violation rejects the decision, it is
-        never partially applied.
+        never partially applied.  The harness enforces the legality contract
+        only — capacity, lens validity, lineage dedup, one episode per seat —
+        and never chooses or ranks lenses.
         """
         capacity = self._proposer_capacity()
-        if len(node_ids) > capacity:
-            raise ValueError("supervisor decision exceeds proposer capacity")
-        open_nodes = {
-            item.node_id for item in self.store.open_allocations()}
-        leases: list[tuple[str, str]] = []
-        for node_id in node_ids:
+        if len(purchases) > capacity:
+            raise ValueError(
+                "supervisor decision exceeds proposer capacity: "
+                f"{len(purchases)} purchases > {capacity} free seats"
+            )
+        basis = self._generator_basis_or_load()
+        if not basis:
+            raise ValueError(
+                "lens basis is empty; no seat can be validated"
+            )
+        known = {item.id for item in basis}
+        burned = self._burned_lenses()
+        seen: set[tuple[str, str]] = set()
+        claimed: set[str] = set()
+        leases: list[LeaseSpec] = []
+        for node_id, lens in purchases:
+            if (node_id, lens) in seen:
+                raise ValueError(
+                    f"duplicate seat purchase: {node_id} x {lens}"
+                )
+            seen.add((node_id, lens))
+            if lens not in known:
+                raise ValueError(f"unknown lens: {lens}")
             node = self._queries.get_node(node_id)
             if node is None or node.status == "dead":
-                raise ValueError(f"selected node is not allocatable: {node_id}")
-            if node_id in open_nodes:
                 raise ValueError(
-                    f"selected node already holds an open lease: {node_id}")
-            if (self.store.count_allocations_for_node(node_id)
-                    >= self._max_research_per_node()):
+                    f"seat purchase on a non-allocatable node: {node_id}"
+                )
+            lineage_burned = burned.get(node_id, frozenset())
+            if lens in lineage_burned:
                 raise ValueError(
-                    f"selected node exhausted its research budget: {node_id}")
-            if (self._queries.proposal_count_for_node(node_id)
-                    >= self._max_proposals_per_node()):
-                raise ValueError(
-                    f"selected node exhausted its proposal budget: {node_id}")
-            episode = self._idle_episode_for_node(node_id)
-            if episode is None:
-                episode = self._reseed_episode(node_id)
+                    f"lens {lens} already burned on {node_id} or its "
+                    "ancestry; buy an untried lens (see the untried fact)"
+                )
+            episode = self._seat_episode_for_node(node_id, claimed)
             if episode is None:
                 raise ValueError(
-                    f"no episode available for selected node: {node_id}")
-            leases.append((node_id, episode.episode_id))
+                    f"no episode available for seat purchase: {node_id}"
+                )
+            claimed.add(episode.episode_id)
+            leases.append(LeaseSpec(
+                node_id=node_id,
+                episode_id=episode.episode_id,
+                proposal_slots=1,
+                lens=lens,
+            ))
         return leases
+
+    def _burned_lenses(self) -> dict[str, set[str]]:
+        """Lenses burned per node: its own episodes plus its whole ancestry.
+
+        A lens stamped on an episode is a question this lineage has already
+        bought; re-buying it downstream repeats the same bet (seat design
+        §2.2).  Open seats count as burned — their episodes exist.
+        """
+        nodes = {
+            node.node_id: node for node in self._queries.list_nodes()
+        }
+        own: dict[str, set[str]] = {}
+        for row in self._queries.episode_operator_rows():
+            own.setdefault(row["node_id"], set()).add(row["lens"])
+        burned: dict[str, set[str]] = {}
+        for node_id in nodes:
+            tried: set[str] = set()
+            current = node_id
+            hops: set[str] = set()
+            while current and current not in hops:
+                hops.add(current)
+                node = nodes.get(current)
+                if node is None:
+                    break
+                tried.update(own.get(current, ()))
+                current = node.parent_node_id
+            burned[node_id] = tried
+        return burned
+
+    def _seat_episode_for_node(self, node_id: str, claimed: set[str]):
+        """A distinct fresh episode for one seat on ``node_id``.
+
+        The node's never-allocated episode serves its first seat; every
+        further concurrent or later seat gets its own NEW episode (seats are
+        independent research acts — a seat never resumes a sibling seat's
+        session).  ``claimed`` holds episode ids taken by earlier purchases
+        of the SAME decision, which have no allocation row yet.
+        """
+        allocated = self.store.allocated_episode_ids() | claimed
+        for episode in self._queries.episodes_for_node(node_id, limit=1000):
+            if episode.episode_id not in allocated:
+                return episode
+        return self._new_seat_episode(node_id)
+
+    def _new_seat_episode(self, node_id: str):
+        """Create a fresh episode for a further seat on ``node_id``.
+
+        Deliberately inherits nothing (``inherited_from_episode_id`` None):
+        same-node seats are siblings, not continuations — each wakes on the
+        node's own facts (Child-world pack) and its lens.  No research
+        budget applies (the dissolved ``max_research_per_node``); the seat
+        cost is priced by the Supervisor's purchase against real budget.
+        """
+        with self.store.transaction() as tx:
+            return tx.create_episode(
+                node_id=node_id,
+                inherited_from_episode_id=None,
+                variation_operator=None,
+            )
 
     def _launch_decision_leases(self, allocations) -> list[str]:
         jobs = []
@@ -704,9 +827,10 @@ class Scheduler:
         runtime_facts: dict[str, Any] = {
             "max_proposer_inflight": self.config.max_proposer_inflight,
             "max_experiment_inflight": self.config.max_experiment_inflight,
-            "proposal_slots": self.config.proposal_slots,
-            "max_research_per_node": self._max_research_per_node(),
-            "max_proposals_per_node": self._max_proposals_per_node(),
+            # Seat semantics: a purchase is one seat; there are no
+            # proposal slots to manage and no per-node research/proposal
+            # caps — the budget is the boundary (seat design §2.1/§4).
+            "seats_inflight": self.store.count_running_attempts("proposer"),
             "max_terminal_evals": self.config.max_terminal_evals,
             "budget_usd": self.config.budget_usd,
         }
@@ -762,6 +886,13 @@ class Scheduler:
                 # ordering by any quality signal would be the Harness
                 # judging on the gate's behalf).
                 "allocatable_nodes": self._allocatable_node_facts(),
+                # Seat/lens facts (seat design §7.4) — the state of the
+                # world, not the answer to a decision: what has been
+                # bought, what remains untried, and what each lens has
+                # produced so far.
+                "seat_ledger": self._seat_ledger_facts(),
+                "untried": self._untried_lens_facts(),
+                "lens_stats": self._lens_stats_facts(),
                 "epoch": None if epoch is None else {
                     "epoch_id": epoch.epoch_id,
                     "root_node_id": epoch.root_node_id,
@@ -780,27 +911,158 @@ class Scheduler:
         Mirrors the allocatable computation in ``SupervisorTools._list_nodes``
         so the batch and the tool never disagree about eligibility.  Facts
         only — no ranking, no ordering by any quality signal (design §6).
+        A node holding open seats stays purchasable for a DIFFERENT lens:
+        concurrency on one node is the seat design's whole point, and the
+        lineage-dedup fact (``untried``) already excludes the lenses those
+        seats hold.
         """
-        open_nodes = self._queries.open_allocation_node_ids()
-        max_research = self._max_research_per_node()
-        max_proposals = self._max_proposals_per_node()
+        open_counts: dict[str, int] = {}
+        for allocation in self.store.open_allocations():
+            open_counts[allocation.node_id] = (
+                open_counts.get(allocation.node_id, 0) + 1)
         rows: list[dict[str, Any]] = []
         for node in self._queries.list_nodes():
-            if node.status == "dead" or node.node_id in open_nodes:
-                continue
-            if max_research and len(self._queries.allocations_for_node(
-                    node.node_id)) >= max_research:
-                continue
-            if max_proposals and self._queries.proposal_count_for_node(
-                    node.node_id) >= max_proposals:
+            if node.status == "dead":
                 continue
             rows.append({
                 "node_id": node.node_id,
                 "depth": node.depth,
                 "status": node.status,
                 "metrics": dict(node.metrics),
+                "seats_inflight": open_counts.get(node.node_id, 0),
             })
         return rows
+
+    # ------------------------------------------------------------------
+    # Seat/lens facts (seat design §7.4)
+    # ------------------------------------------------------------------
+
+    def _seat_ledger_facts(self) -> list[dict[str, Any]]:
+        """Every seat ever bought, per node, with its outcome so far."""
+        per_node: dict[str, list[dict[str, Any]]] = {}
+        for row in self._queries.episode_operator_rows():
+            if row["leases"] == 0:
+                # An episode stamped with a lens but never leased cannot
+                # happen post-commit (stamping is atomic with the
+                # allocation); skip defensively rather than show a phantom.
+                continue
+            per_node.setdefault(row["node_id"], []).append({
+                "lens": row["lens"],
+                "episode_id": row["episode_id"],
+                "state": "open" if row["open_leases"] else "finished",
+                "proposals": row["proposals"],
+            })
+        return [
+            {"node": node_id, "seats": seats}
+            for node_id, seats in sorted(per_node.items())
+        ]
+
+    def _untried_lens_facts(self) -> list[dict[str, Any]]:
+        """Per living node, the lenses lineage-dedup still allows.
+
+        This is the fact an empty selection is judged against: the seat
+        menu is empty everywhere exactly when the program has asked every
+        question its basis can buy (honest completion, seat design §2.4).
+        """
+        basis = self._generator_basis_or_load()
+        if not basis:
+            return []
+        basis_ids = [item.id for item in basis]
+        burned = self._burned_lenses()
+        rows: list[dict[str, Any]] = []
+        for node in self._queries.list_nodes():
+            if node.status == "dead":
+                continue
+            rows.append({
+                "node": node.node_id,
+                "lenses": [
+                    lens for lens in basis_ids
+                    if lens not in burned.get(node.node_id, ())
+                ],
+            })
+        return rows
+
+    def _lens_stats_facts(self) -> list[dict[str, Any]]:
+        """Per lens, what its seats have produced across the program.
+
+        Output statistics only — the reading (buy more / beware crowding)
+        is the Supervisor's judgment; the harness states numbers.  Note the
+        anti-monotone fact the numbers cannot show by themselves: a lens
+        with the best record is also the one whose repeated purchase
+        narrows the program's diversity.
+        """
+        seats: dict[str, int] = {}
+        for row in self._queries.episode_operator_rows():
+            if row["leases"]:
+                seats[row["lens"]] = seats.get(row["lens"], 0) + 1
+        objective = (
+            (self.evolution_config.metrics_schema or {}).get("objective")
+            if self.evolution_config is not None else None
+        )
+        obj_key = (objective or {}).get("key")
+        lower_is_better = bool((objective or {}).get("lower_is_better"))
+        stats: dict[str, dict[str, Any]] = {}
+        for row in self._queries.proposal_outcome_rows():
+            lens = row["lens"]
+            if lens is None:
+                continue
+            entry = stats.setdefault(lens, {
+                "lens": lens, "proposals": 0, "gate_passed": 0,
+                "best_gain": None,
+            })
+            entry["proposals"] += 1
+            experiment_status = row["status"]
+            gate_passed = bool(
+                (row["gate_result"] or {}).get("passed")
+            ) and experiment_status in {"completed", "no_change"}
+            if experiment_status == "completed" and gate_passed:
+                entry["gate_passed"] += 1
+                gain = self._objective_gain(
+                    row, obj_key, lower_is_better)
+                if gain is not None:
+                    best = entry["best_gain"]
+                    if best is None or gain > best:
+                        entry["best_gain"] = gain
+        out = []
+        for item in self._generator_basis_or_load():
+            entry = stats.get(item.id) or {
+                "lens": item.id, "proposals": 0, "gate_passed": 0,
+                "best_gain": None,
+            }
+            entry["seats"] = seats.get(item.id, 0)
+            out.append(entry)
+        return out
+
+    def _objective_gain(
+        self, row: dict[str, Any], obj_key: str | None,
+        lower_is_better: bool,
+    ) -> float | None:
+        """Child-vs-parent objective improvement in percent for one row.
+
+        Sign follows the objective's direction; None when the objective or
+        the parent value is unknown (never fabricate a gain).
+        """
+        if not obj_key:
+            return None
+        child = (row["metrics"] or {}).get(obj_key)
+        parent_node = (
+            self._queries.get_node(row["parent_node_id"])
+            if row["parent_node_id"] else None
+        )
+        parent = (
+            parent_node.metrics.get(obj_key)
+            if parent_node is not None else None
+        )
+        if (not isinstance(child, (int, float))
+                or isinstance(child, bool)
+                or not isinstance(parent, (int, float))
+                or isinstance(parent, bool)
+                or parent == 0):
+            return None
+        raw = (
+            (parent - child) if lower_is_better else (child - parent)
+        ) / abs(parent)
+        return round(raw * 100.0, 2)
 
     def _supervisor_max_retries(self) -> int:
         if self.evolution_config is not None:
@@ -998,71 +1260,61 @@ class Scheduler:
         return None
 
     def _reseed_episode(self, node_id: str):
-        """Fresh episode for a frontier node whose episodes are all terminal.
+        """Fresh episode for a FRONTIER-BASELINE (non-Supervisor) re-study.
 
-        Mirrors the manual ``reseed`` CLI (cli.py:_cmd_reseed) but records
-        inheritance: the new episode's ``inherited_from_episode_id`` is the
-        node's most recent episode, so the forked Scientist resumes the prior
-        final cognition. When ``generator_reseed`` is on, the episode also
-        carries one suggested variation operator (``variation_operator``)
-        not yet tried on this node, so each re-study offers the optional mentor
-        a fresh cognitive axis. Bounded by
-        ``max_research_per_node`` (total lifetime proposer allocations).
-        Returns the fresh Episode, or None when the node is at its research
-        budget.
+        Inherits the node's most recent episode's final cognition (GEPA pool
+        semantics — this path studies, not seats).  Supervisor-mode seats use
+        ``_seat_episode_for_node`` instead, which never inherits a sibling
+        seat's session.
         """
-        budget = self._max_research_per_node()
-        if self.store.count_allocations_for_node(node_id) >= budget:
-            return None
         episodes = self._queries.episodes_for_node(node_id, limit=1000)
         most_recent = episodes[0] if episodes else None  # last_active_at DESC
         if most_recent is None:
             return None
         if not self.store.episode_allocation_finished(most_recent.episode_id):
-            # Previous scientist is still in flight: no frozen final cognition
+            # Previous study is still in flight: no frozen final cognition
             # to inherit yet, so this node cannot be re-studied right now.
             return None
-        variation_operator = self._variation_for(node_id, episodes)
         with self.store.transaction() as tx:
             return tx.create_episode(
                 node_id=node_id,
                 inherited_from_episode_id=most_recent.episode_id,
-                variation_operator=variation_operator,
+                variation_operator=None,
             )
-
-    def _variation_for(self, node_id: str, episodes) -> str | None:
-        """Select one untried generator as a reseed suggestion.
-
-        ``generator_reseed`` off, an empty basis, or no untried generators
-        remaining all degrade to ``None`` (no variation factor — the reseed
-        runs exactly as before).
-        """
-        if self.evolution_config is None or not self.evolution_config.generator_reseed:
-            return None
-        basis = self._generator_basis_or_load()
-        if not basis:
-            return None
-        tried: set[str] = set()
-        for episode in episodes:
-            if episode.variation_operator:
-                tried.add(episode.variation_operator)
-        chosen = select_one_generator(basis, tried)
-        return chosen.id if chosen else None
 
     def _generator_basis_or_load(self) -> list[Generator]:
         if self._generator_basis is None:
             self._generator_basis = load_generator_basis()
         return self._generator_basis
 
-    def _max_research_per_node(self) -> int:
-        if self.evolution_config is not None:
-            return self.evolution_config.max_research_per_node
-        return 3
+    def _work_in_flight(self) -> bool:
+        """True while any research work is running or awaiting evaluation.
 
-    def _max_proposals_per_node(self) -> int:
-        if self.evolution_config is not None:
-            return self.evolution_config.max_proposals_per_node
-        return 9
+        The honest-quiescence check: an empty growth decision may WAIT on
+        this, but may not STOP past it.
+        """
+        return bool(
+            self.store.running_attempts("proposer")
+            or self.store.running_attempts("experiment")
+            or self.store.running_attempts("integrator")
+            or self.store.queued_proposals()
+            or self.store.open_allocations()
+            or self.store.open_experiments()
+            or self.store.integration_requests("open")
+        )
+
+    def _untried_seats_remain(self) -> bool:
+        """True when some node still has an untried lens to buy."""
+        if not self._generator_basis_or_load():
+            return False
+        burned = self._burned_lenses()
+        for node in self._queries.list_nodes():
+            if node.status == "dead":
+                continue
+            if len(burned.get(node.node_id, ())) < len(
+                    self._generator_basis_or_load()):
+                return True
+        return False
 
     def _proposer_payload(
         self, allocation, node, episode, attempt_id: str, attempt: int,
@@ -1075,16 +1327,12 @@ class Scheduler:
             "node_sha": node.sha,
             "episode_id": episode.episode_id,
             "inherited_from_episode_id": episode.inherited_from_episode_id,
-            "generator_basis": [
-                {
-                    "id": item.id,
-                    "name": item.name,
-                    "description": item.description,
-                }
-                for item in self._generator_basis_or_load()
-            ],
-            "suggested_operator_id": episode.variation_operator,
+            # The seat's identity block: the lens this episode was hired
+            # under, three parts verbatim from the basis.  Frontier-baseline
+            # leases carry no lens and no seat block.
+            "seat": self._seat_block(episode),
             "proposal_ids": list(allocation.reserved_proposal_ids),
+            "proposal_slots": len(allocation.reserved_proposal_ids),
             "attempt_id": attempt_id,
             "attempt": attempt,
         }
@@ -1093,6 +1341,23 @@ class Scheduler:
         else:
             payload["world_transition"] = self._world_transition_for(node)
         return payload
+
+    def _seat_block(self, episode) -> dict[str, Any] | None:
+        """The seat payload block for an episode's lens, or None."""
+        lens_id = getattr(episode, "variation_operator", None)
+        if not lens_id:
+            return None
+        for item in self._generator_basis_or_load():
+            if item.id == lens_id:
+                return {
+                    "lens_id": item.id,
+                    "name_zh": item.name,
+                    "directive": item.directive or item.description,
+                    "forbidden": item.forbidden,
+                    "self_check": item.self_check,
+                }
+        return {"lens_id": lens_id, "name_zh": lens_id,
+                "directive": "", "forbidden": "", "self_check": ""}
 
     def _world_transition_for(self, node) -> dict[str, Any]:
         """Assemble the reality record a child Scientist sees on resume (§8).
@@ -1136,7 +1401,16 @@ class Scheduler:
         if state is None:
             return {}
         facts = self._world_transition_for(node)
+        # The author seat's lens: the memo a Child inherits is one school's
+        # attributed view, and the attribution travels with it (seat design
+        # §2.3 — 署名透镜 makes the discounting structural, not advised).
+        author_episode = self._queries.get_episode(state.episode_id)
+        originating_lens = (
+            author_episode.variation_operator
+            if author_episode is not None else None
+        )
         return {
+            "originating_lens": originating_lens,
             "child_node": {
                 "node_id": node.node_id,
                 "sha": node.sha,
@@ -1297,6 +1571,24 @@ class Scheduler:
                 raise ValueError(f"unknown proposer allocation: {allocation_id}")
             if node_id != allocation.node_id or episode_id != allocation.episode_id:
                 raise ValueError("proposer result belongs to another node or episode")
+            if not proposals and not research_states:
+                # Empty-seat exit contract (seat design §7.6): an abstain
+                # must leave its memo behind — at least one registered
+                # research_state — or the whole investigation evaporates
+                # (v5 study-3: 37 steps, zero states, hallucinated stop).
+                # Give the seat exactly one correction round-trip to file
+                # its memo; a second empty exit is accepted as the seat's
+                # honest final word rather than looping forever.
+                attempts = self.store.attempts_for_work(
+                    allocation_id, "proposer")
+                if len(attempts) <= 1:
+                    raise ValueError(
+                        "empty-seat exit without a registered research "
+                        "state: an abstaining seat must first register its "
+                        "memo (what it checked along its lens axes and why "
+                        "they are empty) so the investigation does not "
+                        "evaporate"
+                    )
             self.store.publish_research_batch(
                 node_id=node_id,
                 episode_id=episode_id,

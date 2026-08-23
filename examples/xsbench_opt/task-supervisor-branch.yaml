@@ -4,13 +4,10 @@
 # distinct lineages to allocate across and (when they mature) to consider for
 # an integration request -> Integrator -> epoch promotion.
 #
-# The chain run (task-supervisor.yaml) stayed a single lineage because
-# max_proposer_inflight=1 -> supervisor capacity=1 -> it granted 1 lease of
-# proposal_slots=1 per round.  Here the parallelism/proposal knobs are raised:
-# proposal_slots=4 (one scientist fills up to 4 proposals -> 4 children per
-# node) and max_proposer_inflight=6 (supervisor can fund up to 6 leases ->
-# up to 6 nodes under study in parallel).  Either lever alone branches the
-# tree; both together give a wide landscape.
+# v6 seat architecture: the Supervisor buys seats (node x lens); each
+# seat reserves exactly one proposal id, so tree width comes from purchases,
+# not from per-scientist slots.  max_proposer_inflight bounds concurrent
+# seats; lenses (three-part standard) live in the repo-root generator.json.
 #
 # Run (bounded driver):
 #   unset APPTAINER_BIND
@@ -98,7 +95,7 @@ pricing:
   cache_creation_usd_per_1m: 0.0
 
 # Scheduling / episode budgets.  Parallelism raised to 4 so the tree branches.
-proposal_slots: 4          # one scientist fills up to 4 proposals -> 4 children
+# (proposal_slots dissolved in v6: a seat reserves exactly one proposal id)
 scientist_steps: 80
 agent_timeout_seconds: 3600
 eval_timeout_seconds: 600
@@ -112,16 +109,11 @@ quiescence_window_proposals: 2
 frontier_policy: topk  # gepa or topk
 # Width for the "topk" policy (match the new breadth).
 frontier_top_k: 4
-# Total proposer allocations a single node may receive over its lifetime.
-# >=2 is the reliable branching lever: a node stays eligible after its first
-# study, so the eligible set grows past one node and the Supervisor can fund
-# several nodes in parallel -> the tree widens instead of chaining.
-max_research_per_node: 2
-# Lifetime cap on proposals emitted from one node (proposal_slots * max_research).
-max_proposals_per_node: 8
-# Variation-factor directives on reseeded episodes. Inert here (max_research=1
-# means no reseed happens); kept at the shipped default.
-generator_reseed: true
+# Seat design v6: max_research_per_node / max_proposals_per_node /
+# generator_reseed are dissolved. Breadth is the Supervisor buying seats
+# (node x lens); one seat = one lease with exactly one reserved proposal id;
+# the budget is the only boundary. Lenses live in the repo-root
+# generator.json (three-part standard).
 # Persistent growth-gate runtime (see task-supervisor.yaml).
 supervisor_steps: 40
 supervisor_max_retries: 3

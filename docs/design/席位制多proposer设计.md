@@ -1,0 +1,403 @@
+# 席位制多 Proposer 设计（透镜席位 / Seat-based Proposers）
+
+状态：**已实现（v6）· smoke 首跑验收通过（见 §8）** · 实现于 2026-08-23
+实现记录见 §9；验收脚本 `scripts/check_seat_v6.py`，smoke run
+`runs/seat-v6-smoke`（examples/xsbench_opt/task-supervisor-v6-smoke.yaml）。
+证据来源：runs/ablation-v5（旧架构验证 run，反面教材：树臂 1.66h 以 2 evals/
+$1.30 quiesce 自杀——单冠军收割链的终局）、runs/supervisor-tree-xsbench-v3、
+runs/ablation-v4
+配套工件：`generator.json`（透镜基 v2 三件套，生产基）、
+`scripts/_lenses_v2.json`（探针用副本）、`scripts/_probe_lens_seats.py` +
+`scripts/_probe_lens_results.json`（探针与原文）
+
+---
+
+## 0. 一句话
+
+把"多样性"从 agent 的禀赋改成**编制**：一个节点不再由一个负全责的 Scientist
+研究，而是由 N 个**席位**研究——每个席位戴一枚**生成元（透镜）**、只负责把
+自己学派的那一问问好。广度是编制给的，深度是每个席位的本职，责任心恰好一问
+之重。
+
+## 1. 为什么改：v5 的诊断链
+
+当前单 proposer 架构在 v5 验证 run（4h 时间帽、预算不限）中的完整病理：
+
+1. **单冠军收割**。每个研究只提交锦标赛冠军：v5 前两批研究各自的 working
+   model 都列出了 3-4 个候选机制，但 lab 实测后只提交 1 条（第一批甚至把两个
+   独立已验证机制**捆绑**成一条 proposal，树宽在免费处饿死）。v3 统计：30 个
+   研究的 proposal 分布 = 0:11（37% 弃权）/ 1:9 / 2:8 / 3:2，均值 1.03，slots=4
+   从未打满。
+2. **通道定价失衡**。多测一个 lab 变体 ≈ 4 步；多提一条 proposal ≈ 250 词结构
+   化举证（instruction + expectation + research_target 四件套 +
+   material_difference + evidence_refs）。低 effort 模型理性地把多余想法全部送
+   进便宜的 lab 通道，死在里面——广度被伪装成深度。v3 反证资源假说：出
+   proposal 越多的研究步数越**少**（3 条/研究 ≈ 24 步 vs 1 条 ≈ 34 步；最深的
+   64 步研究零产出弃权）。
+3. **单链涌现闭环**。每研究 1 冠军 → 每节点 1 子 → supervisor 视野里"不存在
+   竞争谱系" → 只能资助链尖 → 新研究又在链尖上做。两个角色各自理性，链是局
+   部理性合谋的涌现物。
+4. **1.66h 自杀**。第三个研究在活跃调查中弃权（abstain 理由"User requested
+   to stop."系模型幻觉——session 里无任何停止指令，且 0 个 research state 注
+   册，37 步调查全部蒸发）→ supervisor 读作"机制耗尽"，空 growth 决策 →
+   quiescence → 程序在预算剩 96.5%（$998.7/1000、2.4h/4h）时自停。
+5. **透镜机制空转**（v3）。生成元基 10 条真实存在、reseed 注入通路存在，但：
+   4/26 节点用过第二席位；`select_one_generator` 按 basis 顺序取第一个 → 永远
+   G1，G2–G10 从未出场；G1 是"建议"不是身份，其实际产出退化为程序内 donor
+   移植（SYNTHESIZE 的本职）。**透镜在场，但既没有席位也没有权威。**
+
+## 2. 核心结构
+
+### 2.1 席位
+
+- 席位 = **(节点 × 透镜) 的一次租约**。产出恰好两选一：**1 条 proposal**
+  （explore 新方向，或 synthesize 合成 inspected donors——合成权保留在席位，
+  因为 supervisor 不会被动读到 research state，自下而上的合成发现需要直接行
+  动通道），或 **1 份空透镜备忘**（本视角在此世界确实无矿，须指名检验过什么、
+  为何皆空——调查不蒸发）。
+- **提交语义：数量不出现在 prompt 里。** 每席位恰好一条 proposal 由 harness
+  机械实现（租约只保留一个 proposal_id），prompt 只用所有格单数表达——"维护
+  好你对这个世界的理解，提交**你的** proposal"。不出现 slots、不出现"一条/每
+  方向一个/多条中选优"等任何数量语言：数字会重新引入组合管理与择优的旧思维
+  （旧 charter 的 slot 叙述正是这么养出来的），而席位制里没有组合可管——席位
+  只有它的一问。
+- 席位职责恰好一问。多席位并发于同一节点（现有 `max_proposer_inflight=6` 的
+  并行租约机制天然支持）。
+- 旧的 `max_research_per_node` 硬帽**溶解**：节点值不值得继续研究，由
+  supervisor 的边际出价决定，预算事实是天然边界。
+
+### 2.2 透镜（生成元）的地位与内容
+
+**地位——prompt 三点锚定，对抗长上下文淹没：**
+
+1. **System prompt 第一行**：席位身份（"You are the G5（反演）seat of node
+   X. Your lens is your identity… not advice you may weigh."）。session
+   compaction 不丢 system 层。
+2. **负面禁令**随透镜正文（非 G10 席位禁止"profile→打最大数字"默认开局等）。
+   负面约束对 LLM 的绑定力强于正面劝导。
+3. **提交时刻再锚定**：submit 协议要求 proposal 陈述"本方向如何体现本席位透
+   镜"+ 透镜自检（见下）。最后一轮指令权重最高。
+
+现有 wake payload 里的 `suggested_operator_id` 字段**废除**（它暗示"这只是建
+议"）。
+
+**内容——三件套标准（反花架子）：**
+
+每条透镜 = ①**操作指令**（这一问具体怎么问）+ ②**负面禁令**（本透镜禁止的
+默认剧本）+ ③**提交自检**（可判定的独特性标准：换个透镜也能原样产出的
+proposal 不是本席位的产出）。
+
+v2 全文见 `scripts/_lenses_v2.json`。关键修订：
+- **G1** 堵漏：移植源禁止来自本程序实验史（那是 synthesize 的职责）——v3 的
+  G1 席位实际产出是 donor 移植，透镜名号在场、动作未被执行。
+- **G10** 显式化为**对照透镜**：它就是模型默认剧本（v5 无透镜研究精确执行了
+  它）；单独给它设席位等于买一注本来就会下的注。
+- 透镜质量是**运行期测量**而非设计期赌注：每条透镜的子节点 gate 通过率/改进
+  幅度、透镜间方向离散度、遵循率进账本；与无透镜基线无差别的透镜改写或除名。
+  基从静态清单变成被证据评级的演化工具箱。
+
+**透镜分派**：全树随机/轮换（`sample_generators`），**谱系查重**——父链已烧
+过的透镜，子节点再派需指名差异（G10 在父子节点会产出近似方向：同一个热点函
+数摆在那里，重复分派 = 重复下注）。
+
+### 2.3 继承
+
+- 子节点通过 `originating_research_state` 指针继承**作者席位**的备忘（现状机
+  制不变）：P1(G5) 的 proposal → 子节点，子节点的研究读 P1 的备忘；P2 的子节
+  点读 P2 的。每条分支带着自己作者的世界观往下走。
+- 备忘**署名透镜**（"这是 G5 席位的工作备忘"）——子席位大概率是别的透镜，署
+  名让"这是某一学派的视角、可整体折扣"显式化，反锚定从劝告变成结构。
+- **兄弟知识不继承、也不该继承**：继承是谱系通道；跨分支走台账
+  （`search_experiments` + synthesize），保持 pull 式。
+- **透镜不继承**：透镜是席位的属性不是血脉的属性，子节点席位重新分派、谱系
+  查重。
+
+### 2.4 Supervisor：全权 + 全视
+
+- 决策升级为三元：**(节点 × 席位数 × 透镜/合成)**。这是"多样性定价权"：热节
+  点加一席 = exploit；冷节点首席 = explore；合成 = consolidate；透镜产出统计
+  让出价有据（配反单调警示：赢家透镜被重复购买会收窄多样性，正是要对抗的先
+  验——anti-anchor 在分配层的同构物）。
+- **不做菜单**（定案）：菜单 = harness 喂饭，与"每次 gate 失灵的修法都是把世
+  界照给它看而非替它咀嚼"的既有演化线矛盾（budget facts → capacity facts →
+  rejection feedback 三连修全是加事实）。supervisor 失误首先补事实，不预支成
+  喂饭设计。
+- 配置：**事实完备**（席位/透镜账本可查：每节点买过什么席位、谱系烧过什么透
+  镜、各透镜历史产出统计——是世界的状态不是决策的答案）+ **charter 纪律**
+  （每笔分配点名没买什么、为什么）+ harness 只执法不做主（不变量校验：同谱系
+  重复透镜须指名差异、容量/预算上限——合法性合同，同 reserved-proposal-ids
+  先例）。
+- 死锁闭合：席位菜单（事实上的未试集合）非空 ⇔ 还有可买的问题；"没什么可资
+  助"只在透镜真耗尽时合法 = 真·程序完成。quiescence 从此有诚实的触发条件。
+
+### 2.5 合并（定案：合成权保留在席位）
+
+| 层级 | 执行者 | 触发 | 产物 |
+| --- | --- | --- | --- |
+| 分支内发散 | 透镜席位 | supervisor 买席位 | 子节点（新方向） |
+| 分支间合成 | **席位自己的 synthesize 动作** | 席位调查中发现合成机会（自下而上） | 子节点（组合机制，照常过 gate/eval） |
+| 主干整合 | integrator → epoch 晋升 | supervisor 开 integration request（自上而下，低频） | 新 epoch 根 |
+
+被否决的中间方案：合成席位（supervisor 购买的第三类席位）。否决理由：合并权
+完全上收 supervisor 托大，且 supervisor 不会被动读到 research state/备忘，自
+下而上的合成发现没有行动通道。席位保留双提交动作后，"发散预算被挪用"的代价
+由"席位本来就只出一问"兜底：一个席位用唯一的一问做了合成，是它对那一问的合
+法回答。
+
+经济学变化要认账：席位制下兄弟分支是常态，合并从例外变成高频操作。两个天然
+限幅：frontier 宽度照旧裁剪；supervisor 席位购买可分批（先 2 席，有苗头再
+补）。
+
+## 3. 探针验证（先行，架构不动）
+
+**协议**（`scripts/_probe_lens_seats.py`）：冻结 v5 study-2 的真实 Child-world
+wake 上下文（自带强前代方向 = 反锚定测试条件），11 臂（10 透镜席 + 无透镜对
+照）× 3 采样，生产模型通道（deepseek-v4-flash，reasoning_effort=low——分歧
+必须在低 effort 下成立）。每臂在被允许用工具前陈述：QUESTION（本席位之问）/
+FIRST_ACTIONS / WHY_THIS_ANGLE。
+
+**判据**：
+1. 跨臂分岔：QUESTION 的机制类别分布 vs 对照（查找/内存布局/算法范式/预计算
+   搬移/批处理重排/对称统一/尺度/其他）；
+2. 臂内一致：3 采样问的是同一类问题；
+3. 遵循率：WHY_THIS_ANGLE 真名透镜；G5 真反演、G1 拒绝 donor 移植、非 G10
+   避开价目表开局；
+4. 除名线：某透镜方向分布与对照无显著差异 → 花架子，改写或除名。
+
+**结果**（33/33 成功、0 错误；`scripts/_probe_lens_results.json`；本轮 compact
+charter 仍含旧数量措辞，各臂一致故分岔读数有效，下轮起用所有格单数版）：
+
+| 臂 | 开局之问的形态（3 采样） | 判定 |
+| --- | --- | --- |
+| control | 2/3 "哪个剩余热点最大"（默认剧本）+ 1 条位一致范围核查 | 基线如预期 |
+| G1 移植 | 编译器域的 predication/rank-select、**stringology 的 wavelet-tree rank/select**、Hacker's Delight 无分支查找——三个真外部域，**零 donor 移植**（禁令生效） | ✅ 强 |
+| G2 分解 | producer/consumer 数据流重切、按概率重排分区、两阶段 batch 拆分 | ✅ 强 |
+| G3 极限 | 无限内存极限（每桶一格）、perfect hashing 极限、HINT_BITS 缓存交叉点+L3 溢出 | ✅ 强 |
+| G4 对称 | **"每个核素网格都是 unionized 网格的子列——把所有二分统一为一次窗口查找"**（提升统一）；对数分桶修复尺度不变性破坏 | ✅ 最亮 |
+| G5 反演 | "每次查找的搜索**何时根本不需要**"、"把正确性责任从查找期翻转给建格期"——3/3 反转默认方向 | ✅ 强 |
+| G6 范式 | #2 表示转置真范式；#0 表示清单；#1 问题行偏枚举（WHY 行锚回表示变更） | ✅ 过，1 条弱（可加禁令："哪个组件主导"不许作开局——那是 G10 的问题） |
+| G7 异常 | 放大**真实异常**：lab 预测 24% vs 实测 45%；memo 声称基线 1.45M vs 父节点实测 1.19M；pick_mat 回归与排序矛盾 | ✅ 强（且抓到了 memo 里的真实数据不一致） |
+| G8 形式 | "两个成功 diff 共享同一变换——预计算粗结构+局部工作——把该形式推到未变的兄弟结构上" | ✅ 过 |
+| G9 尺度 | O(N) 项对二分的交叉点、N vs M 哪个尺度变量主导、增长类分析 | ✅ 强 |
+| G10 价目表 | 3/3 "现在账本最大单项是什么"——与 control#1 同模 | ✅ 按设计=对照，坐实降级 |
+
+**结论**：透镜不是花架子。9 个实质透镜的 27 条采样里，只有 1 条以默认剧本
+开局（对照臂 2/3 默认剧本）；各臂在 WHY_THIS_ANGLE 里普遍正确命名自己的透
+镜语义。目标区域收敛（多数臂都指向 per-nuclide 插值这一明显下个热点）而
+**机制/角度发散**（统一、反演、移植、重切、极限、审计、形式迁移、增长类
+——同一场地、不同学派的问法），正是议会想要的东西。**席位制获探针放
+行**；G6 加一条开局禁令后可全量上场。
+
+## 4. 实现面（最小 diff，探针达标后动工）
+
+| 位置 | 改动 |
+| --- | --- |
+| `simpleevo/scheduler/loop.py` | 同节点多租约；席位分派（透镜随机/轮换 + 谱系查重）；`episodes.variation_operator` 复用为席位透镜字段（首席位也派透镜，不再只在 reseed） |
+| `simpleevo/generator.py` | 分派改 `sample_generators`（全局随机），废除 first-untried 永远 G1 的行为 |
+| `proposer/scientist.py` | seat system prompt 结构（透镜身份第一行 + 三件套 + 减薄 charter + 提交再锚定）；wake payload 的 `suggested_operator_id` 废除；`build_generator_catalog`（system hints 透镜目录）删除 |
+| `proposer/prompts/proposer.md` | 拆出减薄席位 charter（责任从 goal 收窄到 question；认知纪律保留）；**slot 叙述三段整删**（unused-slots 段、"Prefer breadth…Submit every materially distinct"段、"each distinct direction gets its own proposal slot"段）；`transform_worldview` 描述段删除 |
+| `proposer/cognitive_transformer.py` + `research_tools.py` + `context.py` | `transform_worldview` 整条通路删除（导师调用、action handler、operator nudge）——建议级透镜基础设施与身份级透镜矛盾；`cognitive_transformations` 表 dormant（保 schema 停写） |
+| `proposer/prompts/supervisor.md` | 重写：决策动作从 `node_ids` 改为席位购买（节点 × 透镜 × 数量）；空选择语义改"未试席位耗尽才是完成"；charter 纪律（点名没买什么） |
+| `proposer/prompts/integrator.md` | 集成备忘给 donor 署名来源透镜谱系（合并层反锚定提示） |
+| supervisor wake facts | 席位/透镜账本 + 透镜产出统计 + 谱系透镜史（facts，非菜单）；`runtime_facts.proposal_slots` 换席位语义 |
+| `simpleevo/db/` | **无 schema 变更**（`research_operation`/`donor_experiment_ids` 校验已在；`variation_operator` 已在） |
+| 配置 | `max_research_per_node`、`max_proposals_per_node` 语义溶解；席位数上限由 supervisor 预算出价决定 |
+| 不动 | `research_skills/reframe_inherited_problem.md`（反锚定方法，席位制下更关键：跨学派继承的高频解药）；`self_review.md`/`reflection.md`（无 slot 语言，职责仍成立）；lab 工具（grounding 单一方向仍是本职） |
+
+## 5. 风险与开放问题
+
+- **透镜权威上限是 prompt 级**。身份注入 + 负面禁令 + 提交再锚定 + 事后可检
+  测（方向与透镜语义不符 = 席位失职）已是不换模型能达到的上限；接受"席位失
+  职率"作为指标存在。
+- **透镜全树查重**是硬需求，否则 N 席位只是把单链的重复从纵向改成横向。
+- **supervisor 决策质量**：事实完备后若仍只买链尖，先分清"看不见"（补事实）
+  还是"不想看"（charter/身份问题）。
+- 探针是单呼叫开局分岔测试（Stage A）；通过后可再做全 session 版（Stage B，
+  真实工具 + 多轮）。
+
+## 6. 决策记录（含被否决方案）
+
+| 决策 | 结论 | 否决的替代方案与理由 |
+| --- | --- | --- |
+| 多样性来源 | 编制（席位 × 透镜） | 单席位多 slot 收割：disposition-based breadth 在低 effort 下实证失败（1.03 条/研究） |
+| slot 层透镜枚举 | 否决 | 被席位制整体取代——单席位内枚举仍是"一张图内的多样性" |
+| 合成权 | 保留在席位（explore + synthesize 双动作） | 合成席位/全收 supervisor：托大，且 memo 无被动通道，自下而上发现缺行动出口 |
+| supervisor 决策形态 | 全权 + 全视（facts 完备 + charter 纪律） | 候选菜单/勾选：harness 喂饭，逆"加事实不咀嚼"的演化线；实测决策 #4 是事实失败非推理失败 |
+| G10 | 显式对照透镜 | 保留常规席位：它是默认先验，设席位于事无补 |
+| 透镜内容 | 三件套标准 + 运行期评级 | 措辞依赖：无自检的透镜会被默认剧本同化（v3 G1 实证） |
+| prompt 数量语言 | 所有格单数（"你的 proposal"），数量零出现 | slots/数量表述：重新引入组合管理与择优的旧思维；数量由 harness 保留单一 proposal_id 机械实现 |
+
+## 7. 实现规格（紧凑交接）
+
+### 7.1 Supervisor 决策动作（v6 schema）
+
+```json
+{"action": "submit_growth_decision",
+ "seat_purchases": [{"node_id": "...", "lens": "G5"},
+                    {"node_id": "...", "lens": "G2"}],
+ "rationale": "... 必须点名一笔没买的席位（not-bought alternative）及理由 ..."}
+```
+
+- `seat_purchases` 为空 ⇔ 等待在飞证据；仅当 facts 显示**未试席位集合为空**
+  （所有 (节点, 谱系未烧透镜) 组合耗尽）时才是程序完成。旧 `node_ids` 字段废
+  除。`submit_integration_request` 不变。
+- 调度侧：每个 purchase = 一个租约，`proposal_slots` 固定 1（保留恰好一个
+  proposal_id——数量唯一性由 harness 机械实现），episode 的
+  `variation_operator` 写入 purchase 的 lens（**首席位也写**，不再只在 reseed）。
+
+### 7.2 透镜分派与谱系查重
+
+- lens 来自 supervisor 的 purchase（不是调度器 first-untried）；调度器只**校验
+  合法性**：该 lens 未在此节点的**祖先路径**上烧过，否则拒绝该 purchase 并回
+  错误给 supervisor（rejection feedback 既有机制）。全局随机化仅发生在
+  supervisor 请求建议时（若需要）。
+- 谱系透镜史 = 沿 parent 链收集所有 episode 的 variation_operator。
+
+### 7.3 席位 system prompt 模板（实现起点）
+
+```
+[第 1 行·身份] You are the {lens.id}（{lens.name_zh}）seat of node {node_id}.
+Your lens is your identity: it is the angle you were hired for, not advice
+you may weigh.
+[第 2 块·透镜三件套] 操作指令 / 禁令 / 提交自检   ← scripts/_lenses_v2.json
+[第 3 块·减薄席位 charter]
+  - 职责：investigate from your angle, maintain your understanding of this
+    world, and submit your proposal — exploring a new direction, or
+    synthesizing inspected donors — or an empty-seat memo if your angle
+    provably has nothing here. You do not own the whole problem; you own
+    your question, asked well.
+  - 认知纪律（保留自旧 charter）：belief 与 verified 分立；harness 裁决；
+    your proposal needs a reason it deserves an answer, not a proof; do not
+    pad it with a second mechanism; 前代备忘=署名学派的 memo 可整体折扣
+    （reframe skill 就是为此存在）；lab 用于 grounding 你的问题，实验是
+    program 的裁决。
+  - 空席位备忘契约：注册你的 research state（调查不蒸发），并指名你沿透镜
+    的哪些轴检验过、为何皆空。
+[第 4 块·提交再锚定] submit 协议要求 proposal 附一句"本方向如何体现本席位
+透镜"（透镜自检在此执行）。
+```
+
+硬性禁令：全文不出现 proposal 数量（slots/一条/N 中选优）；不出现透镜目录
+（`build_generator_catalog` 删除）；wake payload 无 `suggested_operator_id`。
+
+### 7.4 Supervisor facts（新增三块，wake batch）
+
+```
+seat_ledger:   [{node, seats: [{lens, outcome}]}, ...]        # 每节点已买席位与结局
+untried:       [{node, lenses: [G3, G5, ...]}, ...]           # 谱系查重后的未试透镜
+lens_stats:    [{lens, proposals, gate_pass_rate, best_gain}, ...]  # 全程序透镜产出统计
+```
+
+既有 facts（budget/capacity/质量事实）不变；`runtime_facts.proposal_slots`
+移除，换 `seats_inflight` 语义。
+
+### 7.5 席位 wake 上下文（首轮 user turn）
+
+= 现有 Child-world 事实块（节点/实验结果/前代 proposal）+ **前代备忘署名透镜**
+（"predecessor memo — filed by the {lens} seat；attributed view of one school,
+discountable as a whole"）。变更：删除 operator 建议；其余不动。
+
+### 7.6 提交路径
+
+- `publish_research_batch` 不变（research_operation/donors 校验已在）；席位
+  reserved 池恰好 1 个 id，第二条 proposal 天然被拒（"proposal_id not in
+  reserved pool"）——单 proposal 不变量零新代码。
+- 空席位退出 = abstain，但**前置校验：必须已注册 ≥1 个 research_state**，否则
+  结果标记 invalid（修 v5 study-3 的蒸发式退场）。
+
+## 8. v6 首跑验收单（smoke，目标成本 < $3）
+
+1. 同一节点出现 ≥2 个席位、透镜互异（查 `episodes.variation_operator`）。
+2. 席位 system prompt：透镜身份在第一行；全文 grep 不到 proposal 数量词；工
+   具列表无 `transform_worldview`；payload 无 `suggested_operator_id`。
+3. 每席位产出 ≤1 条 proposal（reserved 池拒绝第二条）或空备忘 + 已注册 state。
+4. supervisor 决策解析为 `seat_purchases`；rationale 含 not-bought 指名。
+5. 谱系查重生效：子节点席位透镜 ∉ 祖先路径透镜集；违规 purchase 被 rejection
+   feedback 打回。
+6. quiescence 仅在 untried facts 为空时触发（人为构造：透镜烧尽的节点）。
+7. `reframe_inherited_problem` skill 仍可用；`cognitive_transformations` 表停写
+   （dormant）。
+8. smoke 后人工抽查：不同透镜席位的 proposal 机制类别确实不同（对照探针 §3
+   的预期形状）。
+
+## 9. 首跑现象记录（smoke，runs/seat-v6-smoke，$0.94 / 3 evals / 0.35h）
+
+**核心目标在 root 第一次延伸处即告成立**：同一节点，三个席位，三份不同的
+理解，三条不同的 proposal，三个不同的实验结果——
+
+| 席位 | 理解的形成（working model 摘要） | 实验方向 | 结果 |
+| --- | --- | --- | --- |
+| G1 跨域移植 | grid_search 结构在 2M 次查找间重复——域外对应是数据库索引的离散化查找表 | 65536-bin direct-index 表 + 桶内线性推进，改 calculate_macro_xs 调用点 | **+24.2%** (1.82M lps) |
+| G2 分解重组 | **实测分解**：toy 实验测出平坦二分 ~20 次 cache-miss 迭代、占 ~37% runtime | 沿值轴重切两阶段：粗定位（B=131072 桶表，init 预算）+ 桶窗内二分，grid_search 接口不变 | **+23.6%** (1.81M lps) |
+| G3 理想化极限 | 极限论证：索引计算免费的世界里，二分是可移除冗余；表仅 256KB vs 240MB 网格 | K=1<<16 first-greater-than 表 + 有界线性校正，新函数 grid_search_table | **+8.0%** (1.58M lps) |
+
+三条全部 bit-identical（VERIFY=998920）过 gate，root 长出 **3 个 depth-1
+子节点**——v5 同场景只产出 1 条冠军提案的单链。每条 proposal 的
+material_difference 都显式陈述本席位透镜（提交再锚定生效）。
+
+诚实的边界观察：目标区域收敛（三席都打到 grid_search→LUT——这个小
+benchmark 的最大热点只有一个），与探针 §3 预测一致（"同一场地、不同学派
+的问法"）；但**理解的来源**（域外结构对应 / 定量实测 / 极限论证）与**实现
+策略**（改调用点 vs 重写入口内部 vs 新函数；65536 vs 131072 bins；桶内
+线性 vs 桶内二分）真实互异，且 8% 与 24% 的结果差距是真实的实验分辨。
+
+§8 验收（scripts/check_seat_v6.py）：**全部硬检查通过**——多席位异透镜、
+payload 三件套/无禁词、恰一 proposal id、not-bought 指名、谱系无重复、
+cognitive_transformations 表 0 行、reframe skill 在册。诚实 quiescence 本
+轮未被触发（supervisor 在两席在飞时正确地选择了空 purchases 等待）；
+untried 耗尽路径由单测 test_empty_selection_completes_when_untried_exhausted
+覆盖。
+
+## 10. 实现记录（v6，2026-08-23）
+
+代码面（与 §4/§7 一一对应）：
+
+- **透镜基**：`generator.json` 换 v2 三件套；`Generator` 扩展
+  directive/forbidden/self_check；`select_one_generator`（永远 G1 的
+  first-untried）删除——透镜只来自 supervisor 的 purchase。
+- **store**：`LeaseSpec.lens`；`allocate_proposer`/`commit_supervisor_decision`
+  的 `max_proposals_per_node` 默认 None=无限（溶解）；透镜在**决策事务内**
+  原子盖到 episode 上（`variation_operator`，一 episode 一透镜）；同决策
+  重复 node_id 合法化（一决策买同节点多席）。
+- **scheduler**：决策解析 `seat_purchases: [{node_id, lens}]`；`_seat_leases`
+  只执法（容量/透镜存在/谱系查重/决策内查重），不选透镜；`_seat_episode_for_node`
+  ——首席用节点从未分配的 episode，后续席位一律**新建兄弟 episode（不继承
+  任何 sibling 会话）**；诚实 quiescence 在此执法：空 purchases + untried
+  非空 + 无在飞 → 拒绝并回理由；wake facts 三块（seat_ledger / untried /
+  lens_stats，lens_stats 含 best_gain 按目标方向计）；`runtime_facts` 换
+  `seats_inflight`；proposer payload 携带 `seat` 三件套块（透镜身份），
+  `suggested_operator_id`/`generator_basis` 移除；前代备忘带
+  `originating_lens` 署名；空席位 abstain 的 scheduler 兜底（0 state 的
+  abstain 恰好重试一次后放行，防死循环）。
+- **proposer**：席位 system prompt = 身份第一行（G5（反演）seat of node X,
+  identity not advice）+ 三件套 + 减薄 charter（prompts/proposer.md 重写为
+  Seat Charter：职责一问、空席位备忘契约、备忘=署名学派可整体折扣）+
+  认知纪律；协议块数量词零出现（submit_explorations 描述改为"你的
+  proposal"+透镜自检陈述）；transform_worldview 全通路删除
+  （cognitive_transformer.py 删除、工具 schema/handler/fingerprint 清除、
+  `cognitive_transformations` 表 dormant 保 schema）；runtime guard：
+  abstain 前必须已注册 research_state（协议纠正级），v5 蒸发式退场双侧封堵。
+- **supervisor**：`submit_growth_decision {seat_purchases, rationale}`；
+  supervisor.md 重写（三元决策 node×lens×数量、反单调警示、charter 纪律
+  =点名 not-bought、空 purchases=等待/耗尽才完成）；facts 契约更新；
+  `list_nodes` 带 seats_inflight + lenses_burned_here；node_allocations
+  带透镜。`_protocol_reminder`/cold start 同步。
+- **配置**：`max_research_per_node`/`max_proposals_per_node`/
+  `generator_reseed` 从 EvolutionConfig 删除（旧 YAML 键静默忽略）；三个
+  example 配置清注。`proposal_slots` 保留（仅 frontier 基线模式）。
+- **测试**：243 passed（v5 基线 246：删 transform/select_one 旧测试，增席位
+  契约测试——双席异 episode、谱系查重拒绝、诚实 quiescence 双向、空席位
+  guard、payload 卫生）。
+
+实现中补的三个设计外执法点（都是 §2.4"arness 只执法"原则的直接应用）：
+
+1. **诚实 quiescence 拒绝路径**（§2.4 的机械面）：空 seat_purchases 在
+   untried 非空且无在飞时被整决策拒绝，理由写进 rejection feedback——
+   stillbirth 从"劝告"变成"不可能"。
+2. **决策内查重**：同一决策里 (node, lens) 重复 → 拒绝（防同透镜双注）。
+3. **open 座位透镜计入 burned**：席位 episode 在决策事务里已存在，天然进
+   谱系 burned 集——并发买同节点不同透镜合法、同透镜非法。
+
+v5 终局回填（反面教材定稿）：树臂 1.66h quiesce，2 terminal evals/$1.30
+（预算剩 ~97%）。病理链与 §1 预测一致：研究三弃权 → 空 growth →
+quiescence。旧架构的"合理等待"没有事实边界，v6 的 untried 集就是那个边界。

@@ -167,9 +167,6 @@ class EvolutionConfig:
     root_fresh_scientists: int = 1
     frontier_policy: str = "gepa"
     frontier_top_k: int = 3
-    max_research_per_node: int = 3
-    max_proposals_per_node: int = 9
-    generator_reseed: bool = False
     supervisor_steps: int = 40
     supervisor_max_retries: int = 3
 
@@ -208,9 +205,6 @@ class EvolutionConfig:
             "root_fresh_scientists": self.root_fresh_scientists,
             "frontier_policy": self.frontier_policy,
             "frontier_top_k": self.frontier_top_k,
-            "max_research_per_node": self.max_research_per_node,
-            "max_proposals_per_node": self.max_proposals_per_node,
-            "generator_reseed": self.generator_reseed,
             "supervisor_steps": self.supervisor_steps,
             "supervisor_max_retries": self.supervisor_max_retries,
         }
@@ -254,9 +248,6 @@ class EvolutionConfig:
             root_fresh_scientists=int(raw.get("root_fresh_scientists", 1)),
             frontier_policy=str(raw.get("frontier_policy", "gepa")),
             frontier_top_k=int(raw.get("frontier_top_k", 3)),
-            max_research_per_node=int(raw.get("max_research_per_node", 3)),
-            max_proposals_per_node=int(raw.get("max_proposals_per_node", 9)),
-            generator_reseed=bool(raw.get("generator_reseed", False)),
             supervisor_steps=int(raw.get("supervisor_steps", 40)),
             supervisor_max_retries=int(raw.get("supervisor_max_retries", 3)),
         )

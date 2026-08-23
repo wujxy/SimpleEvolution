@@ -1,18 +1,18 @@
-# SimpleEvolution task: XSBench — fractal-tree evolution demo.
+# SimpleEvolution task: XSBench — v6 SEAT architecture smoke run.
 #
-# Identical to task.yaml except for the tree-shape knobs, so each frontier node
-# is studied exactly once and a single study emits 3 proposals — the classic
-# self-similar branching tree (root -> 3 children -> top-3 frontier -> 3
-# children each -> ...). No ablation-control knobs (those live in
-# ablation/driver.py _COMMON_ARM_KNOBS and only apply to the ablation `run`);
-# run this config with `--no-arm-override` so the knobs here take effect.
+# One node is studied by N seats; each seat is bought by the Supervisor
+# (node x lens) and holds exactly one reserved proposal id.  proposal_slots
+# and the per-node research/proposal caps are dissolved: breadth is the
+# Supervisor's purchase, the budget is the boundary.  Lenses live in the
+# repo-root generator.json (three-part standard: directive / forbidden /
+# self_check) and enter the seat's system prompt as identity.
 #
-#   python -m ablation.driver run --config examples/xsbench_opt/task-fractal.yaml \
-#     --arm topk --run-dir runs/fractal/seed-1 --seed 1 \
-#     --max-evals 30 --budget-usd 4.0 --no-arm-override
-#
-#   python -m simpleevo --run-dir runs/fractal/seed-1 tree   # ASCII tree
-#   python -m simpleevo --run-dir runs/fractal/seed-1 tree-graph   # Graphviz
+# Run (bounded driver):
+#   unset APPTAINER_BIND
+#   BENCH_PIN=12 python scripts/run_supervisor_test.py \
+#     --config examples/xsbench_opt/task-supervisor-v6-smoke.yaml \
+#     --run-dir runs/seat-v6-smoke \
+#     --max-evals 3 --budget-usd 2.5
 
 goal: >
   Optimize the XSBench macroscopic cross-section lookup kernel in src/ for
@@ -92,22 +92,26 @@ pricing:
   cache_read_usd_per_1m: 0.02
   cache_creation_usd_per_1m: 0.0
 
-# Scheduling / episode budgets.
-proposal_slots: 3          # every study emits 3 proposals -> 3 children
-scientist_steps: 200
+# Scheduling / episode budgets.  Parallelism raised to 4 so the tree branches.
+# (proposal_slots dissolved: a seat reserves exactly one proposal id)
+scientist_steps: 40          # smoke-sized research budget
 agent_timeout_seconds: 3600
 eval_timeout_seconds: 600
-max_proposer_inflight: 1
-max_experiment_inflight: 1
+max_proposer_inflight: 3   # multi-seat concurrency visible in the smoke
+max_experiment_inflight: 2
 poll_seconds: 2.0
-queue_max_size: 10
+queue_max_size: 16
 quiescence_window_proposals: 2
 
 # Frontier selection policy.
 frontier_policy: topk  # gepa or topk
-# Width for the "topk" policy.
-frontier_top_k: 3
-# Seat design v6: the per-node research cap that made this tree fractal is
-# dissolved; each node is studied once by construction (its children enter
-# the pool and the frontier keeps the top 3), enforced by episode
-# single-use rather than a count.
+# Width for the "topk" policy (match the new breadth).
+frontier_top_k: 4
+# Seat design v6: max_research_per_node / max_proposals_per_node /
+# generator_reseed are dissolved. Breadth is the Supervisor buying seats
+# (node x lens); one seat = one lease with exactly one reserved proposal id;
+# the budget is the only boundary. Lenses live in the repo-root
+# generator.json (three-part standard).
+# Persistent growth-gate runtime (see task-supervisor.yaml).
+supervisor_steps: 30
+supervisor_max_retries: 3

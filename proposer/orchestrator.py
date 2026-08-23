@@ -257,15 +257,15 @@ class ProposerOrchestrator:
         prompt_dir: Path | None,
         research_state_seed: dict | None = None,
         world_transition: dict | None = None,
-        generator_basis: list[dict] | None = None,
-        suggested_operator_id: str | None = None,
+        lens: dict | None = None,
         hints: list[str] | None = None,
         proposal_slots: int = 1,
         scientist_steps: int = 200,
     ) -> "EpisodeResult":
-        """Run one Scientist episode keyed by (episode_id, node_id).
+        """Run one seat episode keyed by (episode_id, node_id).
 
         This is the SimpleEvolution entry point: no lane_id, no round_id.
+        ``lens`` is the seat's identity block from the lease payload.
         """
         started = time.monotonic()
         session = ScientistSession.load_or_create_for_episode(
@@ -282,8 +282,7 @@ class ProposerOrchestrator:
                 hints=hints, session=session, max_steps=scientist_steps,
                 world_transition=transition_text,
                 research_state_seed=research_state_seed,
-                generator_basis=generator_basis,
-                suggested_operator_id=suggested_operator_id,
+                lens=lens,
                 node_id=node_id, episode_id=episode_id,
             )
         except (ProposerError, Exception) as exc:

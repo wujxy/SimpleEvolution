@@ -138,7 +138,10 @@ def test_list_nodes_shows_all_history_with_mechanical_flag(tmp_path: Path):
         world["root"].node_id, world["dormant"].node_id, world["dead"].node_id,
     }
     assert by_id[world["dead"].node_id]["allocatable"] is False
-    assert by_id[world["dormant"].node_id]["allocatable"] is False  # open lease
+    # Seat semantics: an open seat does NOT make a node unpurchasable —
+    # another lens on the same node is a legal concurrent purchase.
+    assert by_id[world["dormant"].node_id]["allocatable"] is True
+    assert by_id[world["dormant"].node_id]["seats_inflight"] == 1
     assert by_id[world["root"].node_id]["allocatable"] is True
     assert "ranking" not in listing
     assert "recommended" not in listing

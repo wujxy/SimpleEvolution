@@ -139,6 +139,7 @@ def _api_preflight(config) -> None:
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
+    t0 = time.monotonic()
     random.seed(args.seed)
     config = load_config(args.config)
     _api_preflight(config)
@@ -177,21 +178,28 @@ def _cmd_run(args: argparse.Namespace) -> int:
         step += 1
         n_term = _terminal_count(queries)
         spend = _spend_usd(run_dir, config.pricing)
+        elapsed = time.monotonic() - t0
         for event in _latest_events(queries, seen):
             log(f"[supervisor-int] event {event}")
         log(
             f"[supervisor-int] step={step} terminal_evals={n_term} "
-            f"spend=${spend:.4f} frontier={telemetry.get('frontier_size')} "
+            f"spend=${spend:.4f} elapsed={elapsed / 3600:.2f}h "
+            f"frontier={telemetry.get('frontier_size')} "
             f"pub={telemetry.get('published')} int_jobs={telemetry.get('integrator_jobs')} "
             f"exp_jobs={telemetry.get('experiment_jobs')} ingest={telemetry.get('ingested')}"
         )
-        capped = n_term >= args.max_evals or (args.budget_usd and spend >= args.budget_usd)
+        capped = (
+            n_term >= args.max_evals
+            or (args.budget_usd and spend >= args.budget_usd)
+            or (args.max_seconds and elapsed >= args.max_seconds)
+        )
         if capped:
             scheduler.stop_allocating = True
         if capped and not scheduler._in_flight():
             log(
                 f"[supervisor-int] cap reached "
-                f"(evals={n_term}/{args.max_evals}, spend=${spend:.2f}/{args.budget_usd}); "
+                f"(evals={n_term}/{args.max_evals}, spend=${spend:.2f}/{args.budget_usd}, "
+                f"elapsed={elapsed / 3600:.2f}h/{args.max_seconds / 3600:.2f}h); "
                 f"in-flight drained, stopping"
             )
             break
@@ -208,7 +216,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
             break
         time.sleep(config.poll_seconds)
 
-    log(f"[supervisor-int] done: {n_term} terminal evals, ${spend:.2f} spent")
+    log(
+        f"[supervisor-int] done: {n_term} terminal evals, ${spend:.2f} spent, "
+        f"{(time.monotonic() - t0) / 3600:.2f}h elapsed"
+    )
     return 0
 
 
@@ -219,6 +230,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--max-evals", type=int, default=14)
     parser.add_argument("--budget-usd", type=float, default=6.0)
+    parser.add_argument(
+        "--max-seconds", type=float, default=0.0,
+        help="wall-clock cap in seconds (0 = no time cap); at the deadline no "
+             "new work starts and the run stops once in-flight evals drain",
+    )
     args = parser.parse_args(argv)
     return _cmd_run(args)
 

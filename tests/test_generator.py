@@ -8,7 +8,6 @@ from simpleevo.generator import (
     Generator,
     load_generator_basis,
     sample_generators,
-    select_one_generator,
 )
 
 
@@ -80,9 +79,11 @@ def test_sample_k_truncates_to_untried_count():
     assert [g.id for g in chosen] == ["G4"]
 
 
-def test_select_one_generator_returns_first_untried():
-    assert select_one_generator(_basis(), {"G1", "G2"}).id == "G3"
-
-
-def test_select_one_generator_returns_none_when_exhausted():
-    assert select_one_generator(_basis(), {"G1", "G2", "G3", "G4"}) is None
+def test_shipped_basis_carries_three_part_standard():
+    # Seat design §2.2: every lens is directive + forbidden + self_check —
+    # a lens without its negative ban and decidable self-check degrades to
+    # decoration (v3 G1 evidence).
+    basis = load_generator_basis()
+    assert all(item.directive.strip() for item in basis)
+    assert all(item.forbidden.strip() for item in basis)
+    assert all(item.self_check.strip() for item in basis)

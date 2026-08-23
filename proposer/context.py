@@ -4,8 +4,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from simpleevo.generator import Generator
-
 
 def build_research_state_seed_pack(seed: dict[str, Any]) -> str:
     """Render a Child's facts-first, proposal-specific starting point."""
@@ -16,8 +14,8 @@ def build_research_state_seed_pack(seed: dict[str, Any]) -> str:
     experiment = seed.get("experiment", {})
     child = seed.get("child_node", {})
     lines = [
-        "You are a newly assigned Scientist to this Child world. You inherit "
-        "the objective project, not the predecessor's cognition. The facts "
+        "You are newly assigned to this Child world. You inherit the "
+        "objective project, not the predecessor's cognition. The facts "
         "below are authoritative Harness records; form your own working "
         "model from the current world and them.",
         "Current Child Node — authoritative Harness facts:",
@@ -33,30 +31,28 @@ def build_research_state_seed_pack(seed: dict[str, Any]) -> str:
         # candidate set, while the v4 pointer was measured at 0/10 use —
         # a second-hand channel that never fires is a severed channel).
         # How to treat the note is the successor's own judgment, per its
-        # charter; no framing is added here.
-        lines.append("Your predecessor left this note:")
+        # charter; the only framing added here is the authorship fact: the
+        # memo is signed with its seat's lens, so "this is one school's
+        # attributed view, discountable as a whole" is structural rather
+        # than advised (seat design §2.3).
+        lens = seed.get("originating_lens")
+        if lens:
+            lines.append(
+                f"Your predecessor left this note — filed by the {lens} "
+                "seat, the attributed view of one school of thought on "
+                "this problem:"
+            )
+        else:
+            lines.append("Your predecessor left this note:")
         lines.append(str(state["working_model"]).strip())
     return "\n".join(lines)
-
-
-def build_generator_catalog(generators: list[Generator]) -> str:
-    """Expose every available cognitive operator without recommending one."""
-    return "\n".join([
-        "Cognitive generators available for an optional mentor consultation:",
-        *(
-            f"- {item.id} — {item.name}: {item.description}"
-            for item in generators
-        ),
-        "Choose an operator yourself and pass its id to transform_worldview "
-        "when an external challenge would help.",
-    ])
 
 
 def build_world_transition_pack(transition: dict[str, Any]) -> str:
     """Format an experiment result as a world-transition message.
 
     ``transition`` comes from the Scheduler and contains the parent/child facts
-    (metrics, gate, diff).  This text is injected into the Scientist's resume
+    (metrics, gate, diff).  This text is injected into the seat's resume
     context as the authoritative world event.
     """
     if not transition:

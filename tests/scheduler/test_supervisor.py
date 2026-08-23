@@ -143,7 +143,8 @@ def test_gate_wakes_on_events_and_creates_linked_leases(tmp_path: Path):
 
     submitter.write_decision(work_id, {
         "decision_id": "d1", "decision_kind": "growth",
-        "node_ids": [root.node_id], "rationale": "root first.",
+        "seat_purchases": [{"node_id": root.node_id, "lens": "G5"}],
+        "rationale": "root first through the inversion lens.",
         "detail": {}, "event_cursor_to": 1,
     })
     scheduler.step()
@@ -155,6 +156,22 @@ def test_gate_wakes_on_events_and_creates_linked_leases(tmp_path: Path):
     assert allocation.decision_id == "d1"
     decision = store.get_supervisor_decision("d1")
     assert decision["node_ids"] == [root.node_id]
+    assert decision["detail"]["seat_purchases"] == [
+        {"node_id": root.node_id, "lens": "G5"}]
+    # Seat mechanics: exactly one reserved proposal id (oneness is a
+    # harness fact), and the lens is stamped on the episode atomically.
+    assert len(allocation.reserved_proposal_ids) == 1
+    episode = scheduler._queries.get_episode(allocation.episode_id)
+    assert episode.variation_operator == "G5"
+    # The proposer payload carries the seat identity block, not a catalog.
+    (allocation_id, payload) = submitter.proposer[0]
+    assert payload["seat"]["lens_id"] == "G5"
+    assert payload["seat"]["directive"]
+    assert payload["seat"]["forbidden"]
+    assert payload["seat"]["self_check"]
+    assert "suggested_operator_id" not in payload
+    assert "generator_basis" not in payload
+    assert payload["proposal_slots"] == 1
     assert store.latest_scheduler_event("supervisor_decision_accepted")[
         "decision_id"] == "d1"
     assert len(submitter.proposer) == 1
@@ -174,14 +191,17 @@ def test_gate_selects_historical_node_unrelated_to_new_event(tmp_path: Path):
     scheduler.step()
     work_id, _ = submitter.supervisor[0]
     submitter.write_decision(work_id, {
-        "decision_id": "d1", "decision_kind": "growth", "node_ids": [],
-        "rationale": "wait.", "detail": {}, "event_cursor_to": 1,
+        "decision_id": "d1", "decision_kind": "growth",
+        "seat_purchases": [{"node_id": root.node_id, "lens": "G4"}],
+        "rationale": "root, symmetry lens first.", "detail": {},
+        "event_cursor_to": 1,
     })
     scheduler.step()
     assert store.supervisor_event_cursor() == 1
 
     # New evidence lands about the dormant child; the gate may still pick
-    # the root (invariant 8).
+    # the historical root over the newest event's node (invariant 8) —
+    # through a lens its lineage has not burned.
     store.emit_supervisor_event(
         "experiment_terminal",
         {"experiment_id": "exp-child", "status": "no_change",
@@ -192,13 +212,16 @@ def test_gate_selects_historical_node_unrelated_to_new_event(tmp_path: Path):
     assert work_id2 == "supervisor-2"
     submitter.write_decision(work_id2, {
         "decision_id": "d2", "decision_kind": "growth",
-        "node_ids": [root.node_id], "rationale": "root is the better bet.",
-        "detail": {}, "event_cursor_to": 2,
+        "seat_purchases": [{"node_id": root.node_id, "lens": "G7"}],
+        "rationale": "root is the better bet.", "detail": {},
+        "event_cursor_to": 2,
     })
     scheduler.step()
-    (allocation,) = store.open_allocations()
-    assert allocation.node_id == root.node_id
-    assert allocation.decision_id == "d2"
+    # d1's seat is still open alongside d2's — the historical pick joined
+    # it on the same node through a different lens.
+    d2 = [a for a in store.open_allocations() if a.decision_id == "d2"]
+    assert len(d2) == 1
+    assert d2[0].node_id == root.node_id
 
 
 def test_zero_one_and_many_selections(tmp_path: Path):
@@ -208,17 +231,22 @@ def test_zero_one_and_many_selections(tmp_path: Path):
     scheduler = _scheduler(
         store, tmp_path, submitter, max_proposer_inflight=2)
 
+    # An empty purchase list with untried seats remaining and nothing in
+    # flight is REJECTED — honest quiescence (seat design §2.4): waiting
+    # needs in-flight evidence, completing needs an exhausted untried set.
     scheduler.step()
     work_id, _ = submitter.supervisor[0]
     submitter.write_decision(work_id, {
-        "decision_id": "d-empty", "decision_kind": "growth", "node_ids": [],
-        "rationale": "nothing yet.", "detail": {}, "event_cursor_to": 1,
+        "decision_id": "d-empty", "decision_kind": "growth",
+        "seat_purchases": [], "rationale": "nothing yet.", "detail": {},
+        "event_cursor_to": 1,
     })
     scheduler.step()
-    assert store.supervisor_event_cursor() == 1
+    assert store.supervisor_event_cursor() == 0
     assert store.open_allocations() == []
-    # An empty selection with nothing in flight quiesces (invariant 11).
-    assert scheduler._quiescent() is True
+    assert "untried seats remain" in store.latest_scheduler_event(
+        "supervisor_decision_rejected")["error"]
+    assert scheduler._quiescent() is False
 
     store.emit_supervisor_event(
         "experiment_terminal",
@@ -229,13 +257,117 @@ def test_zero_one_and_many_selections(tmp_path: Path):
     work_id, _ = submitter.supervisor[1]
     submitter.write_decision(work_id, {
         "decision_id": "d-two", "decision_kind": "growth",
-        "node_ids": [root.node_id, child.node_id],
-        "rationale": "both deserve one lease.", "detail": {},
+        "seat_purchases": [
+            {"node_id": root.node_id, "lens": "G5"},
+            {"node_id": child.node_id, "lens": "G2"},
+        ],
+        "rationale": "both deserve a seat.", "detail": {},
         "event_cursor_to": 2,
     })
     scheduler.step()
-    assert {a.node_id for a in store.open_allocations()} == {
-        root.node_id, child.node_id}
+    seats = {(a.node_id,
+              scheduler._queries.get_episode(a.episode_id).variation_operator)
+             for a in store.open_allocations()}
+    assert seats == {(root.node_id, "G5"), (child.node_id, "G2")}
+
+
+def test_two_seats_on_one_node_get_distinct_episodes_and_lenses(
+        tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    root, _, _ = _seed(store)
+    submitter = Submitter(tmp_path)
+    scheduler = _scheduler(
+        store, tmp_path, submitter, max_proposer_inflight=2)
+
+    scheduler.step()
+    work_id, _ = submitter.supervisor[0]
+    submitter.write_decision(work_id, {
+        "decision_id": "d-seats", "decision_kind": "growth",
+        "seat_purchases": [
+            {"node_id": root.node_id, "lens": "G1"},
+            {"node_id": root.node_id, "lens": "G3"},
+        ],
+        "rationale": "two schools on one world.", "detail": {},
+        "event_cursor_to": 1,
+    })
+    scheduler.step()
+    allocations = store.open_allocations()
+    assert len(allocations) == 2
+    assert len({a.episode_id for a in allocations}) == 2
+    lenses = {
+        scheduler._queries.get_episode(a.episode_id).variation_operator
+        for a in allocations
+    }
+    assert lenses == {"G1", "G3"}
+    # The first seat consumed the node's never-allocated episode; the
+    # second got a fresh sibling episode (no session inheritance).
+    episodes = scheduler._queries.episodes_for_node(
+        root.node_id, limit=100)
+    assert len(episodes) == 2
+    assert all(e.inherited_from_episode_id is None for e in episodes)
+
+
+def test_lineage_dedup_rejects_burned_lens(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    root, _, _ = _seed(store)
+    submitter = Submitter(tmp_path)
+    scheduler = _scheduler(store, tmp_path, submitter)
+
+    scheduler.step()
+    work_id, _ = submitter.supervisor[0]
+    submitter.write_decision(work_id, {
+        "decision_id": "d1", "decision_kind": "growth",
+        "seat_purchases": [{"node_id": root.node_id, "lens": "G5"}],
+        "rationale": "buy G5.", "detail": {}, "event_cursor_to": 1,
+    })
+    scheduler.step()
+    assert len(store.open_allocations()) == 1
+
+    # Same lens on the same node: a repeated bet — rejected whole.
+    store.emit_supervisor_event("goal_changed", {"goal": "x"})
+    scheduler.step()
+    work_id2, _ = submitter.supervisor[1]
+    submitter.write_decision(work_id2, {
+        "decision_id": "d2", "decision_kind": "growth",
+        "seat_purchases": [{"node_id": root.node_id, "lens": "G5"}],
+        "rationale": "buy G5 again.", "detail": {}, "event_cursor_to": 2,
+    })
+    scheduler.step()
+    assert store.get_supervisor_decision("d2") is None
+    error = store.latest_scheduler_event(
+        "supervisor_decision_rejected")["error"]
+    assert "already burned" in error
+
+
+def test_empty_selection_completes_when_untried_exhausted(tmp_path: Path):
+    store = ResearchStore(tmp_path / "state.db")
+    root, _, child = _seed(store, extra_child=True)
+    submitter = Submitter(tmp_path)
+    scheduler = _scheduler(store, tmp_path, submitter)
+    basis = scheduler._generator_basis_or_load()
+
+    # Burn every lens on every living node: the untried set is exhausted.
+    with store.transaction() as tx:
+        for node in (root, child):
+            for item in basis:
+                tx.create_episode(
+                    node_id=node.node_id,
+                    inherited_from_episode_id=None,
+                    variation_operator=item.id,
+                )
+
+    scheduler.step()
+    work_id, _ = submitter.supervisor[0]
+    untried = submitter.supervisor[0][1]["batch"]["untried"]
+    assert all(not row["lenses"] for row in untried)
+    submitter.write_decision(work_id, {
+        "decision_id": "d-done", "decision_kind": "growth",
+        "seat_purchases": [], "rationale": "no question remains unbought.",
+        "detail": {}, "event_cursor_to": 1,
+    })
+    scheduler.step()
+    assert store.supervisor_event_cursor() == 1
+    assert store.get_supervisor_decision("d-done") is not None
 
 
 def test_empty_selection_waits_while_work_remains(tmp_path: Path):
@@ -249,9 +381,9 @@ def test_empty_selection_waits_while_work_remains(tmp_path: Path):
     scheduler.step()
     work_id, _ = submitter.supervisor[0]
     submitter.write_decision(work_id, {
-        "decision_id": "d1", "decision_kind": "growth", "node_ids": [],
-        "rationale": "wait for in-flight work.", "detail": {},
-        "event_cursor_to": 1,
+        "decision_id": "d1", "decision_kind": "growth",
+        "seat_purchases": [], "rationale": "wait for in-flight work.",
+        "detail": {}, "event_cursor_to": 1,
     })
     scheduler.step()
     assert scheduler._quiescent() is False
@@ -272,8 +404,8 @@ def test_stale_decision_is_not_applied_and_batch_is_redelivered(tmp_path: Path):
          "outcome": "abstain"})
     submitter.write_decision(work_id, {
         "decision_id": "d1", "decision_kind": "growth",
-        "node_ids": [root.node_id], "rationale": "stale.",
-        "detail": {}, "event_cursor_to": 1,
+        "seat_purchases": [{"node_id": root.node_id, "lens": "G5"}],
+        "rationale": "stale.", "detail": {}, "event_cursor_to": 1,
     })
     scheduler.step()
 
@@ -334,8 +466,8 @@ def test_invalid_decision_is_rejected_and_retried_same_batch(tmp_path: Path):
     work_id, _ = submitter.supervisor[0]
     submitter.write_decision(work_id, {
         "decision_id": "d-bad", "decision_kind": "growth",
-        "node_ids": ["ghost-node"], "rationale": "unknown node.",
-        "detail": {}, "event_cursor_to": 1,
+        "seat_purchases": [{"node_id": "ghost-node", "lens": "G5"}],
+        "rationale": "unknown node.", "detail": {}, "event_cursor_to": 1,
     })
     scheduler.step()
     assert store.latest_scheduler_event("supervisor_decision_rejected")[
@@ -359,7 +491,10 @@ def test_over_capacity_decision_is_rejected_whole(tmp_path: Path):
     work_id, _ = submitter.supervisor[0]
     submitter.write_decision(work_id, {
         "decision_id": "d-cap", "decision_kind": "growth",
-        "node_ids": [root.node_id, child.node_id],
+        "seat_purchases": [
+            {"node_id": root.node_id, "lens": "G5"},
+            {"node_id": child.node_id, "lens": "G2"},
+        ],
         "rationale": "too many.", "detail": {}, "event_cursor_to": 1,
     })
     scheduler.step()
@@ -533,7 +668,8 @@ def test_restart_redelivers_unconsumed_batch_to_same_work(tmp_path: Path):
     # The redelivered batch commits exactly once.
     submitter.write_decision("supervisor-1", {
         "decision_id": "d-restart", "decision_kind": "growth",
-        "node_ids": [root.node_id], "rationale": "second delivery decides.",
+        "seat_purchases": [{"node_id": root.node_id, "lens": "G5"}],
+        "rationale": "second delivery decides.",
         "detail": {}, "event_cursor_to": 1,
     })
     second.step()
