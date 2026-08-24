@@ -1719,6 +1719,45 @@ def _dispatch(action: dict, proposal_slots: int) -> dict:
         if not isinstance(skill_id, str) or not skill_id.strip():
             raise ProposerError("use_research_skill.skill_id must be non-empty")
         return {"action": name, "skill_id": skill_id.strip()}
+    if name == "consult":
+        _require_keys(
+            action, {"action", "question"}, {"context", "read"},
+        )
+        question = action["question"]
+        if not isinstance(question, str) or not question.strip():
+            raise ProposerError("consult.question must be non-empty")
+        read = action.get("read", "none")
+        if read not in {"none", "node", "lab"}:
+            raise ProposerError("consult.read must be none|node|lab")
+        parsed = {"action": name, "question": question.strip(), "read": read}
+        context = action.get("context")
+        if context is not None:
+            if not isinstance(context, str):
+                raise ProposerError("consult.context must be a string")
+            parsed["context"] = context
+        return parsed
+    if name == "work":
+        _require_keys(
+            action, {"action", "instruction"},
+            {"mode", "budget_minutes"},
+        )
+        instruction = action["instruction"]
+        if not isinstance(instruction, str) or not instruction.strip():
+            raise ProposerError("work.instruction must be non-empty")
+        mode = action.get("mode", "continue")
+        if mode not in {"continue", "fresh"}:
+            raise ProposerError("work.mode must be continue|fresh")
+        budget = action.get("budget_minutes")
+        if budget is not None and (
+            not isinstance(budget, (int, float)) or isinstance(budget, bool)
+            or budget <= 0
+        ):
+            raise ProposerError("work.budget_minutes must be a positive number")
+        parsed = {"action": name, "instruction": instruction.strip(),
+                  "mode": mode}
+        if budget is not None:
+            parsed["budget_minutes"] = budget
+        return parsed
     if name == "register_research_state":
         _require_keys(
             action,

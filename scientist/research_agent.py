@@ -128,8 +128,12 @@ def _fingerprint(action: dict) -> str:
         return f"{name}:{action['experiment_id']}"
     if name == "inspect_finding":
         return f"{name}:{action['finding_id']}"
-    if name == "register_research_state":
+    if name in ("register_research_state", "update_research_state"):
         digest = hashlib.sha1(action["working_model"].encode()).hexdigest()[:12]
+        return f"{name}:{digest}"
+    if name in ("consult", "work"):
+        key = "question" if name == "consult" else "instruction"
+        digest = hashlib.sha1(action[key].encode()).hexdigest()[:12]
         return f"{name}:{digest}"
     if name in ("search_findings", "search_experiments"):
         return f"{name}:{action.get('query')}"
@@ -274,8 +278,11 @@ def _action_summary(action: dict) -> str:
         elif "finding_id" in action:
             extra = f" finding_id={action.get('finding_id', '')}"
         return f"action={name}{extra}"
-    if name == "register_research_state":
+    if name in ("register_research_state", "update_research_state"):
         return f"action={name} working_model_chars={len(action['working_model'])}"
+    if name in ("consult", "work"):
+        key = "question" if name == "consult" else "instruction"
+        return f"action={name} {key}_chars={len(action[key])}"
     if name == "submit_proposals":
         return f"action={name} count={len(action['proposals'])}"
     if name == "submit_hypothesis":
