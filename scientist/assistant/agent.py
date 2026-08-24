@@ -91,9 +91,22 @@ class Agent:
                 flush=True,
             )
 
-    def run_text(self, prompt: str, *, cwd: Path, label: str = "agent") -> str:
-        """Run the agent, return its raw text."""
-        return self._run(prompt, cwd=cwd, label=label).text
+    def run_text(
+        self,
+        prompt: str,
+        *,
+        cwd: Path,
+        label: str = "agent",
+        world_cwd: PurePosixPath | None = None,
+    ) -> str:
+        """Run the agent, return its raw text.
+
+        ``world_cwd`` overrides the sandbox working directory (default
+        /work) — the consult channel with no world mounted runs from /.
+        """
+        return self._run(
+            prompt, cwd=cwd, label=label, world_cwd=world_cwd,
+        ).text
 
     def _start_trace(self) -> None:
         if self.trace_store is None or self.invocation_id is None:
@@ -119,7 +132,14 @@ class Agent:
             except Exception as exc:
                 print(f"[trace] append failed: {exc}", flush=True)
 
-    def _run(self, prompt: str, *, cwd: Path, label: str) -> AgentResult:
+    def _run(
+        self,
+        prompt: str,
+        *,
+        cwd: Path,
+        label: str,
+        world_cwd: PurePosixPath | None = None,
+    ) -> AgentResult:
         payload = [
             self.command, "-p",
             "--input-format", "text",
@@ -130,14 +150,15 @@ class Agent:
         if self.model:
             payload += ["--model", self.model]
         payload += self.extra_args
+        sandbox_cwd = world_cwd or PurePosixPath("/work")
         print(
             f"[{label}] claude call started "
-            f"(timeout={self.timeout_seconds}s, world=/work)",
+            f"(timeout={self.timeout_seconds}s, world={sandbox_cwd})",
             flush=True,
         )
         self._start_trace()
         completed = self.world.run(ProcessRequest(
-            tuple(payload), PurePosixPath("/work"), self.timeout_seconds,
+            tuple(payload), sandbox_cwd, self.timeout_seconds,
             stdin=prompt, label=label,
         ))
         self._append_trace_lines(completed.stdout)

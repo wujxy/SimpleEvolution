@@ -10,6 +10,12 @@ class ResearchSkill:
     skill_id: str
     description: str
     filename: str
+    # Loaded in full into the system prompt at wake-up instead of on
+    # demand.  claude_use teaches the seat-assistant relationship — it
+    # must be present before the first decision, not fetched after the
+    # seat has already forgotten its assistant exists (科学家完整研究制
+    # §8.2: 技能开局加载).
+    always_load: bool = False
 
 
 _SKILLS = (
@@ -18,6 +24,13 @@ _SKILLS = (
         "Rebuild a Child world's question from current facts instead of "
         "continuing the predecessor's memo.",
         "reframe_inherited_problem.md",
+    ),
+    ResearchSkill(
+        "claude_use",
+        "How to work with your all-round assistant: when to ask, debate, "
+        "delegate, and have it review — and when to just do it yourself.",
+        "claude_use.md",
+        always_load=True,
     ),
 )
 _BY_ID = {skill.skill_id: skill for skill in _SKILLS}
@@ -29,6 +42,15 @@ def render_research_skill_catalog() -> str:
     return "\n".join(
         f"- {skill.skill_id}: {skill.description}" for skill in _SKILLS
     )
+
+
+def render_startup_skills() -> str:
+    """Full text of every always-load skill (the wake-up block)."""
+    parts = [
+        load_research_skill(skill.skill_id)
+        for skill in _SKILLS if skill.always_load
+    ]
+    return "\n\n".join(parts)
 
 
 def load_research_skill(skill_id: str) -> str:

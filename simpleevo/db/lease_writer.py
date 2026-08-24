@@ -225,3 +225,55 @@ def mark_call_adopted(
         raise
     finally:
         conn.close()
+
+
+def record_resource_row(
+    db_path: str | Path,
+    *,
+    ref_id: str,
+    kind: str,
+    allocation_id: str | None = None,
+    opened_at: float,
+) -> str:
+    """Open one unified-resource-account row (seat | work | eval)."""
+    import uuid
+
+    ledger_id = uuid.uuid4().hex
+    conn = _connect(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "INSERT INTO resource_ledger "
+            "(ledger_id, kind, ref_id, allocation_id, opened_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (ledger_id, kind, ref_id, allocation_id, opened_at),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return ledger_id
+
+
+def close_resource_row(
+    db_path: str | Path,
+    *,
+    ref_id: str,
+) -> None:
+    """Close every still-open ledger row for one occupancy ref."""
+    conn = _connect(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "UPDATE resource_ledger SET closed_at = ? "
+            "WHERE ref_id = ? AND closed_at IS NULL",
+            (time.time(), ref_id),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
