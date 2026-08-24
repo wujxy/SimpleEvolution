@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from .contracts import EvaluationResult, ExecutionSandbox, ProcessRequest
+from simpleevo.contracts import EvaluationResult, ExecutionSandbox, ProcessRequest
 
 
 @dataclass(frozen=True)

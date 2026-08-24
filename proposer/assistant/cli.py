@@ -12,7 +12,7 @@ from pathlib import Path
 
 from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
 
-from .contracts import ExperimentRequest, ExperimentResult
+from simpleevo.contracts import ExperimentRequest, ExperimentResult
 from .runner import ExperimentRunner, InfraFailure
 
 

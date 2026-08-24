@@ -5,8 +5,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from experiment.contracts import CommitRequest, WorkspaceSpec
-from experiment.git_worktree import GitWorkspaceProvider
+from simpleevo.contracts import CommitRequest, WorkspaceSpec
+from proposer.assistant.git_worktree import GitWorkspaceProvider
 
 
 def _run(repo: Path, *args: str) -> None:

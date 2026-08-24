@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
-from .contracts import ExecutionSandbox, ProcessRequest
+from simpleevo.contracts import ExecutionSandbox, ProcessRequest
 
 
 class AgentError(RuntimeError):

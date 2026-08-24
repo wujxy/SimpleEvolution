@@ -9,7 +9,7 @@ the environment carries.
 """
 from __future__ import annotations
 
-from experiment.apptainer import evaluator_environment, executor_environment
+from simpleevo.runtime import evaluator_environment, executor_environment
 
 
 def _poisoned_environ(monkeypatch):

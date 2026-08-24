@@ -1,7 +1,7 @@
 """Validate the shipped tiny_algo_opt example against the evaluator contract.
 
 This locks the example's metric contract (objective float + gate booleans) to
-the real ``experiment.evaluator`` parser without needing Apptainer or a model:
+the real ``simpleevo.adjudicate.evaluator`` parser without needing Apptainer or a model:
 the toy repo is pure Python, so the eval commands run on the host interpreter.
 """
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from experiment.evaluator import _parse_metrics
+from simpleevo.adjudicate.evaluator import _parse_metrics
 from simpleevo.config import load_config
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[1] / "examples" / "tiny_algo_opt"

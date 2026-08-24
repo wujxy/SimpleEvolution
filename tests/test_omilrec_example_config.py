@@ -4,13 +4,13 @@ The OMILREC eval is heavy and needs the host JUNO stack (/cvmfs) + bench data
 (/data/juno/dingxf), so unlike tiny_algo_opt we cannot run the real eval here.
 Instead we lock the contract: the task.yaml resolves correctly, declares the
 objective + gates, requests the read-only binds, and a representative eval
-output block parses through the real ``experiment.evaluator`` parser.
+output block parses through the real ``simpleevo.adjudicate.evaluator`` parser.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from experiment.evaluator import _parse_metrics
+from simpleevo.adjudicate.evaluator import _parse_metrics
 from simpleevo.config import load_config
 
 EXAMPLE_DIR = Path(__file__).resolve().parents[1] / "examples" / "omilrec_opt"

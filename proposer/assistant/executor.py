@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .agent import Agent, AgentError
-from .contracts import ExecutionResult, SourceWorkspace
+from simpleevo.contracts import ExecutionResult, SourceWorkspace
 
 
 @dataclass(frozen=True)

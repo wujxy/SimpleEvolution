@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .contracts import EvaluationResult, GateDecision, GateResult
+from simpleevo.contracts import EvaluationResult, GateDecision, GateResult
 
 
 PATHS = "PATHS"  # reserved row: always True (editable-set enforcement moved

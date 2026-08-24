@@ -9,7 +9,7 @@ import subprocess
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
-from .contracts import ChangeSet, CommitRequest, SourceWorkspace, WorkspaceError, WorkspaceSpec
+from simpleevo.contracts import ChangeSet, CommitRequest, SourceWorkspace, WorkspaceError, WorkspaceSpec
 
 # git-lfs pointer header: "oid sha256:<hex>" (the real content lives in the
 # clone's .git/lfs/objects store, sha256-addressed).

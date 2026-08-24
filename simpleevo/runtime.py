@@ -15,7 +15,7 @@ import time
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
-from .contracts import (
+from simpleevo.contracts import (
     MountMode,
     MountSpec,
     ProcessRequest,

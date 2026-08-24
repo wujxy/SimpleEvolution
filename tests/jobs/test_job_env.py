@@ -14,7 +14,8 @@ def test_package_parent_points_at_the_repo():
     parent = job_env.package_parent()
     assert (parent / "simpleevo").is_dir()
     assert (parent / "proposer").is_dir()
-    assert (parent / "experiment").is_dir()
+    assert (parent / "proposer").is_dir()
+    assert (parent / "proposer" / "assistant").is_dir()
 
 
 def test_worker_environment_sets_pythonpath_and_forwarded_env():

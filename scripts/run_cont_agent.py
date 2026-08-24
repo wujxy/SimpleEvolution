@@ -121,8 +121,8 @@ class ContAgentRunner:
         is the point.  Snapshots stage src/ only, so nothing else it touches
         can reach a replayed node.
         """
-        from experiment.apptainer import ApptainerSandbox, executor_environment
-        from experiment.contracts import (
+        from simpleevo.runtime import ApptainerSandbox, executor_environment
+        from simpleevo.contracts import (
             MountMode,
             MountSpec,
             SandboxSpec,
@@ -152,7 +152,7 @@ class ContAgentRunner:
         )
 
     def _session_prompt(self, hours: float, baseline: float) -> str:
-        from experiment.prompts import load_semantic
+        from proposer.assistant.prompts import load_semantic
 
         semantic = load_semantic("executor", self.config.prompt_dir)
         if self.args.mode == "continuation":
@@ -255,7 +255,7 @@ SELF_REPORT block (see the protocol in your role brief) and stop.
         return text[:6000] or "(previous shift report unavailable)"
 
     def run_session(self, ws_path: Path, baseline: float) -> None:
-        from experiment.agent import Agent
+        from proposer.assistant.agent import Agent
         from simpleevo.trace.store import TraceStore
 
         timeout = max(60, int(self.deadline - time.monotonic()) - 30)
@@ -346,19 +346,19 @@ SELF_REPORT block (see the protocol in your role brief) and stop.
 
     def _replay_eval(self, sha: str, core: int):
         """Pristine-harness verify+bench of a snapshot commit on ``core``."""
-        from experiment.apptainer import (
+        from simpleevo.runtime import (
             ApptainerSandbox,
             evaluator_environment,
         )
-        from experiment.contracts import (
+        from simpleevo.contracts import (
             EvaluationResult,
             MountMode,
             MountSpec,
             SandboxSpec,
             WorkspaceSpec,
         )
-        from experiment.evaluator import run_eval
-        from experiment.gate import GateSpec, apply_gates
+        from simpleevo.adjudicate.evaluator import run_eval
+        from simpleevo.adjudicate.gate import GateSpec, apply_gates
 
         ws = self.provider.create(WorkspaceSpec(f"replay-{sha[:8]}", sha))
         try:
@@ -452,8 +452,8 @@ SELF_REPORT block (see the protocol in your role brief) and stop.
 
     def run(self) -> int:
         from ablation.driver import _spend_usd
-        from experiment.contracts import WorkspaceSpec
-        from experiment.git_worktree import GitWorkspaceProvider
+        from simpleevo.contracts import WorkspaceSpec
+        from proposer.assistant.git_worktree import GitWorkspaceProvider
         from simpleevo.cli import _ensure_baseline_measured, _init_run
         from simpleevo.db.queries import ResearchQueries
 

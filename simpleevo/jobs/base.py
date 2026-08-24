@@ -171,7 +171,7 @@ class BaseSubmitter(ABC):
             "proposer": "proposer.cli",
             "supervisor": "proposer.supervisor_cli",
             "integrator": "proposer.integrator_cli",
-            "experiment": "experiment.cli",
+            "experiment": "proposer.assistant.cli",
         }
         module = modules[kind]
         return [

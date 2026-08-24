@@ -5,13 +5,13 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .agent import Agent
-from .apptainer import (
+from simpleevo.runtime import (
     ApptainerSandbox,
     SandboxSpec,
     executor_environment,
     forwarded_payload_env,
 )
-from .contracts import (
+from simpleevo.contracts import (
     CommitRequest,
     EvaluationResult,
     ExecutionResult,
@@ -24,9 +24,9 @@ from .contracts import (
     SourceWorkspace,
     WorkspaceSpec,
 )
-from .evaluator import run_eval
+from simpleevo.adjudicate.evaluator import run_eval
 from .executor import AgentExecutor, ExecutorConfig
-from .gate import GateSpec, apply_gates
+from simpleevo.adjudicate.gate import GateSpec, apply_gates
 from .git_worktree import GitWorkspaceProvider
 
 
@@ -197,7 +197,7 @@ class ExperimentRunner:
         timeout / non-finite objective) raise InfraFailure like any other
         worker, keeping the failure-semantic separation (§16/§17) intact.
         """
-        from .evaluator import validate_baseline
+        from simpleevo.adjudicate.evaluator import validate_baseline
 
         evaluation = self._run_evaluator(workspace)
         objective = self.request.metrics_schema.get("objective") or {}

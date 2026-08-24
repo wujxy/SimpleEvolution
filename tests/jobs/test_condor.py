@@ -78,7 +78,7 @@ def test_submit_stages_job_files_and_parses_cluster_id(tmp_path, monkeypatch):
     # job.sh sources job_env.sh and runs the worker with --job-id from $1.
     job_sh = (exp_dir / "job.sh").read_text()
     assert "source" in job_sh and "job_env.sh" in job_sh
-    assert "-m experiment.cli" in job_sh
+    assert "-m proposer.assistant.cli" in job_sh
     assert "--backend condor" in job_sh
     assert '--job-id "$1"' in job_sh
 

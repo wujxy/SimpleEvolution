@@ -125,7 +125,7 @@ def _preflight_image(config: EvolutionConfig) -> str:
     if not image.is_file() or not os.access(image, os.R_OK):
         return "missing (build it first)"
     try:
-        from experiment.apptainer import (
+        from simpleevo.runtime import (
             ApptainerSandbox,
             SandboxSpec,
             evaluator_environment,

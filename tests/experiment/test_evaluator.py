@@ -1,8 +1,8 @@
 """Tests for eval command metric parsing."""
 from __future__ import annotations
 
-from experiment.contracts import ProcessResult
-from experiment.evaluator import _parse_metrics
+from simpleevo.contracts import ProcessResult
+from simpleevo.adjudicate.evaluator import _parse_metrics
 
 
 def test_parse_objective_and_gates():

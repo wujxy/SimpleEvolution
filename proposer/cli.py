@@ -16,7 +16,7 @@ from simpleevo.generator import load_generator_basis
 from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
 from simpleevo.research_state import research_state_to_dict
 
-from experiment.git_worktree import GitWorkspaceProvider, WorkspaceSpec
+from .assistant.git_worktree import GitWorkspaceProvider, WorkspaceSpec
 
 from .memory.l2 import L2MemoryService
 from .wake import build_wake_view

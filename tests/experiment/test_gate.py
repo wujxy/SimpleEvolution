@@ -7,8 +7,8 @@ want a belt-and-braces assertion.
 """
 from __future__ import annotations
 
-from experiment.contracts import EvaluationResult, GateResult
-from experiment.gate import GateSpec, apply_gates, paths_allowed
+from simpleevo.contracts import EvaluationResult, GateResult
+from simpleevo.adjudicate.gate import GateSpec, apply_gates, paths_allowed
 
 
 def test_paths_allowed_under_editable_prefix():
