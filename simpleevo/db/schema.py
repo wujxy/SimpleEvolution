@@ -1,7 +1,10 @@
 """SQLite schema for SimpleEvolution L2 Research State.
 
-This module owns the DDL.  All writes go through ResearchStore; HTCondor jobs
-never open the database directly.
+This module owns the DDL.  All writes go through ResearchStore with one
+narrow exception: a lease's scientist worker upserts its own research-state
+head row through ``db.lease_writer`` (scientist-owned research — the seat
+is the sole author of its understanding, and the write must survive a
+mid-lease crash).  HTCondor jobs never open the database directly.
 """
 from __future__ import annotations
 
@@ -35,6 +38,44 @@ class ResearchDBSchema:
                 "ALTER TABLE proposals ADD COLUMN donor_experiment_ids TEXT "
                 "NOT NULL DEFAULT '[]'"
             )
+        # Scientist-owned research (科学家完整研究制 §8.1): research states
+        # grow the six-block structure and become one evolving row per lease
+        # (revision+1 per work cycle, written incrementally by the worker).
+        state_columns = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(research_states)"
+            ).fetchall()
+        }
+        for name, ddl in (
+            ("evidence", "ALTER TABLE research_states ADD COLUMN evidence TEXT"),
+            ("experiment_log",
+             "ALTER TABLE research_states ADD COLUMN experiment_log TEXT"),
+            ("deliverables",
+             "ALTER TABLE research_states ADD COLUMN deliverables TEXT"),
+            ("conclusion",
+             "ALTER TABLE research_states ADD COLUMN conclusion TEXT"),
+            ("revision",
+             "ALTER TABLE research_states ADD COLUMN revision INTEGER"),
+            ("lease_id",
+             "ALTER TABLE research_states ADD COLUMN lease_id TEXT"),
+        ):
+            if name not in state_columns:
+                conn.execute(ddl)
+        episode_columns = {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(episodes)"
+            ).fetchall()
+        }
+        for name, ddl in (
+            ("conclusion_type",
+             "ALTER TABLE episodes ADD COLUMN conclusion_type TEXT"),
+            ("concluded_at",
+             "ALTER TABLE episodes ADD COLUMN concluded_at REAL"),
+        ):
+            if name not in episode_columns:
+                conn.execute(ddl)
         allocation_columns = {
             row[1]
             for row in conn.execute(
@@ -45,6 +86,29 @@ class ResearchDBSchema:
             conn.execute(
                 "ALTER TABLE proposer_allocations ADD COLUMN decision_id TEXT"
             )
+        # Lease state machine: researching -> awaiting_adjudication ->
+        # (reopen -> researching | concluded_*).  NULL (pre-migration rows)
+        # reads as 'researching' everywhere via COALESCE.
+        if "state" not in allocation_columns:
+            conn.execute(
+                "ALTER TABLE proposer_allocations ADD COLUMN state TEXT"
+            )
+        if "reopen_count" not in allocation_columns:
+            conn.execute(
+                "ALTER TABLE proposer_allocations ADD COLUMN reopen_count "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
+        # Indexes over the new columns live here (after the ALTERs), not in
+        # _DDL: executescript runs before the guards, and a legacy database
+        # does not have the columns yet.
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_research_states_lease "
+            "ON research_states(lease_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_allocations_state "
+            "ON proposer_allocations(state)"
+        )
 
 
 _DDL = """
@@ -77,7 +141,9 @@ CREATE TABLE IF NOT EXISTS episodes (
     node_id TEXT NOT NULL REFERENCES nodes(node_id),
     variation_operator TEXT,
     created_at REAL NOT NULL,
-    last_active_at REAL NOT NULL
+    last_active_at REAL NOT NULL,
+    conclusion_type TEXT,
+    concluded_at REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_episodes_inherited ON episodes(inherited_from_episode_id);
@@ -99,7 +165,13 @@ CREATE INDEX IF NOT EXISTS idx_transformations_node
 CREATE INDEX IF NOT EXISTS idx_transformations_episode
     ON cognitive_transformations(episode_id);
 
--- Research states: immutable Scientist working models.
+-- Research states: one evolving understanding per lease.  Classic runs
+-- (and the integrator lane) still insert immutable snapshot rows via
+-- publish_research_batch; a complete-research lease instead keeps ONE head
+-- row keyed by lease_id that the worker upserts every work cycle
+-- (revision+1) through db.lease_writer.  The six-block columns (evidence /
+-- experiment_log / deliverables / conclusion) carry the full-resolution
+-- record that successors may only reach by pull, never by push.
 CREATE TABLE IF NOT EXISTS research_states (
     research_state_id TEXT PRIMARY KEY,
     node_id TEXT NOT NULL REFERENCES nodes(node_id),
@@ -108,7 +180,13 @@ CREATE TABLE IF NOT EXISTS research_states (
     transformation_id TEXT,
     working_model TEXT NOT NULL,
     evidence_refs TEXT NOT NULL DEFAULT '[]',
-    created_at REAL NOT NULL
+    created_at REAL NOT NULL,
+    evidence TEXT,
+    experiment_log TEXT,
+    deliverables TEXT,
+    conclusion TEXT,
+    revision INTEGER,
+    lease_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_research_states_node
@@ -202,7 +280,11 @@ CREATE TABLE IF NOT EXISTS frontier_axes (
 
 CREATE INDEX IF NOT EXISTS idx_frontier_axes_node ON frontier_axes(node_id);
 
--- Proposer allocations: telemetry for "who actually got proposer capacity".
+-- Proposer allocations: one research lease.  ``state`` is the lease state
+-- machine (researching | awaiting_adjudication | reopen | concluded_*);
+-- only 'researching' leases consume proposer capacity — a lease parked on
+-- adjudication must not block a new seat purchase.  NULL (legacy rows)
+-- reads as 'researching'.
 CREATE TABLE IF NOT EXISTS proposer_allocations (
     allocation_id TEXT PRIMARY KEY,
     node_id TEXT NOT NULL REFERENCES nodes(node_id),
@@ -210,7 +292,9 @@ CREATE TABLE IF NOT EXISTS proposer_allocations (
     reserved_proposal_ids TEXT NOT NULL DEFAULT '[]',
     started_at REAL NOT NULL,
     finished_at REAL,
-    proposals_produced INTEGER NOT NULL DEFAULT 0
+    proposals_produced INTEGER NOT NULL DEFAULT 0,
+    state TEXT,
+    reopen_count INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_allocations_node ON proposer_allocations(node_id);
@@ -300,4 +384,43 @@ CREATE TABLE IF NOT EXISTS run_limits (
     value TEXT NOT NULL,
     updated_at REAL NOT NULL
 );
+
+-- Unified resource account: seat in-flight, assistant work occupancy and
+-- adjudication eval occupancy all land here so oversubscription is
+-- measurable (and rejectable) against one ledger instead of three
+-- per-subsystem folk accounts (科学家完整研究制 §2.2 资源记账).
+CREATE TABLE IF NOT EXISTS resource_ledger (
+    ledger_id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,               -- 'seat' | 'work' | 'eval'
+    ref_id TEXT NOT NULL,             -- allocation_id | assistant call_id | experiment_id
+    allocation_id TEXT,
+    experiment_id TEXT,
+    opened_at REAL NOT NULL,
+    closed_at REAL,
+    meta TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_resource_ledger_ref
+    ON resource_ledger(kind, ref_id);
+CREATE INDEX IF NOT EXISTS idx_resource_ledger_open
+    ON resource_ledger(kind, closed_at);
+
+-- Assistant call ledger (consult/work): what each lens asked, whether the
+-- answer was adopted, at what token cost — the measurement surface for
+-- oracle homogenization and 判断外包 (科学家完整研究制 §2.2/§8.2).
+CREATE TABLE IF NOT EXISTS assistant_calls (
+    call_id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL,
+    lease_id TEXT,
+    lens TEXT,
+    kind TEXT NOT NULL,               -- 'consult' | 'work'
+    question_digest TEXT NOT NULL DEFAULT '',
+    adopted INTEGER,
+    usage TEXT NOT NULL DEFAULT '{}',
+    world_sha TEXT,
+    created_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_assistant_calls_episode
+    ON assistant_calls(episode_id);
 """

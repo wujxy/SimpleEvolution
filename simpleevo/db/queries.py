@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -134,6 +135,118 @@ class ResearchQueries:
                 "WHERE finished_at IS NULL"
             ).fetchone()
             return int(row["n"])
+
+    # ------------------------------------------------------------------
+    # Lease state machine reads (complete research; single implementation
+    # shared by the scheduler's capacity enforcement and the supervisor's
+    # facts — capacity and facts must not fork)
+    # ------------------------------------------------------------------
+
+    def researching_open_allocation_count(self) -> int:
+        """Open leases actively holding a seat (NULL state = researching).
+
+        A lease parked in awaiting_adjudication or reopen does NOT consume
+        proposer capacity: its adjudication experiment consumes experiment
+        capacity instead, and a closed-out seat must not block the next
+        purchase.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM proposer_allocations "
+                "WHERE finished_at IS NULL "
+                "AND COALESCE(state, 'researching') = 'researching'"
+            ).fetchone()
+            return int(row["n"])
+
+    def _allocations_in_state(self, state: str) -> list[ProposerAllocation]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM proposer_allocations "
+                "WHERE finished_at IS NULL AND COALESCE(state,'researching') = ?",
+                (state,),
+            ).fetchall()
+            return [_proposer_allocation_from_row(row) for row in rows]
+
+    def awaiting_adjudication_allocations(self) -> list[ProposerAllocation]:
+        return self._allocations_in_state("awaiting_adjudication")
+
+    def reopen_allocations(self) -> list[ProposerAllocation]:
+        return self._allocations_in_state("reopen")
+
+    def open_allocation_for_episode(
+        self, episode_id: str,
+    ) -> ProposerAllocation | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM proposer_allocations "
+                "WHERE episode_id = ? AND finished_at IS NULL",
+                (episode_id,),
+            ).fetchone()
+            return None if row is None else _proposer_allocation_from_row(row)
+
+    def lease_adjudication_for_episode(self, episode_id: str) -> dict | None:
+        """The latest adjudication write-back for a lease's episode.
+
+        The reopened seat reads this at wake (the supervisor's
+        previous_rejection pattern): what was rejected, which gates failed,
+        and which world SHA it came from.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM scheduler_events "
+                "WHERE type = 'lease_adjudication' "
+                "AND json_extract(payload, '$.episode_id') = ? "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (episode_id,),
+            ).fetchone()
+        return None if row is None else json.loads(row["payload"])
+
+    def lease_conclusion_rejection_count(self, allocation_id: str) -> int:
+        """How often a lease's conclusion was rejected by the ingest guard.
+
+        The generalized vacuous-exit bound keys on these events, not on
+        attempt counts — reopens legitimately add attempts.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM scheduler_events "
+                "WHERE type = 'lease_conclusion_rejected' "
+                "AND json_extract(payload, '$.allocation_id') = ?",
+                (allocation_id,),
+            ).fetchone()
+            return int(row["n"])
+
+    def research_state_head(self, episode_id: str) -> ResearchState | None:
+        """A lease's current (revision-max) research state row."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM research_states WHERE episode_id = ? "
+                "ORDER BY COALESCE(revision, 0) DESC, created_at DESC, "
+                "rowid DESC LIMIT 1",
+                (episode_id,),
+            ).fetchone()
+            return None if row is None else _research_state_from_row(row)
+
+    def lease_wall_seconds(self, allocation_id: str) -> float:
+        """Total proposer-attempt wall time consumed by a lease."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT SUM(COALESCE(finished_at, ?) - started_at) AS total "
+                "FROM attempts WHERE logical_work_id = ? AND kind = 'proposer'",
+                (time.time(), allocation_id),
+            ).fetchone()
+            return float(row["total"] or 0.0)
+
+    def lease_attempt_ids(self, allocation_id: str) -> list[str]:
+        """The attempt ids under one lease (usage-ledger attribution key)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT attempt_id FROM attempts "
+                "WHERE logical_work_id = ? AND kind = 'proposer' "
+                "ORDER BY created_at",
+                (allocation_id,),
+            ).fetchall()
+            return [row["attempt_id"] for row in rows]
 
     def open_experiment_count(self) -> int:
         with self._connect() as conn:
@@ -349,8 +462,9 @@ class ResearchQueries:
 
         One row per (node, episode): the lens id (``variation_operator``),
         whether the episode ever held a lease, whether one is open right
-        now, and how many proposals it produced.  The seat ledger / lineage
-        dedup / lens stats facts are all derived from this projection.
+        now (and in which lease state), and how many proposals it produced.
+        The seat ledger / lineage dedup / lens stats facts are all derived
+        from this projection.
         """
         with self._connect() as conn:
             rows = conn.execute(
@@ -358,11 +472,20 @@ class ResearchQueries:
                 SELECT e.node_id,
                        e.episode_id,
                        e.variation_operator,
+                       e.conclusion_type,
                        (SELECT COUNT(*) FROM proposer_allocations a
                          WHERE a.episode_id = e.episode_id) AS leases,
                        (SELECT COUNT(*) FROM proposer_allocations a
                          WHERE a.episode_id = e.episode_id
                            AND a.finished_at IS NULL) AS open_leases,
+                       (SELECT COALESCE(a.state, 'researching')
+                          FROM proposer_allocations a
+                         WHERE a.episode_id = e.episode_id
+                           AND a.finished_at IS NULL
+                         LIMIT 1) AS lease_state,
+                       (SELECT COALESCE(MAX(a.reopen_count), 0)
+                          FROM proposer_allocations a
+                         WHERE a.episode_id = e.episode_id) AS reopen_count,
                        (SELECT COUNT(*) FROM proposals p
                          WHERE p.episode_id = e.episode_id) AS proposals
                 FROM episodes e
@@ -377,7 +500,10 @@ class ResearchQueries:
                     "lens": row["variation_operator"],
                     "leases": int(row["leases"]),
                     "open_leases": int(row["open_leases"]),
+                    "lease_state": row["lease_state"],
+                    "reopen_count": int(row["reopen_count"]),
                     "proposals": int(row["proposals"]),
+                    "conclusion_type": row["conclusion_type"],
                 }
                 for row in rows
             ]

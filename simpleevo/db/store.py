@@ -31,6 +31,12 @@ def _unjson(text: str) -> Any:
     return json.loads(text)
 
 
+def _word_count(text: Any) -> int:
+    if not isinstance(text, str):
+        return 0
+    return len(text.split())
+
+
 @dataclass(frozen=True)
 class GateResult:
     passed: bool | None
@@ -64,6 +70,10 @@ class Episode:
     variation_operator: str | None
     created_at: float
     last_active_at: float
+    # Complete-research lease conclusion (delivered | abstain | cut_off |
+    # rejected); NULL on classic episodes.
+    conclusion_type: str | None = None
+    concluded_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -151,6 +161,11 @@ class ProposerAllocation:
     finished_at: float | None
     proposals_produced: int
     decision_id: str | None = None
+    # Lease state machine (科学家完整研究制 §2.3/2.4): researching |
+    # awaiting_adjudication | reopen | concluded_*.  NULL (legacy rows)
+    # reads as 'researching'.
+    state: str | None = None
+    reopen_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -193,6 +208,21 @@ class StaleSupervisorDecision(RuntimeError):
             f"supervisor decision is stale; event head moved to {head}"
         )
         self.head = head
+
+
+class VacuousExitError(ValueError):
+    """A lease tried to conclude without registering any research state."""
+
+
+@dataclass(frozen=True)
+class LeaseConclusionIngest:
+    """What ``ingest_lease_conclusion`` did with a seat's conclusion."""
+
+    kind: str
+    proposal_id: str | None
+    experiment_id: str | None
+    attempt_id: str | None
+    replayed: bool
 
 
 class ResearchStore:
@@ -668,8 +698,16 @@ class ResearchStore:
             finished_at=None,
             proposals_produced=0,
             decision_id=decision_id,
+            state="researching",
         )
         tx.create_allocation(allocation)
+        # Unified resource account: the seat is in flight from this moment.
+        tx._conn.execute(
+            "INSERT INTO resource_ledger "
+            "(ledger_id, kind, ref_id, allocation_id, opened_at) "
+            "VALUES (?, 'seat', ?, ?, ?)",
+            (_new_id(), allocation.allocation_id, allocation.allocation_id, now),
+        )
         return allocation
 
     def deallocate_proposer(
@@ -677,11 +715,23 @@ class ResearchStore:
         *,
         allocation_id: str,
         proposals_produced: int = 0,
+        outcome: str | None = None,
     ) -> None:
-        """Close a proposer allocation."""
+        """Close a proposer allocation.
+
+        Complete-research leases pass ``outcome`` (delivered | abstain |
+        cut_off | rejected): the close always emits a ``lease_terminal``
+        evidence event carrying the outcome, stamps the episode's
+        conclusion, and closes the seat's resource-ledger row.  Legacy
+        callers without ``outcome`` keep the classic behavior (event only
+        when no proposals were produced).
+        """
         now = time.time()
         with self.transaction() as tx:
             allocation = tx.get_allocation(allocation_id)
+            if outcome is not None:
+                self._conclude_on_tx(tx, allocation, outcome, now, reason=None)
+                return
             tx.finish_allocation(allocation_id, proposals_produced, now)
             # Evidence change (tree-growth design §4): a lease ended without
             # producing any Experiment.  Leases that published proposals are
@@ -705,6 +755,340 @@ class ResearchStore:
                         ),
                     }), now),
                 )
+
+    # ------------------------------------------------------------------
+    # Complete-research lease lifecycle (科学家完整研究制 §2.3/2.4)
+    # ------------------------------------------------------------------
+
+    def _conclude_on_tx(
+        self,
+        tx: "_Transaction",
+        allocation: ProposerAllocation | None,
+        outcome: str,
+        when: float,
+        *,
+        reason: str | None,
+        world_sha: str | None = None,
+    ) -> None:
+        """Conclude an open lease inside a transaction (idempotent no-op if closed)."""
+        if allocation is None:
+            raise ValueError("unknown proposer allocation")
+        if allocation.finished_at is not None:
+            return
+        reopen_count = allocation.reopen_count
+        proposals_produced = allocation.proposals_produced
+        # A delivered lease produced exactly one synthetic delivery proposal
+        # per adjudicated delivery (first delivery uses the reserved id).
+        if outcome == "delivered":
+            row = tx._conn.execute(
+                "SELECT COUNT(*) FROM proposals WHERE episode_id = ?",
+                (allocation.episode_id,),
+            ).fetchone()
+            proposals_produced = int(row[0])
+        tx.finish_allocation(
+            allocation.allocation_id, proposals_produced, when,
+            outcome=outcome,
+        )
+        tx._conn.execute(
+            "UPDATE episodes SET conclusion_type = ?, concluded_at = ? "
+            "WHERE episode_id = ?",
+            (outcome, when, allocation.episode_id),
+        )
+        node = tx.get_node(allocation.node_id)
+        tx._conn.execute(
+            "INSERT INTO supervisor_events (type, payload, created_at) "
+            "VALUES ('lease_terminal', ?, ?)",
+            (_json({
+                "allocation_id": allocation.allocation_id,
+                "node_id": allocation.node_id,
+                "outcome": outcome,
+                "node_metrics": dict(node.metrics) if node else None,
+                "reopen_count": reopen_count,
+                "reason": reason,
+                "world_sha": world_sha,
+            }), when),
+        )
+        if reason is not None:
+            tx._conn.execute(
+                "INSERT INTO scheduler_events (event_id, type, payload, created_at) "
+                "VALUES (?, 'lease_concluded', ?, ?)",
+                (_new_id(), _json({
+                    "allocation_id": allocation.allocation_id,
+                    "outcome": outcome,
+                    "reason": reason,
+                }), when),
+            )
+        tx._conn.execute(
+            "UPDATE resource_ledger SET closed_at = ? "
+            "WHERE kind = 'seat' AND ref_id = ? AND closed_at IS NULL",
+            (when, allocation.allocation_id),
+        )
+
+    def conclude_lease(
+        self,
+        *,
+        allocation_id: str,
+        outcome: str,
+        reason: str | None = None,
+        world_sha: str | None = None,
+    ) -> None:
+        """Conclude a lease with an outcome (delivered|abstain|cut_off|rejected)."""
+        if outcome not in {"delivered", "abstain", "cut_off", "rejected"}:
+            raise ValueError(f"invalid lease outcome: {outcome}")
+        with self.transaction(immediate=True) as tx:
+            self._conclude_on_tx(
+                tx, tx.get_allocation(allocation_id), outcome, time.time(),
+                reason=reason, world_sha=world_sha,
+            )
+
+    def ingest_lease_conclusion(
+        self,
+        *,
+        allocation_id: str,
+        conclusion: dict[str, Any],
+        attempt_id: str | None = None,
+        with_attempt: bool = False,
+        handover_word_cap: int = 600,
+    ) -> "LeaseConclusionIngest":
+        """Ingest a seat's terminal conclusion (deliver | abstain | cut_off).
+
+        One transaction: validates the exit (the generalized ≥1-state
+        guard), and for a delivery mints the synthetic delivery proposal +
+        adjudication experiment (+ first attempt) with deterministic ids so
+        a replay after a crash is a no-op.  The proposal is minted
+        ``running`` — it never enters the executor queue (queue overflow
+        demotion would strand the lease).
+        """
+        kind = conclusion.get("kind")
+        if kind not in {"deliver", "abstain", "cut_off"}:
+            raise ValueError(
+                f"invalid lease conclusion kind: {kind!r} "
+                "(expected deliver | abstain | cut_off)"
+            )
+        now = time.time()
+        with self.transaction(immediate=True) as tx:
+            allocation = tx.get_allocation(allocation_id)
+            if allocation is None:
+                raise ValueError(f"unknown proposer allocation: {allocation_id}")
+            if allocation.finished_at is not None:
+                # Late duplicate of an already-concluded lease: accept and
+                # let the caller archive.
+                return LeaseConclusionIngest(
+                    kind="already_concluded", proposal_id=None,
+                    experiment_id=None, attempt_id=None, replayed=True,
+                )
+            node_id = conclusion.get("node_id")
+            episode_id = conclusion.get("episode_id")
+            if node_id != allocation.node_id or episode_id != allocation.episode_id:
+                raise ValueError("conclusion belongs to another node or episode")
+
+            head_row = tx._conn.execute(
+                "SELECT research_state_id, revision FROM research_states "
+                "WHERE episode_id = ? ORDER BY revision DESC, created_at DESC "
+                "LIMIT 1",
+                (episode_id,),
+            ).fetchone()
+            if head_row is None:
+                # Generalized exit guard (科学家完整研究制 §2.3): every exit
+                # — deliver, abstain, budget cut — must leave its registered
+                # understanding behind, or the investigation evaporates.
+                raise VacuousExitError(
+                    "lease exit without a registered research state: "
+                    "register what you learned before concluding"
+                )
+
+            world_sha = conclusion.get("world_sha")
+            handover = conclusion.get("handover")
+            if kind == "deliver":
+                if not isinstance(world_sha, str) or len(world_sha) != 40 \
+                        or any(c not in "0123456789abcdef" for c in world_sha):
+                    raise ValueError(
+                        f"delivery needs a 40-hex world_sha, got {world_sha!r}"
+                    )
+                collision = tx._conn.execute(
+                    "SELECT 1 FROM nodes WHERE sha = ?", (world_sha,),
+                ).fetchone()
+                if collision is not None:
+                    # nodes.sha is UNIQUE: an adjudicated pass would try to
+                    # create a duplicate node and wedge the loop.
+                    raise ValueError(
+                        "delivered world_sha already exists as a node — "
+                        "deliver a world that differs from every existing one"
+                    )
+                compliant = conclusion.get("handover_compliant", True)
+                if compliant and _word_count(handover) > handover_word_cap:
+                    raise ValueError(
+                        f"handover exceeds the hard cap of {handover_word_cap} "
+                        "words; rewrite it (or send it marked "
+                        "handover_compliant=false to deliver degraded)"
+                    )
+            elif world_sha is not None:
+                raise ValueError(
+                    f"a {kind} conclusion must not carry a world_sha"
+                )
+
+            if attempt_id is not None:
+                tx.update_attempt_status(
+                    attempt_id=attempt_id, status="succeeded", finished_at=now,
+                )
+
+            if kind != "deliver":
+                self._conclude_on_tx(
+                    tx, allocation, kind, now,
+                    reason=conclusion.get("reason"),
+                )
+                return LeaseConclusionIngest(
+                    kind=kind, proposal_id=None, experiment_id=None,
+                    attempt_id=None, replayed=False,
+                )
+
+            # --- deliver: idempotent mint of the adjudication experiment ---
+            delivery_index = allocation.reopen_count + 1
+            reserved = allocation.reserved_proposal_ids
+            if delivery_index == 1 and reserved:
+                proposal_id = reserved[0]
+            else:
+                proposal_id = f"delivery-{allocation_id}-{delivery_index}"
+            existing = tx.get_proposal(proposal_id)
+            if existing is not None:
+                row = tx._conn.execute(
+                    "SELECT experiment_id FROM experiments "
+                    "WHERE proposal_id = ?",
+                    (proposal_id,),
+                ).fetchone()
+                tx._conn.execute(
+                    "UPDATE proposer_allocations SET state = "
+                    "'awaiting_adjudication' WHERE allocation_id = ?",
+                    (allocation_id,),
+                )
+                return LeaseConclusionIngest(
+                    kind=kind, proposal_id=proposal_id,
+                    experiment_id=row["experiment_id"] if row else None,
+                    attempt_id=None, replayed=True,
+                )
+
+            handover_text = handover if isinstance(handover, str) else ""
+            digest = " ".join(handover_text.split()[:40]) or "world delivery"
+            instruction = (
+                f"[delivery {delivery_index}] world {world_sha[:12]} — "
+                f"{digest}"
+            )
+            tx.create_proposal(Proposal(
+                proposal_id=proposal_id,
+                node_id=allocation.node_id,
+                episode_id=allocation.episode_id,
+                instruction=instruction,
+                rationale={
+                    "delivery": {
+                        "world_sha": world_sha,
+                        "handover": handover,
+                        "handover_compliant": conclusion.get(
+                            "handover_compliant", True),
+                        "delivery_index": delivery_index,
+                    },
+                },
+                status="running",
+                created_at=now,
+                research_state_id=head_row["research_state_id"],
+            ))
+            experiment_id = f"exp-{proposal_id}"
+            tx.create_experiment(
+                experiment_id=experiment_id,
+                proposal_id=proposal_id,
+                parent_node_id=allocation.node_id,
+                status="running" if with_attempt else "pending",
+            )
+            attempt = None
+            if with_attempt:
+                attempt = tx.create_attempt(
+                    logical_work_id=experiment_id,
+                    kind="experiment",
+                    status="running",
+                    started_at=now,
+                )
+                tx._conn.execute(
+                    "INSERT INTO resource_ledger "
+                    "(ledger_id, kind, ref_id, allocation_id, experiment_id, "
+                    " opened_at) VALUES (?, 'eval', ?, ?, ?, ?)",
+                    (_new_id(), experiment_id, allocation_id, experiment_id, now),
+                )
+            tx._conn.execute(
+                "UPDATE proposer_allocations SET state = "
+                "'awaiting_adjudication' WHERE allocation_id = ?",
+                (allocation_id,),
+            )
+            return LeaseConclusionIngest(
+                kind=kind, proposal_id=proposal_id,
+                experiment_id=experiment_id,
+                attempt_id=attempt.attempt_id if attempt else None,
+                replayed=False,
+            )
+
+    def record_lease_adjudication(
+        self,
+        *,
+        allocation_id: str,
+        experiment_id: str,
+        gate_result: GateDecision,
+        detail: str | None = None,
+        max_reopens: int = 2,
+    ) -> bool:
+        """Write a gate rejection back to the delivering lease.
+
+        Emits a ``lease_adjudication`` scheduler event (read at the seat's
+        next wake), bumps ``reopen_count`` and flips the lease to
+        ``reopen``.  Returns False when the reopen budget is exhausted —
+        the caller concludes the lease as rejected instead.
+        """
+        now = time.time()
+        with self.transaction(immediate=True) as tx:
+            allocation = tx.get_allocation(allocation_id)
+            if allocation is None or allocation.finished_at is not None:
+                return False
+            if (allocation.state or "researching") != "awaiting_adjudication":
+                return False
+            new_count = allocation.reopen_count + 1
+            if new_count > max_reopens:
+                return False
+            tx._conn.execute(
+                "INSERT INTO scheduler_events (event_id, type, payload, created_at) "
+                "VALUES (?, 'lease_adjudication', ?, ?)",
+                (_new_id(), _json({
+                    "allocation_id": allocation_id,
+                    "episode_id": allocation.episode_id,
+                    "experiment_id": experiment_id,
+                    "passed": False,
+                    "gate": {
+                        name: {
+                            "passed": gr.passed,
+                            "detail": gr.detail,
+                        }
+                        for name, gr in gate_result.results.items()
+                    },
+                    "detail": detail,
+                }), now),
+            )
+            tx._conn.execute(
+                "UPDATE proposer_allocations SET state = 'reopen', "
+                "reopen_count = ? WHERE allocation_id = ?",
+                (new_count, allocation_id),
+            )
+            return True
+
+    def reactivate_lease(self, allocation_id: str) -> bool:
+        """Flip a reopened lease back to researching (crash-safe, idempotent).
+
+        Not atomic with the follow-up attempt recording by design: a lease
+        left ``researching`` with no running attempt is exactly the state
+        the reconciler already recovers from.
+        """
+        with self.transaction(immediate=True) as tx:
+            cur = tx._conn.execute(
+                "UPDATE proposer_allocations SET state = 'researching' "
+                "WHERE allocation_id = ? AND state = 'reopen'",
+                (allocation_id,),
+            )
+            return cur.rowcount > 0
 
     def get_allocation(self, allocation_id: str) -> ProposerAllocation | None:
         with self.transaction() as tx:
@@ -1761,8 +2145,9 @@ class _Transaction:
             INSERT INTO research_states
             (research_state_id, node_id, episode_id,
              derived_from_research_state_id, transformation_id, working_model,
-             evidence_refs, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             evidence_refs, created_at, evidence, experiment_log,
+             deliverables, conclusion, revision, lease_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 state.research_state_id,
@@ -1773,6 +2158,12 @@ class _Transaction:
                 state.working_model,
                 _json(list(state.evidence_refs)),
                 state.created_at,
+                _json(list(state.evidence)),
+                _json(list(state.experiment_log)),
+                _json(list(state.deliverables)),
+                _json(state.conclusion) if state.conclusion is not None else None,
+                state.revision,
+                state.lease_id,
             ),
         )
         return state
@@ -1861,8 +2252,9 @@ class _Transaction:
             """
             INSERT INTO proposer_allocations
             (allocation_id, node_id, episode_id, reserved_proposal_ids,
-             started_at, finished_at, proposals_produced, decision_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             started_at, finished_at, proposals_produced, decision_id,
+             state, reopen_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 allocation.allocation_id,
@@ -1873,6 +2265,8 @@ class _Transaction:
                 allocation.finished_at,
                 allocation.proposals_produced,
                 allocation.decision_id,
+                allocation.state or "researching",
+                allocation.reopen_count,
             ),
         )
 
@@ -1881,15 +2275,28 @@ class _Transaction:
         allocation_id: str,
         proposals_produced: int,
         when: float,
+        *,
+        outcome: str | None = None,
     ) -> None:
-        self._conn.execute(
-            """
-            UPDATE proposer_allocations
-            SET finished_at = ?, proposals_produced = ?
-            WHERE allocation_id = ?
-            """,
-            (when, proposals_produced, allocation_id),
-        )
+        if outcome is not None:
+            self._conn.execute(
+                """
+                UPDATE proposer_allocations
+                SET finished_at = ?, proposals_produced = ?,
+                    state = ?
+                WHERE allocation_id = ?
+                """,
+                (when, proposals_produced, f"concluded_{outcome}", allocation_id),
+            )
+        else:
+            self._conn.execute(
+                """
+                UPDATE proposer_allocations
+                SET finished_at = ?, proposals_produced = ?
+                WHERE allocation_id = ?
+                """,
+                (when, proposals_produced, allocation_id),
+            )
 
     def get_allocation(self, allocation_id: str) -> ProposerAllocation | None:
         row = self._conn.execute(
@@ -1945,6 +2352,8 @@ def _episode_from_row(row: sqlite3.Row) -> Episode:
         variation_operator=row["variation_operator"],
         created_at=row["created_at"],
         last_active_at=row["last_active_at"],
+        conclusion_type=row["conclusion_type"],
+        concluded_at=row["concluded_at"],
     )
 
 
@@ -1973,6 +2382,14 @@ def _research_state_from_row(row: sqlite3.Row) -> ResearchState:
         working_model=row["working_model"],
         evidence_refs=tuple(_unjson(row["evidence_refs"])),
         created_at=row["created_at"],
+        evidence=tuple(_unjson(row["evidence"] or "[]")),
+        experiment_log=tuple(_unjson(row["experiment_log"] or "[]")),
+        deliverables=tuple(_unjson(row["deliverables"] or "[]")),
+        conclusion=(
+            _unjson(row["conclusion"]) if row["conclusion"] is not None else None
+        ),
+        revision=row["revision"],
+        lease_id=row["lease_id"],
     )
 
 
@@ -2001,6 +2418,8 @@ def _proposer_allocation_from_row(row: sqlite3.Row) -> ProposerAllocation:
         finished_at=row["finished_at"],
         proposals_produced=row["proposals_produced"],
         decision_id=row["decision_id"],
+        state=row["state"],
+        reopen_count=row["reopen_count"],
     )
 
 
