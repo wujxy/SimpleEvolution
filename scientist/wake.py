@@ -68,7 +68,11 @@ def world_transition(queries: ResearchQueries, node) -> dict[str, Any]:
 def research_state_seed(
     queries: ResearchQueries, node,
 ) -> dict[str, Any]:
-    """Join the one State/Proposal/Experiment path that produced a Child."""
+    """Join the one State/Proposal/Experiment path that produced a Child.
+
+    Legacy full-body seed (kept for pull-side tools and classic runs); the
+    push path is :func:`first_layer` below.
+    """
     if node.experiment_id is None:
         return {}
     experiment = queries.get_experiment(node.experiment_id)
@@ -123,6 +127,83 @@ def research_state_seed(
     }
 
 
+def first_layer(queries: ResearchQueries, node) -> dict[str, Any]:
+    """What a Child seat receives by PUSH — and only this (科学家完整
+    研究制 §2.6): a harness-built fact block plus the delivering seat's
+    handover.  The predecessor's research-state BODY never crosses the
+    boundary (belief stays signed and reachable only by pull); verified
+    evidence graduates into the fact block with the signature stripped —
+    it is the world's state now, not a school's opinion.
+    """
+    if node.experiment_id is None:
+        return {}
+    experiment = queries.get_experiment(node.experiment_id)
+    if experiment is None:
+        return {}
+    proposal = queries.get_proposal(experiment.proposal_id)
+    if proposal is None:
+        return {}
+    delivery = proposal.rationale.get("delivery") if isinstance(
+        proposal.rationale, dict) else None
+    delivery = delivery if isinstance(delivery, dict) else {}
+    handover = delivery.get("handover")
+    state = (
+        queries.get_research_state(proposal.research_state_id)
+        if proposal.research_state_id else None
+    )
+    graduated: list[dict[str, Any]] = []
+    if state is not None:
+        for entry in state.evidence:
+            if entry.get("status") == "verified":
+                # Strip the signature: a graduated fact is the world's
+                # state, not one school's attributed view.
+                graduated.append({
+                    k: v for k, v in entry.items() if k != "status"
+                })
+    author_episode = queries.get_episode(proposal.episode_id)
+    return {
+        "child_node": {
+            "node_id": node.node_id,
+            "sha": node.sha,
+            "metrics": dict(node.metrics),
+            "gate": {
+                "passed": node.gate_result.passed,
+                "results": {
+                    name: {"passed": r.passed, "detail": r.detail}
+                    for name, r in node.gate_result.results.items()
+                },
+            },
+        },
+        # The adjudication outcome: verified by construction, unsigned.
+        "adjudication": {
+            "experiment_id": experiment.experiment_id,
+            "metrics": dict(experiment.metrics),
+            "gate": {
+                "passed": experiment.gate_result.passed,
+                "results": {
+                    name: {"passed": r.passed, "detail": r.detail}
+                    for name, r in experiment.gate_result.results.items()
+                },
+            },
+            "changed_paths": list(experiment.changed_paths),
+        },
+        "graduated_evidence": graduated,
+        # The ONLY pushed prose: the delivering seat's handover, already
+        # word-capped at delivery.  None when the delivery was degraded.
+        "handover": handover if isinstance(handover, dict) else None,
+        "handover_compliant": delivery.get("handover_compliant", True),
+        # Provenance for the pull channel (ids only — no content crosses).
+        "pull": {
+            "author_episode_id": proposal.episode_id,
+            "research_state_id": proposal.research_state_id,
+            "author_lens": (
+                author_episode.variation_operator
+                if author_episode is not None else None
+            ),
+        },
+    }
+
+
 def build_wake_view(
     queries: ResearchQueries,
     generator_basis: list[Generator],
@@ -147,9 +228,9 @@ def build_wake_view(
         "inherited_from_episode_id": episode.inherited_from_episode_id,
         "seat": seat_block(generator_basis, episode),
     }
-    seed = research_state_seed(queries, node)
+    seed = first_layer(queries, node)
     if seed:
-        view["research_state_seed"] = seed
+        view["first_layer"] = seed
     else:
         view["world_transition"] = world_transition(queries, node)
     # Adjudication write-back (科学家完整研究制 §2.4): a reopened seat reads

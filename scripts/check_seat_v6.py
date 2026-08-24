@@ -31,11 +31,25 @@ def main(run_dir: str) -> int:
             failures.append(name)
 
     # --- 1. multiple seats per node, distinct lenses --------------------
+    # Old (pre-complete-research) databases lack reopen_count: degrade to
+    # the classic per-episode reading so the checker keeps running on
+    # archived runs (acceptance #9 — old-run read compat).
+    has_reopens = "reopen_count" in {
+        r[1] for r in conn.execute(
+            "PRAGMA table_info(proposer_allocations)").fetchall()
+    }
+    reopens_select = (
+        ", (SELECT COALESCE(MAX(a2.reopen_count), 0) "
+        "FROM proposer_allocations a2 "
+        "WHERE a2.episode_id = e.episode_id) AS reopens"
+        if has_reopens else ""
+    )
     rows = conn.execute(
-        """
+        f"""
         SELECT e.node_id, e.episode_id, e.variation_operator AS lens,
                (SELECT COUNT(*) FROM proposals p
                  WHERE p.episode_id = e.episode_id) AS proposals
+               {reopens_select}
         FROM episodes e
         JOIN proposer_allocations a ON a.episode_id = e.episode_id
         ORDER BY e.node_id, e.created_at
@@ -90,12 +104,23 @@ def main(run_dir: str) -> int:
         f"{one_id_ok}/{len(manifests)} manifests",
     )
 
-    # --- 3. oneness: at most one published proposal per seat episode ----
-    over = [s for s in seats if s["proposals"] > 1]
+    # --- 3. oneness: one ADJUDICATED delivery per seat conclusion --------
+    # Complete research: a reopened lease legitimately mints one delivery
+    # proposal per adjudication round (fix → re-deliver).  The oneness
+    # invariant is "at most one delivery per conclusion round", i.e. no
+    # forking two worlds out of one lease — which, with the deterministic
+    # delivery-index ids, is exactly "deliveries ≤ reopens + 1".  Old
+    # (pre-complete-research) runs keep the classic per-episode reading.
+    delivery_over = [
+        s for s in seats
+        if s["proposals"] > s.get("reopens", 0) + 1
+    ]
     check(
-        "3. no seat published more than one proposal",
-        not over,
-        f"max proposals/seat = {max((s['proposals'] for s in seats), default=0)}",
+        "3. no seat delivered more worlds than adjudication rounds",
+        not delivery_over,
+        f"max deliveries/conclusion = {max(
+            (s['proposals'] - s.get('reopens', 0) for s in seats),
+            default=0)}",
     )
 
     # --- 4. decisions are seat_purchases with not-bought rationale ------

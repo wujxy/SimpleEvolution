@@ -47,10 +47,8 @@ def test_child_seed_prevents_parent_session_copy():
             run_dir,
             "parent",
             child,
-            research_state_seed={
-                "originating_research_state": {
-                    "research_state_id": "rs-parent-001",
-                },
-            },
+            # A delivery-produced child carries a first layer: sibling
+            # trajectory must not leak in via session copy.
+            first_layer_seed={"handover": {"dead_ends": ["d"]}},
         )
         assert not (child / "session.jsonl").exists()

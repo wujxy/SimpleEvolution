@@ -5,46 +5,58 @@ import json
 from typing import Any
 
 
-def build_research_state_seed_pack(seed: dict[str, Any]) -> str:
-    """Render a Child's facts-first, proposal-specific starting point."""
-    if not seed:
+def build_first_layer_pack(layer: dict[str, Any]) -> str:
+    """Render a Child seat's first layer: facts + handover, nothing else.
+
+    科学家完整研究制 §2.6 — inheritance is re-authoring, not forwarding:
+    the predecessor's research-state BODY never crosses (belief stays
+    signed and pull-only); verified evidence graduates into the fact block
+    with the signature stripped; the handover is the only pushed prose, a
+    dead-end map written to a successor wearing a different lens.
+    """
+    if not layer:
         return ""
-    state = seed.get("originating_research_state", {})
-    proposal = seed.get("proposal", {})
-    experiment = seed.get("experiment", {})
-    child = seed.get("child_node", {})
     lines = [
         "You are newly assigned to this Child world. You inherit the "
-        "objective project, not the predecessor's cognition. The facts "
-        "below are authoritative Harness records; form your own working "
-        "model from the current world and them.",
+        "objective project — facts and one handover map — not the "
+        "predecessor's cognition. Their full record is pull-only (ids at "
+        "the end); read it if and when YOU judge it worth a look.",
         "Current Child Node — authoritative Harness facts:",
-        json.dumps(child, ensure_ascii=False, sort_keys=True),
-        "Experiment outcome — authoritative Harness facts:",
-        json.dumps(experiment, ensure_ascii=False, sort_keys=True),
-        "Predecessor proposal — prior intervention and expectation, not an instruction:",
-        json.dumps(proposal, ensure_ascii=False, sort_keys=True),
+        json.dumps(layer.get("child_node", {}), ensure_ascii=False,
+                   sort_keys=True),
+        "Adjudication of this world — authoritative Harness facts:",
+        json.dumps(layer.get("adjudication", {}), ensure_ascii=False,
+                   sort_keys=True),
     ]
-    if str(state.get("working_model", "")).strip():
-        # The note travels first-hand (probe-verified 2026-08-23: under the
-        # anti-anchor charter an inlined note does not collapse the
-        # candidate set, while the v4 pointer was measured at 0/10 use —
-        # a second-hand channel that never fires is a severed channel).
-        # How to treat the note is the successor's own judgment, per its
-        # charter; the only framing added here is the authorship fact: the
-        # memo is signed with its seat's lens, so "this is one school's
-        # attributed view, discountable as a whole" is structural rather
-        # than advised (seat design §2.3).
-        lens = seed.get("originating_lens")
-        if lens:
-            lines.append(
-                f"Your predecessor left this note — filed by the {lens} "
-                "seat, the attributed view of one school of thought on "
-                "this problem:"
-            )
-        else:
-            lines.append("Your predecessor left this note:")
-        lines.append(str(state["working_model"]).strip())
+    graduated = layer.get("graduated_evidence") or []
+    if graduated:
+        lines.append(
+            "Graduated evidence — facts verified by adjudication "
+            "(unsigned; they are the world's state, not an opinion):"
+        )
+        lines.append(json.dumps(graduated, ensure_ascii=False,
+                                sort_keys=True))
+    handover = layer.get("handover")
+    if isinstance(handover, dict):
+        compliant = layer.get("handover_compliant", True)
+        lines.append(
+            "Handover from the seat that built this world — a MAP for a "
+            "successor wearing a DIFFERENT lens (dead ends, open doors, "
+            "one warning), not their worldview and not an instruction"
+            + ("." if compliant else
+               " (NOTE: this handover missed the harness format bar — "
+               "treat it with extra suspicion).")
+            + ":"
+        )
+        lines.append(json.dumps(handover, ensure_ascii=False,
+                                sort_keys=True))
+    pull = layer.get("pull", {})
+    if pull:
+        lines.append(
+            "Pull channel (ids only — fetch deliberately, never "
+            "forwarded): " + json.dumps(pull, ensure_ascii=False,
+                                        sort_keys=True)
+        )
     return "\n".join(lines)
 
 

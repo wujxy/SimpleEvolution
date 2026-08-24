@@ -1515,10 +1515,17 @@ class Scheduler:
         if allocation is None:
             return
         if status == "completed" and gate.passed:
+            world_sha = self._delivery_world_sha(experiment)
+            # Fact graduation (§2.6): the evidence this delivery stood on
+            # becomes verified — unsigned fact for the child's first layer;
+            # the author's beliefs stay signed and pull-only.
+            self.store.graduate_delivered_evidence(
+                episode_id=allocation.episode_id, world_sha=world_sha,
+            )
             self.store.conclude_lease(
                 allocation_id=allocation.allocation_id,
                 outcome="delivered",
-                world_sha=self._delivery_world_sha(experiment),
+                world_sha=world_sha,
             )
             return
         if status in {"gate_rejected", "no_change"}:

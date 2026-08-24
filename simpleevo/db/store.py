@@ -1090,6 +1090,43 @@ class ResearchStore:
             )
             return cur.rowcount > 0
 
+    def graduate_delivered_evidence(
+        self, *, episode_id: str, world_sha: str,
+    ) -> int:
+        """Award verified status to the evidence a delivery stood on (§2.6).
+
+        Mechanical routing, no judgment: at a gate pass, the author's head
+        state keeps its belief entries signed and pull-only, but entries
+        tied to the delivered world (``sha == world_sha``) graduate — the
+        first layer's fact block then carries them unsigned.  Returns the
+        number of graduated entries.
+        """
+        import json as _json
+
+        with self.transaction(immediate=True) as tx:
+            row = tx._conn.execute(
+                "SELECT evidence FROM research_states WHERE episode_id = ? "
+                "ORDER BY COALESCE(revision, 0) DESC LIMIT 1",
+                (episode_id,),
+            ).fetchone()
+            if row is None or row["evidence"] is None:
+                return 0
+            entries = _json.loads(row["evidence"])
+            graduated = 0
+            for entry in entries:
+                if (isinstance(entry, dict)
+                        and entry.get("sha") == world_sha
+                        and entry.get("status") != "verified"):
+                    entry["status"] = "verified"
+                    graduated += 1
+            if graduated:
+                tx._conn.execute(
+                    "UPDATE research_states SET evidence = ? "
+                    "WHERE episode_id = ? AND lease_id IS NOT NULL",
+                    (_json.dumps(entries, ensure_ascii=False), episode_id),
+                )
+            return graduated
+
     def get_allocation(self, allocation_id: str) -> ProposerAllocation | None:
         with self.transaction() as tx:
             return tx.get_allocation(allocation_id)

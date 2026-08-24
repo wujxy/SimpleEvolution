@@ -37,7 +37,7 @@ from pathlib import Path
 
 from .model import ChatModel
 from .agent_runtime import AgentRuntime
-from .context import build_research_state_seed_pack
+from .context import build_first_layer_pack
 from simpleevo.research_state import ResearchState
 
 from .memory.reflection_views import (
@@ -2186,7 +2186,7 @@ class ScientistAgent(ResearchAgent):
         session: ScientistSession,
         max_steps: int | None = None,
         world_transition: str | None = None,
-        research_state_seed: dict | None = None,
+        first_layer_seed: dict | None = None,
         lens: dict | None = None,
         node_id: str | None = None,
         episode_id: str | None = None,
@@ -2207,8 +2207,8 @@ class ScientistAgent(ResearchAgent):
         resolved_episode_id = episode_id or (
             f"{session.scientist_id}-r{current_round}"
         )
-        seed = research_state_seed or {}
-        seed_pack = build_research_state_seed_pack(seed) or None
+        seed = first_layer_seed or {}
+        seed_pack = build_first_layer_pack(seed) or None
         world_context = seed_pack or world_transition
         originating_state = seed.get("originating_research_state") or {}
         inherited_research_states = {}

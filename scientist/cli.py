@@ -34,19 +34,16 @@ def _inherit_parent_session(
     inherited_from_episode_id: str | None,
     session_dir: Path,
     *,
-    research_state_seed: dict | None = None,
+    first_layer_seed: dict | None = None,
 ) -> None:
     """Copy the parent episode's final cognition into this episode's session.
 
     Same-Node reseeds may start from the parent episode's persisted session.
-    Proposal-produced Child Nodes instead use ``research_state_seed`` and skip
+    Delivery-produced Child Nodes instead use ``first_layer_seed`` and skip
     this copy so sibling trajectory cannot leak in. Only run on first entry —
     a crash retry resumes the current Episode (Resume ≠ Evolution).
     """
-    if (
-        not inherited_from_episode_id
-        or (research_state_seed or {}).get("originating_research_state")
-    ):
+    if not inherited_from_episode_id or first_layer_seed:
         return
     parent_session_dir = run_dir / "episodes" / inherited_from_episode_id / "session"
     if not parent_session_dir.is_dir():
@@ -141,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     inherited_from_episode_id = (
         wake_view["inherited_from_episode_id"] or None)
     seat = wake_view["seat"]
-    research_state_seed = wake_view.get("research_state_seed") or {}
+    first_layer_seed = wake_view.get("first_layer") or {}
     world_transition = wake_view.get("world_transition") or {}
     adjudication_feedback = wake_view.get("adjudication_feedback")
 
@@ -172,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
             run_dir,
             inherited_from_episode_id,
             session_dir,
-            research_state_seed=research_state_seed,
+            first_layer_seed=first_layer_seed,
         )
 
     memory_service = L2MemoryService(run_dir)
@@ -264,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
             run_dir=run_dir,
             gate_block=gate_block,
             prompt_dir=Path(payload["prompt_dir"]) if payload.get("prompt_dir") else None,
-            research_state_seed=research_state_seed,
+            first_layer_seed=first_layer_seed,
             world_transition=world_transition,
             lens=seat,
             proposal_slots=proposal_slots,
