@@ -400,7 +400,9 @@ class ResearchAgent:
                     {"role": "assistant", "content": reply.text},
                     {"role": "user", "content": (
                         "Protocol correction required "
-                        f"({reason}). {self._protocol_reminder}"
+                        f"({reason}). "
+                        f"{self._terminal_truncation_note(reply.text)}"
+                        f"{self._protocol_reminder}"
                     )},
                 ])
                 continue
@@ -443,3 +445,26 @@ class ResearchAgent:
         if isinstance(exc.__cause__, (TypeError, json.JSONDecodeError)):
             return "invalid_json"
         return "invalid_action"
+
+    @staticmethod
+    def _terminal_truncation_note(reply_text: str) -> str:
+        """Targeted repair for a truncated terminal action.
+
+        Probe A caught the failure mode: the seat's world is DONE, it sends
+        deliver_world with a rich handover, the reply is cut at the output
+        ceiling mid-JSON, and generic protocol reminders make the model
+        re-emit the same long action into the same ceiling until the
+        repair budget dies.  Name the disease and the cure explicitly:
+        re-send the SAME terminal action with a drastically shortened
+        handover — the detail belongs in the research state, not here.
+        """
+        if '"deliver_world"' not in (reply_text or ""):
+            return ""
+        return (
+            "Your last reply looks CUT OFF mid-JSON — the deliver_world "
+            "action is too long for one reply. Re-send the SAME "
+            "deliver_world action with a drastically shortened handover: "
+            "each dead_end and open_question ONE short line (<=15 words), "
+            "warning <=20 words. The full detail belongs in "
+            "update_research_state, not in the handover. "
+        )

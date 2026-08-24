@@ -153,6 +153,11 @@ def _readings(store: ResearchStore, run_dir: Path, pricing: dict,
 def _cmd_run(args: argparse.Namespace) -> int:
     t0 = time.monotonic()
     config = load_config(args.config)
+    if args.scientist_steps:
+        # The shipped smoke configs pin a stingy step budget (80); a
+        # complete-research seat that works mostly by hand needs more
+        # room (probe-1 reached its delivery attempt at step 74).
+        config = replace(config, scientist_steps=args.scientist_steps)
     _api_preflight(config)
     run_dir = Path(args.run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -213,6 +218,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     )
 
     step = 0
+    drained_streak = 0
     while True:
         scheduler.step()
         step += 1
@@ -248,11 +254,20 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     outcome="cut_off", reason="probe budget cap",
                 )
                 break
+        # Wedge detector with grace: a failed-result ingest leaves the
+        # lease open with nothing in flight for exactly the steps before
+        # the reconciler resubmits — only a SUSTAINED drain (no attempt,
+        # no resubmit, across several steps) is a real wedge.
         if not scheduler._in_flight() and step > 1:
-            # Nothing running and the lease is somehow still open (a wedged
-            # state the reconciler could not recover): bail visibly.
-            _log(f"WARNING: drained but lease still {state}; parking")
-            break
+            drained_streak += 1
+            if drained_streak >= 4:
+                _log(
+                    f"WARNING: drained {drained_streak} steps but lease "
+                    f"still {state}; parking"
+                )
+                break
+        else:
+            drained_streak = 0
         time.sleep(config.poll_seconds)
 
     readings = _readings(
@@ -279,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-seconds", type=float, default=3600.0)
     parser.add_argument("--lease-budget-usd", type=float, default=8.0)
     parser.add_argument("--budget-usd", type=float, default=10.0)
+    parser.add_argument("--scientist-steps", type=int, default=200,
+                        help="override the config's seat step budget (0 = keep)")
     args = parser.parse_args(argv)
     return _cmd_run(args)
 

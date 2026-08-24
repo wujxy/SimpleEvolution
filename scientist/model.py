@@ -207,7 +207,8 @@ class OpenAICompatChatModel(_RetryChatModel):
 
     def __init__(self, *, client, model: str,
                  max_retries: int = 4, retry_base_delay: float = 2.0,
-                 reasoning_effort: str | None = None):
+                 reasoning_effort: str | None = None,
+                 max_output_tokens: int | None = None):
         super().__init__(
             max_retries=max_retries, retry_base_delay=retry_base_delay,
         )
@@ -217,6 +218,13 @@ class OpenAICompatChatModel(_RetryChatModel):
         # reasoning_effort: low|medium|high). None = the provider's
         # server-side default.
         self.reasoning_effort = reasoning_effort
+        # Explicit output budget.  Without it the provider default applies
+        # — probe A caught it cutting a deliver_world action mid-JSON: the
+        # seat's world was DONE and the delivery serialization died five
+        # protocol repairs in a row because the model kept re-emitting the
+        # same long handover into the same ceiling.  Default generous: a
+        # terminal action carries the whole handover in one reply.
+        self.max_output_tokens = max_output_tokens or 8192
         # Dropped permanently if the provider rejects stream_options (some
         # OpenAI-compatible gateways don't know it).
         self._stream_usage = True
@@ -229,6 +237,8 @@ class OpenAICompatChatModel(_RetryChatModel):
             stream=True,
             timeout=remaining,
         )
+        if self.max_output_tokens:
+            kwargs["max_tokens"] = self.max_output_tokens
         if json_object:
             # The Scientist protocol needs strict JSON. Free-text consumers
             # (cognitive transformer) pass json_object=False: DeepSeek 400s
@@ -386,6 +396,7 @@ class OpenAIChatModel(OpenAICompatChatModel):
             client=OpenAI(api_key=key, base_url=config["base_url"]),
             model=config["model"],
             reasoning_effort=_validated_effort(config),
+            max_output_tokens=config.get("max_output_tokens"),
         )
 
 
