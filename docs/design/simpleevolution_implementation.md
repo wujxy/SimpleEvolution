@@ -89,7 +89,7 @@ experiment/      # 共享 package：executor + gate + eval + worktree + Apptaine
 | Frontier 持久化 + 原子 ingest | `simpleevo/db/store.py`, `simpleevo/scheduler/loop.py` | `tests/scheduler/test_frontier_persistence.py` |
 | Reconcile（离线 result.json ingest） | `simpleevo/scheduler/reconcile.py`, `simpleevo/scheduler/loop.py` | `tests/scheduler/test_reconcile.py` |
 | Per-proposal L3 snapshot + Child Thread fork | `proposer/cli.py`, `simpleevo/db/store.py` | `tests/scheduler/test_frontier_persistence.py` |
-| L2 查询工具（inspect_node / inspect_experiment / search_experiments / compare_nodes / lineage） | `proposer/l2_memory.py`, `simpleevo/db/queries.py` | `tests/proposer/test_l2_memory.py` |
+| L2 查询工具（inspect_node / inspect_experiment / search_experiments / compare_nodes / lineage） | `proposer/memory/l2.py`, `simpleevo/db/queries.py` | `tests/proposer/test_l2_memory.py` |
 | Telemetry（frontier_size / lineage_axis_share / allocation_distribution） | `simpleevo/scheduler/telemetry.py` | CLI smoke 产生 JSONL |
 | 实验链路 bug 修复（`ExecutionResult` 异常处理、`changed_paths` 回填） | `experiment/cli.py`, `experiment/runner.py` | `tests/experiment/test_*.py` |
 | 真实任务示例 tiny_algo_opt（task.yaml + repo + apptainer.def + setup.sh） | `examples/tiny_algo_opt/` | `tests/test_example_config.py` |

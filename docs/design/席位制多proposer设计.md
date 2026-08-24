@@ -420,8 +420,8 @@ top_k=6）；2h 墙钟处换 driver 续到 4h（`runs/seat-v6-2h.extend.sh`，�
 | tree（v5） | 1.85× | 2 | $1.30 | 1.66h quiesce（§1 反面教材；已被 seat-v6 取代，不入图） |
 
 图（三臂：coding-agent / loop / seat-v6——**seat-v6 即 supervisor tree**，
-v5 tree 不再单列）：`ablation-v6-worktime.png`（工作时间轴，主对比）/
-`ablation-v6.png`（墙钟轴）/ `ablation-v6-cost.png`（成本轴）。
+v5 tree 不再单列）：`runs/figures/ablation-v6-worktime.png`（工作时间轴，主对比）/
+`runs/figures/ablation-v6.png`（墙钟轴）/ `runs/figures/ablation-v6-cost.png`（成本轴）。
 seat-v6 前三节点 4.79×/4.65×/4.62× 来自三条不同谱系（含一个 d1 直连
 root 的 4.62×——决策 20 后 root 补席的直接回报）。
 

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from simpleevo.research_state import CognitiveTransformation, ResearchState
+from simpleevo.research_state import ResearchState
 
 from .model import ChatModel
 from .runtime import ApptainerRuntime
@@ -51,7 +51,6 @@ class WorkingState:
     located: bool = False
     last_tool_fingerprint: str | None = None
     research_states: dict[str, ResearchState] = field(default_factory=dict)
-    transformations: dict[str, CognitiveTransformation] = field(default_factory=dict)
     inspected_experiment_ids: set[str] = field(default_factory=set)
 
 
@@ -213,7 +212,6 @@ def _build_telemetry(
         "tool_calls": state.counts.get("tool", 0),
         "source_reads": state.counts.get("source_read", 0),
         "research_states_registered": len(state.research_states),
-        "transformations_requested": len(state.transformations),
         "proposed_research_states": state.counts.get(
             "proposed_research_states", 0,
         ),
@@ -237,7 +235,6 @@ def _build_trace(
         "reason_kind": reason_kind,
         "evidence_refs": list(evidence_refs),
         "research_state_ids": list(state.research_states),
-        "transformation_ids": list(state.transformations),
         "last_raw_reply": state.last_raw_reply[:400],
     }
 

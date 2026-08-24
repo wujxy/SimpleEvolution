@@ -21,7 +21,7 @@ from simpleevo.db.queries import ResearchQueries
 from simpleevo.generator import Generator, load_generator_basis
 from simpleevo.jobs.base import BaseSubmitter
 from simpleevo.research_state import research_state_to_dict
-from proposer.supervisor import validate_integration_request
+from .admission import validate_integration_request
 
 from .frontier import (
     FrontierConfig,
@@ -38,6 +38,8 @@ from .telemetry import TelemetryRecorder, spend_usd
 class SchedulerConfig:
     max_proposer_inflight: int = 2
     max_experiment_inflight: int = 2
+    # Frontier-baseline mode only (ablation loop arm).  Seat purchases pin
+    # this to 1 in _seat_leases; do not grow it into the seat contract.
     proposal_slots: int = 3
     queue: QueueConfig | None = None
     frontier: FrontierConfig | None = None
@@ -1251,7 +1253,7 @@ class Scheduler:
                     self.store.publish_research_batch(
                         node_id=request.target_node_id,
                         episode_id=request.integrator_episode_id,
-                        transformations=(), research_states=(state,),
+                        research_states=(state,),
                         proposals=(proposal,),
                         reserved_proposal_ids=(proposal["proposal_id"],),
                     )
@@ -1591,7 +1593,6 @@ class Scheduler:
         result = raw.get("result", {})
         node_id = result.get("node_id")
         episode_id = result.get("episode_id")
-        transformations = result.get("transformations", [])
         research_states = result.get("research_states", [])
         proposals = result.get("proposals", [])
         allocation = self.store.get_allocation(allocation_id)
@@ -1622,7 +1623,6 @@ class Scheduler:
             self.store.publish_research_batch(
                 node_id=node_id,
                 episode_id=episode_id,
-                transformations=transformations,
                 research_states=research_states,
                 proposals=proposals,
                 reserved_proposal_ids=reserved,

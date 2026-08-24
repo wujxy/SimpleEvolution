@@ -32,7 +32,7 @@ from .scientist import (
     _SELF_REVIEW_DEFAULT_DEFER,
 )
 from .scientist_session import ScientistSession
-from simpleevo.research_state import CognitiveTransformation, ResearchState
+from simpleevo.research_state import ResearchState
 
 
 @dataclass(frozen=True)
@@ -63,7 +63,6 @@ class EpisodeResult:
     deliberation_telemetry: dict = field(default_factory=dict)
     trace: dict = field(default_factory=dict)
     research_states: tuple[ResearchState, ...] = ()
-    transformations: tuple[CognitiveTransformation, ...] = ()
     research_operation: str | None = None
     donor_experiment_ids: tuple[str, ...] = ()
 
@@ -313,7 +312,6 @@ class ProposerOrchestrator:
             deliberation_telemetry=result.deliberation_telemetry,
             trace=result.trace,
             research_states=result.research_states,
-            transformations=result.transformations,
             research_operation=result.research_operation,
             donor_experiment_ids=result.donor_experiment_ids,
         )

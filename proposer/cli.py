@@ -12,14 +12,11 @@ import socket
 from pathlib import Path
 
 from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
-from simpleevo.research_state import (
-    research_state_to_dict,
-    transformation_to_dict,
-)
+from simpleevo.research_state import research_state_to_dict
 
 from experiment.git_worktree import GitWorkspaceProvider, WorkspaceSpec
 
-from .l2_memory import L2MemoryService
+from .memory.l2 import L2MemoryService
 from .model import build_chat_model
 from .orchestrator import ProposerOrchestrator
 from .runtime import ApptainerRuntime, world_mount_map
@@ -90,10 +87,6 @@ def _result_to_dict(result, proposals_with_meta) -> dict:
         "research_states": [
             research_state_to_dict(item)
             for item in getattr(result, "research_states", ())
-        ],
-        "transformations": [
-            transformation_to_dict(item)
-            for item in getattr(result, "transformations", ())
         ],
         "abstain_reason": result.abstain_reason,
         "telemetry": result.deliberation_telemetry,

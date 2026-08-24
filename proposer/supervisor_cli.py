@@ -9,7 +9,7 @@ from pathlib import Path
 
 from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
 
-from .l2_memory import L2MemoryService
+from .memory.l2 import L2MemoryService
 from .model import build_chat_model
 from .scientist import ContextPolicy
 from .supervisor import SupervisorAgent, SupervisorTools, load_supervisor_session

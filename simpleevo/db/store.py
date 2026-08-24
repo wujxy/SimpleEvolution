@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from simpleevo.research_state import CognitiveTransformation, ResearchState
+from simpleevo.research_state import ResearchState
 
 from .schema import ResearchDBSchema
 
@@ -468,13 +468,11 @@ class ResearchStore:
         *,
         node_id: str,
         episode_id: str,
-        transformations: Iterable[dict[str, Any]],
         research_states: Iterable[dict[str, Any]],
         proposals: Iterable[dict[str, Any]],
         reserved_proposal_ids: Iterable[str] | None = None,
     ) -> list[Proposal]:
         """Atomically publish one Episode's cognitive records and proposals."""
-        transformation_rows = list(transformations)
         state_rows = list(research_states)
         proposal_rows = list(proposals)
         reserved = (
@@ -494,28 +492,12 @@ class ResearchStore:
             if episode.node_id != node_id:
                 raise ValueError("episode belongs to another node")
 
-            transformation_ids = [
-                row.get("transformation_id") for row in transformation_rows
-            ]
             state_ids = [row.get("research_state_id") for row in state_rows]
             proposal_ids = [row.get("proposal_id") for row in proposal_rows]
-            self._validate_unique_ids(
-                transformation_ids, "transformation_id",
-            )
             self._validate_unique_ids(state_ids, "research_state_id")
             self._validate_unique_ids(proposal_ids, "proposal_id")
 
-            incoming_transformations = set(transformation_ids)
             incoming_states = set(state_ids)
-            for transformation_id in incoming_transformations:
-                if not transformation_id.startswith(f"ct-{episode_id}-"):
-                    raise ValueError(
-                        f"invalid transformation_id for episode: {transformation_id}"
-                    )
-                if tx.get_cognitive_transformation(transformation_id) is not None:
-                    raise ValueError(
-                        f"duplicate transformation_id: {transformation_id}"
-                    )
             for state_id in incoming_states:
                 if not state_id.startswith(f"rs-{episode_id}-"):
                     raise ValueError(
@@ -523,19 +505,6 @@ class ResearchStore:
                     )
                 if tx.get_research_state(state_id) is not None:
                     raise ValueError(f"duplicate research_state_id: {state_id}")
-
-            for raw in transformation_rows:
-                if raw.get("node_id") != node_id or raw.get("episode_id") != episode_id:
-                    raise ValueError(
-                        "transformation belongs to another node or episode"
-                    )
-                source_id = raw.get("source_research_state_id")
-                if (
-                    source_id
-                    and source_id not in incoming_states
-                    and tx.get_research_state(source_id) is None
-                ):
-                    raise ValueError(f"unknown source_research_state_id: {source_id}")
 
             for raw in state_rows:
                 if raw.get("node_id") != node_id or raw.get("episode_id") != episode_id:
@@ -551,26 +520,7 @@ class ResearchStore:
                     raise ValueError(
                         f"unknown derived_from_research_state_id: {derived_id}"
                     )
-                transformation_id = raw.get("transformation_id")
-                if (
-                    transformation_id
-                    and transformation_id not in incoming_transformations
-                    and tx.get_cognitive_transformation(transformation_id) is None
-                ):
-                    raise ValueError(
-                        f"unknown transformation_id: {transformation_id}"
-                    )
 
-            for raw in transformation_rows:
-                tx.create_cognitive_transformation(CognitiveTransformation(
-                    transformation_id=raw["transformation_id"],
-                    node_id=node_id,
-                    episode_id=episode_id,
-                    source_research_state_id=raw.get("source_research_state_id"),
-                    operator_id=raw["operator_id"],
-                    challenge=raw["challenge"],
-                    created_at=float(raw.get("created_at", now)),
-                ))
             for raw in state_rows:
                 tx.create_research_state(ResearchState(
                     research_state_id=raw["research_state_id"],
@@ -1828,37 +1778,6 @@ class _Transaction:
         )
         return proposal
 
-    def create_cognitive_transformation(
-        self, transformation: CognitiveTransformation,
-    ) -> CognitiveTransformation:
-        self._conn.execute(
-            """
-            INSERT INTO cognitive_transformations
-            (transformation_id, node_id, episode_id, source_research_state_id,
-             operator_id, challenge, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                transformation.transformation_id,
-                transformation.node_id,
-                transformation.episode_id,
-                transformation.source_research_state_id,
-                transformation.operator_id,
-                transformation.challenge,
-                transformation.created_at,
-            ),
-        )
-        return transformation
-
-    def get_cognitive_transformation(
-        self, transformation_id: str,
-    ) -> CognitiveTransformation | None:
-        row = self._conn.execute(
-            "SELECT * FROM cognitive_transformations WHERE transformation_id = ?",
-            (transformation_id,),
-        ).fetchone()
-        return None if row is None else _transformation_from_row(row)
-
     def create_research_state(self, state: ResearchState) -> ResearchState:
         self._conn.execute(
             """
@@ -2064,18 +1983,6 @@ def _proposal_from_row(row: sqlite3.Row) -> Proposal:
         research_state_id=row["research_state_id"],
         research_operation=row["research_operation"],
         donor_experiment_ids=tuple(_unjson(row["donor_experiment_ids"])),
-    )
-
-
-def _transformation_from_row(row: sqlite3.Row) -> CognitiveTransformation:
-    return CognitiveTransformation(
-        transformation_id=row["transformation_id"],
-        node_id=row["node_id"],
-        episode_id=row["episode_id"],
-        source_research_state_id=row["source_research_state_id"],
-        operator_id=row["operator_id"],
-        challenge=row["challenge"],
-        created_at=row["created_at"],
     )
 
 

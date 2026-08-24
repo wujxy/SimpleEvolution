@@ -14,9 +14,9 @@ from typing import Any, Iterable
 from .store import (
     Episode, Experiment, Node, Proposal,
     _episode_from_row, _experiment_from_row, _node_from_row, _proposal_from_row,
-    _research_state_from_row, _transformation_from_row,
+    _research_state_from_row,
 )
-from simpleevo.research_state import CognitiveTransformation, ResearchState
+from simpleevo.research_state import ResearchState
 
 
 @dataclass(frozen=True)
@@ -185,28 +185,6 @@ class ResearchQueries:
                 (episode_id,),
             ).fetchall()
             return [_research_state_from_row(row) for row in rows]
-
-    def get_transformation(
-        self, transformation_id: str,
-    ) -> CognitiveTransformation | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM cognitive_transformations "
-                "WHERE transformation_id = ?",
-                (transformation_id,),
-            ).fetchone()
-            return None if row is None else _transformation_from_row(row)
-
-    def transformations_for_episode(
-        self, episode_id: str,
-    ) -> list[CognitiveTransformation]:
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM cognitive_transformations WHERE episode_id = ? "
-                "ORDER BY created_at, transformation_id",
-                (episode_id,),
-            ).fetchall()
-            return [_transformation_from_row(row) for row in rows]
 
     def research_state_width(self) -> list[dict[str, Any]]:
         """Return Node-local identity counts without interpreting state text."""

@@ -1,4 +1,4 @@
-"""Persistence tests for ResearchState and CognitiveTransformation."""
+"""Persistence tests for ResearchState."""
 from __future__ import annotations
 
 import tempfile
@@ -8,7 +8,7 @@ import pytest
 
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.db.store import GateDecision, ResearchStore
-from simpleevo.research_state import CognitiveTransformation, ResearchState
+from simpleevo.research_state import ResearchState
 
 
 @pytest.fixture
@@ -17,7 +17,7 @@ def store():
         yield ResearchStore(Path(tmp) / "simpleevo.db")
 
 
-def test_research_state_and_transformation_round_trip(store: ResearchStore):
+def test_research_state_round_trip(store: ResearchStore):
     with store.transaction() as tx:
         node = tx.create_node(
             parent_node_id=None,
@@ -29,24 +29,13 @@ def test_research_state_and_transformation_round_trip(store: ResearchStore):
             status="active",
         )
         episode = tx.create_episode(node_id=node.node_id)
-        transformation = tx.create_cognitive_transformation(
-            CognitiveTransformation(
-                transformation_id="ct-episode-1-001",
-                node_id=node.node_id,
-                episode_id=episode.episode_id,
-                source_research_state_id=None,
-                operator_id="G2",
-                challenge="Question the current component boundary.",
-                created_at=1.0,
-            )
-        )
         state = tx.create_research_state(
             ResearchState(
                 research_state_id="rs-episode-1-001",
                 node_id=node.node_id,
                 episode_id=episode.episode_id,
                 derived_from_research_state_id=None,
-                transformation_id=transformation.transformation_id,
+                transformation_id=None,
                 working_model="The boundary loses reusable state.",
                 evidence_refs=("source:src/fcn.cc:FCN",),
                 created_at=2.0,
@@ -54,7 +43,6 @@ def test_research_state_and_transformation_round_trip(store: ResearchStore):
         )
 
     queries = ResearchQueries(store.path)
-    assert queries.get_transformation(transformation.transformation_id) == transformation
     assert queries.get_research_state(state.research_state_id) == state
     assert queries.research_states_for_episode(episode.episode_id) == [state]
 
@@ -94,24 +82,13 @@ def _node_and_episode(store: ResearchStore):
 
 
 def _batch_records(node, episode):
-    transformation_id = f"ct-{episode.episode_id}-001"
     research_state_id = f"rs-{episode.episode_id}-001"
     return (
-        [{
-            "transformation_id": transformation_id,
-            "node_id": node.node_id,
-            "episode_id": episode.episode_id,
-            "source_research_state_id": None,
-            "operator_id": "G2",
-            "challenge": "Question the current component boundary.",
-            "created_at": 1.0,
-        }],
         [{
             "research_state_id": research_state_id,
             "node_id": node.node_id,
             "episode_id": episode.episode_id,
             "derived_from_research_state_id": None,
-            "transformation_id": transformation_id,
             "working_model": "The boundary loses reusable state.",
             "evidence_refs": ["source:src/fcn.cc:FCN"],
             "created_at": 2.0,
@@ -122,11 +99,10 @@ def _batch_records(node, episode):
 
 def test_publish_research_batch_persists_state_and_two_proposals(store):
     node, episode = _node_and_episode(store)
-    transformations, states, state_id = _batch_records(node, episode)
+    states, state_id = _batch_records(node, episode)
     proposals = store.publish_research_batch(
         node_id=node.node_id,
         episode_id=episode.episode_id,
-        transformations=transformations,
         research_states=states,
         proposals=[
             {
@@ -151,18 +127,16 @@ def test_publish_research_batch_persists_state_and_two_proposals(store):
     queries = ResearchQueries(store.path)
     assert [item.proposal_id for item in proposals] == ["p-1", "p-2"]
     assert queries.get_research_state(state_id) is not None
-    assert queries.get_transformation(transformations[0]["transformation_id"]) is not None
     assert {item.research_state_id for item in queries.queued_proposals()} == {state_id}
     assert {item.research_operation for item in proposals} == {"explore"}
 
 
 def test_publish_research_batch_persists_state_only_abstention(store):
     node, episode = _node_and_episode(store)
-    transformations, states, state_id = _batch_records(node, episode)
+    states, state_id = _batch_records(node, episode)
     created = store.publish_research_batch(
         node_id=node.node_id,
         episode_id=episode.episode_id,
-        transformations=transformations,
         research_states=states,
         proposals=[],
         reserved_proposal_ids=(),
@@ -177,31 +151,25 @@ def test_publish_research_batch_persists_state_only_abstention(store):
     ("mutate", "error"),
     [
         (
-            lambda node, episode, transformations, states, proposals: states[0].update(
-                transformation_id="ct-missing"
-            ),
-            "unknown transformation_id",
-        ),
-        (
-            lambda node, episode, transformations, states, proposals: states[0].update(
+            lambda node, episode, states, proposals: states[0].update(
                 node_id="node-forged"
             ),
             "research state belongs to another node or episode",
         ),
         (
-            lambda node, episode, transformations, states, proposals: states.append(
+            lambda node, episode, states, proposals: states.append(
                 dict(states[0])
             ),
             "duplicate research_state_id",
         ),
         (
-            lambda node, episode, transformations, states, proposals: proposals[0].update(
+            lambda node, episode, states, proposals: proposals[0].update(
                 proposal_id="p-forged"
             ),
             "not in reserved pool",
         ),
         (
-            lambda node, episode, transformations, states, proposals: proposals[0].update(
+            lambda node, episode, states, proposals: proposals[0].update(
                 research_state_id="rs-missing"
             ),
             "unknown research_state_id",
@@ -210,24 +178,22 @@ def test_publish_research_batch_persists_state_only_abstention(store):
 )
 def test_publish_research_batch_rolls_back_invalid_payload(store, mutate, error):
     node, episode = _node_and_episode(store)
-    transformations, states, state_id = _batch_records(node, episode)
+    states, state_id = _batch_records(node, episode)
     proposals = [{
         "proposal_id": "p-1",
         "research_state_id": state_id,
         "instruction": "try X",
         "rationale": {"expectation": "metric improves"},
     }]
-    mutate(node, episode, transformations, states, proposals)
+    mutate(node, episode, states, proposals)
     with pytest.raises(ValueError, match=error):
         store.publish_research_batch(
             node_id=node.node_id,
             episode_id=episode.episode_id,
-            transformations=transformations,
-            research_states=states,
+                research_states=states,
             proposals=proposals,
             reserved_proposal_ids=("p-1",),
         )
     queries = ResearchQueries(store.path)
     assert queries.research_states_for_episode(episode.episode_id) == []
-    assert queries.transformations_for_episode(episode.episode_id) == []
     assert queries.queued_proposals() == []

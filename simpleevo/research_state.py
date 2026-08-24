@@ -6,17 +6,6 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class CognitiveTransformation:
-    transformation_id: str
-    node_id: str
-    episode_id: str
-    source_research_state_id: str | None
-    operator_id: str
-    challenge: str
-    created_at: float
-
-
-@dataclass(frozen=True)
 class ResearchState:
     research_state_id: str
     node_id: str
@@ -28,10 +17,6 @@ class ResearchState:
     # Dormant since the seat design removed transform_worldview; kept
     # for schema stability (cognitive_transformations table preserved).
     transformation_id: str | None = None
-
-
-def transformation_to_dict(value: CognitiveTransformation) -> dict[str, Any]:
-    return asdict(value)
 
 
 def research_state_to_dict(value: ResearchState) -> dict[str, Any]:

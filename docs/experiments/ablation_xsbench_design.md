@@ -127,7 +127,7 @@ init → baseline（1.28M lps）→ trivial proposer → executor agent
 - **coding-agent**：5 evals / $2.07，best **2.29M（6.05×）**
 - **topk**：13 evals / $1.69，best **1.57M（4.14×）**
 
-均为 VERIFY PASS，绘图管线产出 [ablation.png](../../ablation.png)（x=累计 USD，y=×speedup vs 各 run 自身 baseline）。**单 seed 只验证链路 + 校准成本/延迟，不做三臂结论**（loop 单点 7.37× 领先、topk 点数最多，但样本量 1 无统计意义）。
+均为 VERIFY PASS，绘图管线产出 [ablation.png](../../runs/figures/ablation.png)（x=累计 USD，y=×speedup vs 各 run 自身 baseline）。**单 seed 只验证链路 + 校准成本/延迟，不做三臂结论**（loop 单点 7.37× 领先、topk 点数最多，但样本量 1 无统计意义）。
 
 ### 6c. 正式配置大测试轮（3 臂 × 1 seed × $3.5，已修复两个测量漏洞）
 
@@ -153,7 +153,7 @@ init → baseline（1.28M lps）→ trivial proposer → executor agent
 2. **cap 值 task/machine 特定**——8M 按本机 author kernel 标定，换环境不成立；
 3. **根因是任务形状**——计时流固定且可预计算（每个 lookup 是 `i` 的纯函数），任何输出 gate 都看不到"计时区不干活"。
 
-曾评估方案 B（源码模式 gate 拦 lookups 规模预计算数组）——会误杀合法优化（预计算 p_energies/mat_ids 输入表也是 lookups 规模数组），不采用。方案 C（计时流改运行时生成、live 喂入）是唯一根治法，但大改 benchmark 语义，XSBench 作为方法学平台不值得。**正式实验采用方案 A**；真正的防御留给 OMILREC 类任务设计：评估指标应测有状态/live 计算，避免固定可预计算流（本轮的奖励黑客图见 [ablation-v2.png](../../ablation-v2.png)，topk 196× 段即作弊）。
+曾评估方案 B（源码模式 gate 拦 lookups 规模预计算数组）——会误杀合法优化（预计算 p_energies/mat_ids 输入表也是 lookups 规模数组），不采用。方案 C（计时流改运行时生成、live 喂入）是唯一根治法，但大改 benchmark 语义，XSBench 作为方法学平台不值得。**正式实验采用方案 A**；真正的防御留给 OMILREC 类任务设计：评估指标应测有状态/live 计算，避免固定可预计算流（本轮的奖励黑客图见 [ablation-v2.png](../../runs/figures/ablation-v2.png)，topk 196× 段即作弊）。
 
 **发现 B — 共核 pin 竞争（三臂 baseline 同挤 core 9）**。bench.sh 默认 `BENCH_PIN=9`。三臂并发测 baseline → 三个 eval 进程（build+warmup+5 reps）全 pin 在 core 9 上互相饿死 → baseline 各测 ~377k（真实 pin-alone baseline 1.47M，差 4×）；后续 eval 随并发度呈双峰（~0.8M 被抢核 / ~2.0M 独占）→ best-so-far 相对被压低的 baseline **虚高 ~4×**（loop "5.5×" 相对真实 baseline 只有 ~1.4×，且低于 author kernel 2.56M）。
 
@@ -175,7 +175,7 @@ init → baseline（1.28M lps）→ trivial proposer → executor agent
 | loop | 9 | 0 | $2.97 | 2,207,506 | **1.50×** | 1.89× |
 | topk | 9 | 2 | $3.08 | 6,289,308 | **4.27×** | 5.37× |
 
-图：[ablation-v4.png](../../ablation-v4.png)。
+图：[ablation-v4.png](../../runs/figures/ablation-v4.png)。
 
 **关键实证**：
 

@@ -19,7 +19,7 @@ from proposer.scientist import (
     _validate_action_guard,
     parse_response,
 )
-from simpleevo.research_state import CognitiveTransformation, ResearchState
+from simpleevo.research_state import ResearchState
 
 
 class FakeMemory:
@@ -253,7 +253,7 @@ def test_synthesis_metadata_reaches_proposal_artifact():
     assert artifact["donor_experiment_ids"] == ["exp-1"]
 
 
-def test_worker_result_serializes_cognitive_records_and_proposal_linkage():
+def test_worker_result_serializes_research_records_and_proposal_linkage():
     research_state = ResearchState(
         research_state_id="rs-ep-1-001",
         node_id="node-1",
@@ -262,15 +262,6 @@ def test_worker_result_serializes_cognitive_records_and_proposal_linkage():
         transformation_id="ct-ep-1-001",
         working_model="Repeated work crosses the FCN boundary.",
         evidence_refs=("source:src/fcn.cc:FCN",),
-        created_at=1.0,
-    )
-    transformation = CognitiveTransformation(
-        transformation_id="ct-ep-1-001",
-        node_id="node-1",
-        episode_id="ep-1",
-        source_research_state_id=None,
-        operator_id="G2",
-        challenge="Question the FCN ownership boundary.",
         created_at=1.0,
     )
     proposal = parse_response(json.dumps({
@@ -288,13 +279,11 @@ def test_worker_result_serializes_cognitive_records_and_proposal_linkage():
         "deliberation_telemetry": {},
         "trace": {},
         "research_states": (research_state,),
-        "transformations": (transformation,),
     })()
     serialized = _result_to_dict(
         result, [_proposal_to_dict(proposal, "prop-1")],
     )
     assert serialized["research_states"][0]["research_state_id"] == "rs-ep-1-001"
-    assert serialized["transformations"][0]["operator_id"] == "G2"
     assert serialized["proposals"][0]["research_state_id"] == "rs-ep-1-001"
     assert serialized["proposals"][0]["rationale"]["expectation"] == (
         "FCN call-local time and total time both decrease."

@@ -153,6 +153,8 @@ class EvolutionConfig:
     pricing: Mapping[str, Any] = field(default_factory=dict)
     prompt_dir: Path | None = None
     jobs: JobConfig = field(default_factory=JobConfig)
+    # Frontier-baseline mode only (ablation loop arm).  Supervisor/seat mode
+    # always buys exactly one slot per purchase — this knob never applies there.
     proposal_slots: int = 3
     scientist_steps: int = 200
     agent_timeout_seconds: int = 3600

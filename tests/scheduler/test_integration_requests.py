@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from proposer.supervisor import validate_integration_request
+from simpleevo.scheduler.admission import validate_integration_request
 from simpleevo.db.store import GateDecision, GateResult, Proposal, ResearchStore
 from simpleevo.scheduler.loop import Scheduler, SchedulerConfig
 

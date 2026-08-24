@@ -38,7 +38,7 @@ from pathlib import Path
 from .model import ChatModel
 from .agent_runtime import AgentRuntime
 from .context import build_research_state_seed_pack
-from simpleevo.research_state import CognitiveTransformation, ResearchState
+from simpleevo.research_state import ResearchState
 
 from .memory.reflection_views import (
     NOT_PERFORMED_STATUSES,
@@ -111,7 +111,6 @@ class ScientistRound:
     deliberation_telemetry: dict = field(default_factory=dict)
     trace: dict = field(default_factory=dict)
     research_states: tuple[ResearchState, ...] = ()
-    transformations: tuple[CognitiveTransformation, ...] = ()
     research_operation: str | None = None
     donor_experiment_ids: tuple[str, ...] = ()
 
@@ -2328,7 +2327,6 @@ class ScientistAgent(ResearchAgent):
                     trace=_build_trace(
                         state, round_id=current_round, outcome="submit"),
                     research_states=tuple(state.research_states.values()),
-                    transformations=tuple(state.transformations.values()),
                 )
             abstain_reason = (
                 "research budget exhausted before the Scientist submitted "
@@ -2344,7 +2342,6 @@ class ScientistAgent(ResearchAgent):
                 trace=_build_trace(
                     state, round_id=current_round, outcome="abstain"),
                 research_states=tuple(state.research_states.values()),
-                transformations=tuple(state.transformations.values()),
             )
 
         return self._deliberate(
