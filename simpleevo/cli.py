@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shutil
 import subprocess
 import sys
-from pathlib import Path, PurePosixPath
+import time
+from dataclasses import replace
+from pathlib import Path
 
 from .config import EvolutionConfig, load_config, save_config
 from .db.queries import ResearchQueries
@@ -140,78 +143,80 @@ def _preflight_image(config: EvolutionConfig) -> str:
 
 def _measure_baseline(
     config: EvolutionConfig, run_dir: Path, root_sha: str,
+    submitter: BaseSubmitter,
 ) -> dict:
     """Evaluate the pristine source once — the run-start baseline.
 
-    Mirrors SimpleLoop's run-start baseline (app.py:_starting_state): a fresh
-    worktree at the root SHA, the same eval_commands in the same Apptainer
-    runtime the harness uses, gates and objective validated. Returns the parsed
-    metrics; raises on infra failure so a run that cannot measure its own
-    baseline aborts loudly instead of optimizing blind.
+    Submitted through the SAME job backend as every candidate experiment
+    (SimpleLoop's hepjob contract): under condor the baseline is itself a
+    condor job, so the anchor objective is measured on the pinned machine
+    class alongside — not on the login node beside — the candidates it will
+    be compared against.  The payload carries ``eval_only``: the experiment
+    worker skips its executor (the pristine tree needs no implementation
+    agent) and runs only the eval commands.  Gates and objective are
+    validated by the worker; this side additionally rejects a failed /
+    missing result so a run that cannot measure its own baseline aborts
+    loudly instead of optimizing blind.
     """
-    from experiment.apptainer import (
-        ApptainerSandbox,
-        SandboxSpec,
-        forwarded_payload_env,
-    )
-    from experiment.contracts import MountMode, MountSpec, WorkspaceSpec
-    from experiment.evaluator import run_eval, validate_baseline
-    from experiment.git_worktree import GitWorkspaceProvider
+    from .jobs.envelope import WorkerStatus, read_result
 
-    provider = GitWorkspaceProvider(run_dir, config.repo_path)
-    provider.initialize()
-    workspace = provider.create(WorkspaceSpec("baseline", root_sha))
-    try:
-        sandbox = ApptainerSandbox(userns=True)
-        builder = sandbox.bind(
-            SandboxSpec(
-                image=config.runtime_image,
-                environment={
-                    k: v for k, v in forwarded_payload_env().items()
-                    if not k.startswith("ANTHROPIC_")
-                },
-                network=True,
-            ),
-            mounts=(
-                MountSpec(
-                    source=workspace.path,
-                    target=PurePosixPath("/work"),
-                    mode=MountMode.READ_WRITE,
-                ),
-                MountSpec(
-                    source=provider.repo,
-                    target=PurePosixPath("/repo"),
-                    mode=MountMode.READ_ONLY,
-                ),
+    run_id = "baseline"
+    # A previous attempt's result would be read as this one's: the baseline
+    # runs at most once per run (root metrics guard), but a retried init
+    # after a timeout must not silently reuse stale metrics.
+    result_path = run_dir / "experiments" / run_id / "result.json"
+    result_path.unlink(missing_ok=True)
+    submitted = Path(submitter.submit_baseline(run_id, {
+        "experiment_id": run_id,
+        "proposal_id": "",
+        "parent_node_id": "",
+        "parent_sha": root_sha,
+        "proposal": "baseline evaluation",
+        "eval_only": True,
+    }))
+    deadline = time.monotonic() + config.jobs.run_timeout_seconds
+    while not submitted.exists():
+        if time.monotonic() > deadline:
+            submitter.remove_job(run_id, "experiment")
+            raise RuntimeError(
+                "baseline job did not finish within "
+                f"run_timeout_seconds={config.jobs.run_timeout_seconds}s"
             )
-            + tuple(
-                MountSpec(
-                    source=Path(src),
-                    target=PurePosixPath(src),
-                    mode=MountMode.READ_ONLY,
-                )
-                for src in config.read_only_binds
-            ),
+        time.sleep(config.jobs.poll_seconds)
+    result = read_result(submitted)
+    if result.status != WorkerStatus.COMPLETED:
+        raise RuntimeError(
+            f"baseline evaluation failed: {result.error or result.status.value}"
         )
-        result = run_eval(
-            list(config.eval_commands),
-            world=builder,
-            metrics_schema=dict(config.metrics_schema),
-            timeout_seconds=config.eval_timeout_seconds,
+    payload = result.result
+    if payload.get("outcome") not in ("COMPLETED",):
+        raise RuntimeError(
+            f"baseline evaluation did not complete: "
+            f"{payload.get('outcome')} ({payload.get('reason', '')})"
         )
-        objective = (config.metrics_schema or {}).get("objective") or {}
-        gate_keys = tuple(
-            g["key"] for g in (config.metrics_schema or {}).get("gates") or []
-            if g.get("key")
+    metrics = dict(payload.get("metrics") or {})
+    objective = (config.metrics_schema or {}).get("objective") or {}
+    objective_key = str(objective.get("key", "OBJECTIVE"))
+    value = metrics.get(objective_key)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+    ):
+        block = str(payload.get("eval_block") or "")[:8000]
+        raise RuntimeError(
+            f"baseline objective {objective_key} is missing or not "
+            f"finite:\n{block}"
         )
-        validate_baseline(
-            result,
-            str(objective.get("key", "OBJECTIVE")),
-            gate_keys,
+    failed_gates = [
+        str(g.get("key")) for g in (config.metrics_schema or {}).get("gates") or []
+        if metrics.get(str(g.get("key"))) is not True
+    ]
+    if failed_gates:
+        raise RuntimeError(
+            "baseline gate(s) did not pass: " + ", ".join(failed_gates)
         )
-        return dict(result.metrics)
-    finally:
-        provider.remove(workspace)
+    return metrics
 
 
 def _ensure_baseline_measured(
@@ -229,8 +234,9 @@ def _ensure_baseline_measured(
     root = queries.root_node()
     if root is None or root.metrics:
         return
+    submitter = _build_submitter(config, run_dir)
     print(f"[scheduler] evaluating baseline on {root.sha[:10]}...", flush=True)
-    metrics = _measure_baseline(config, run_dir, root.sha)
+    metrics = _measure_baseline(config, run_dir, root.sha, submitter)
     store.set_node_metrics(root.node_id, metrics)
     print(f"[scheduler] baseline eval done: {json.dumps(metrics)}", flush=True)
 
@@ -276,10 +282,20 @@ def _run_scheduler(
     config: EvolutionConfig,
     run_dir: Path,
     max_steps: int | None,
+    max_evals: int | None = None,
+    budget_usd: float | None = None,
 ) -> int:
     store = ResearchStore(run_dir / "simpleevo.db")
     _ensure_baseline_measured(config, run_dir, store)
     scheduler_config = _build_scheduler_config(config)
+    if max_evals is not None or budget_usd is not None:
+        # Durable budget policy (run_limits table): a resubmit storm or a
+        # runaway spend stops the run at the cap instead of looping forever.
+        scheduler_config = replace(
+            scheduler_config,
+            max_terminal_evals=max_evals,
+            budget_usd=budget_usd,
+        )
     submitter = _build_submitter(config, run_dir)
     scheduler = Scheduler(
         store,
@@ -309,7 +325,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     run_dir = Path(args.run_dir)
     _init_run(config, run_dir)
-    return _run_scheduler(config, run_dir, args.max_steps)
+    return _run_scheduler(
+        config, run_dir, args.max_steps,
+        max_evals=args.max_evals, budget_usd=args.budget_usd,
+    )
 
 
 def _cmd_resume(args: argparse.Namespace) -> int:
@@ -325,7 +344,10 @@ def _cmd_resume(args: argparse.Namespace) -> int:
     # Reconcile and continue; do not rebuild git/image.
     store = ResearchStore(run_dir / "simpleevo.db")
     _ensure_root_node(store, config)
-    return _run_scheduler(config, run_dir, args.max_steps)
+    return _run_scheduler(
+        config, run_dir, args.max_steps,
+        max_evals=args.max_evals, budget_usd=args.budget_usd,
+    )
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
@@ -432,12 +454,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     run_p.add_argument("--config", required=True, type=Path)
     run_p.add_argument("--max-steps", type=int, default=None)
+    run_p.add_argument("--max-evals", type=int, default=None,
+                       help="durable cap on terminal experiments")
+    run_p.add_argument("--budget-usd", type=float, default=None,
+                       help="durable spend cap (token pricing)")
     run_p.set_defaults(func=_cmd_run)
 
     resume_p = sub.add_parser(
         "resume", parents=[common], help="continue an existing run"
     )
     resume_p.add_argument("--max-steps", type=int, default=None)
+    resume_p.add_argument("--max-evals", type=int, default=None,
+                          help="durable cap on terminal experiments")
+    resume_p.add_argument("--budget-usd", type=float, default=None,
+                          help="durable spend cap (token pricing)")
     resume_p.set_defaults(func=_cmd_resume)
 
     status_p = sub.add_parser(

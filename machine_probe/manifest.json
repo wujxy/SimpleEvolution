@@ -1,0 +1,60 @@
+{
+ "protocol": "simpleevo.worker.v1",
+ "kind": "experiment",
+ "request_id": "machine-probe",
+ "payload": {
+  "experiment_id": "machine-probe",
+  "proposal_id": "",
+  "parent_node_id": "",
+  "parent_sha": "b7e463f537e2309f5da8e8d038825a18d8a84a46",
+  "proposal": "baseline evaluation",
+  "eval_only": true,
+  "run_dir": "runs/omilrec-condor-001",
+  "repo_path": "/lustrefs/juno26/users/lidian/SimpleEvolution/examples/omilrec_opt/repo",
+  "runtime_image": "/lustrefs/juno26/users/lidian/SimpleEvolution/examples/omilrec_opt/apptainer.sif",
+  "editable_paths": [
+   "OMILRECV2/src"
+  ],
+  "frozen_paths": [],
+  "read_only_binds": [
+   "/cvmfs",
+   "/junofs"
+  ],
+  "eval_commands": [
+   "bash scripts/sl_eval_v100.sh --evtmax 100"
+  ],
+  "metrics_schema": {
+   "objective": {
+    "key": "SPEED_MS",
+    "lower_is_better": true
+   },
+   "gates": [
+    {
+     "key": "CONTRACT",
+     "description": "Static gate contract (tests/test_gate_contract.py): the gate probes call the production OMILRECV2::Calculate_EVLikelihood and the build config declares the probe correctly.\n"
+    },
+    {
+     "key": "FCN",
+     "description": "FCN gate (tests/test_fcn.py): 4 events x 4 stages, all finite, relative LL error < 1e-13 against tests/fixtures/v100/fcn_points.tsv.\n"
+    },
+    {
+     "key": "CONSISTENCY",
+     "description": "E2E gate (tests/test_consistency.py): all 18 reference events within 4 mm / 7 keV / 10 ps / 0.1 PE of tests/reference/ref_v100_18evt.root.\n"
+    },
+    {
+     "key": "SINGLE_THREADED",
+     "description": "OMP_NUM_THREADS/MKL_NUM_THREADS/ROOT_NTHREADS all pinned to 1 \u2014 the speedup must come from the algorithm, not parallelism.\n"
+    }
+   ]
+  },
+  "agent_timeout_seconds": 9000,
+  "eval_timeout_seconds": 1800,
+  "executor": {
+   "api": "anthropic",
+   "model": "zai-org/GLM-5.2",
+   "base_url": "https://api.siliconflow.cn",
+   "effort": "medium"
+  }
+ },
+ "result_path": "/lustrefs/juno26/users/lidian/SimpleEvolution/machine_probe/result.json"
+}

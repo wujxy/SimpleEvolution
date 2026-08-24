@@ -40,6 +40,7 @@ def _build_request(payload: dict) -> ExperimentRequest:
         attempt=int(payload.get("attempt", 1)),
         attempt_id=str(payload.get("attempt_id", "")),
         executor=dict(payload.get("executor", {})),
+        eval_only=bool(payload.get("eval_only", False)),
     )
 
 

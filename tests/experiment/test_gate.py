@@ -1,4 +1,10 @@
-"""Tests for the deterministic diff gate and metric gate."""
+"""Tests for the deterministic diff gate and metric gate.
+
+The editable-set enforcement is mount-layer (the executor's world is RO
+outside the rw overlays), so there is no post-hoc path gate to test here;
+``paths_allowed`` remains only as a validation helper for callers that
+want a belt-and-braces assertion.
+"""
 from __future__ import annotations
 
 from experiment.contracts import EvaluationResult, GateResult

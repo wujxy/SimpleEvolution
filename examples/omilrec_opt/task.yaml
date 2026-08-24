@@ -32,11 +32,14 @@ editable_paths:
   - OMILRECV2/src
 frozen_paths: []
 
-# The eval needs the JUNO software stack (CVMFS) and the benchmark input +
-# reconstruction maps (/data/juno/dingxf), mounted read-only into the sandbox.
+# The eval needs the JUNO software stack (CVMFS) mounted read-only into the
+# sandbox. The benchmark input and reconstruction maps are repo-local
+# (repo/assets/: EOS-direct-read input json + RecMap, both sha256-pinned by
+# tests/reference/manifest.json), so no /data bind is needed; /junofs is
+# bound for the eos xrootd fallback path in the eval scripts.
 read_only_binds:
   - /cvmfs
-  - /data/juno/dingxf
+  - /junofs
 
 eval_commands:
   - bash scripts/sl_eval_v100.sh --evtmax 100

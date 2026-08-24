@@ -1,13 +1,69 @@
 """Git-backed source workspace provider for experiment jobs."""
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import shutil
 import subprocess
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
 from .contracts import ChangeSet, CommitRequest, SourceWorkspace, WorkspaceError, WorkspaceSpec
+
+# git-lfs pointer header: "oid sha256:<hex>" (the real content lives in the
+# clone's .git/lfs/objects store, sha256-addressed).
+_LFS_OID_RE = re.compile(rb"oid sha256:([0-9a-f]{64})")
+
+
+def _lfs_objects_root(repo: Path) -> Path:
+    return repo / ".git" / "lfs" / "objects"
+
+
+def _materialize_lfs(tree: Path, repo: Path) -> int:
+    """Replace git-lfs pointer files in ``tree`` with their real content.
+
+    Worktrees are created with GIT_LFS_SKIP_SMUDGE=1 (nodes must not pull LFS
+    content over the network), so every LFS-tracked file lands as a ~130-byte
+    pointer stub.  Gates that hash repo assets (checksum manifests) would fail
+    on the stub.  The real objects live in the run-dir clone's LFS store
+    (populated once by ``initialize()`` from the source repo); hardlink them
+    in — same filesystem, zero copy, no git-lfs binary needed on the node.
+    Returns the number of files materialized.
+    """
+    objects = _lfs_objects_root(repo)
+    if not objects.is_dir():
+        return 0
+    n = 0
+    for path in tree.rglob("*"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        if ".git" in path.relative_to(tree).parts:
+            continue
+        try:
+            head = path.read_bytes()[:200]
+        except OSError:
+            continue
+        if not head.startswith(b"version https://git-lfs"):
+            continue
+        match = _LFS_OID_RE.search(head)
+        if not match:
+            continue
+        oid = match.group(1).decode()
+        src = objects / oid[:2] / oid[2:4] / oid
+        if not src.is_file():
+            raise WorkspaceError(
+                f"LFS object {oid[:12]}… missing from run-dir clone store "
+                f"({path.relative_to(tree)}); run `git lfs fetch` in "
+                f"{repo} or re-init the run dir"
+            )
+        path.unlink()
+        try:
+            os.link(src, path)
+        except OSError:
+            shutil.copy2(src, path)
+        n += 1
+    return n
 
 
 class GitWorkspaceProvider:
@@ -39,7 +95,32 @@ class GitWorkspaceProvider:
                 "GIT_TERMINAL_PROMPT": "0",
             }
             self._clone(env)
+            self._seed_lfs_store()
         return self._git(self.repo, "rev-parse", "HEAD")
+
+    def _seed_lfs_store(self) -> None:
+        """Populate the clone's LFS object store from the source repo.
+
+        A plain git clone does not carry .git/lfs/objects, and nodes must not
+        fetch LFS content over the network.  The source repo's store is on the
+        same filesystem, so hardlink each object in (zero copy).
+        """
+        src = _lfs_objects_root(self.source_repo)
+        if not src.is_dir():
+            return
+        dst = _lfs_objects_root(self.repo)
+        for path in src.rglob("*"):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(src)
+            target = dst / rel
+            if target.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(path, target)
+            except OSError:
+                shutil.copy2(path, target)
 
     def _clone(self, env: dict[str, str]) -> None:
         completed = None
@@ -86,6 +167,7 @@ class GitWorkspaceProvider:
                 f"git worktree add failed: {completed.stderr.strip()}"
             )
         base_sha = self._git(path, "rev-parse", "HEAD")
+        _materialize_lfs(path, self.repo)
         return SourceWorkspace(spec.workspace_id, path, base_sha)
 
     @contextmanager
@@ -105,6 +187,8 @@ class GitWorkspaceProvider:
             return
         self._git(workspace.path, "reset", "--hard", workspace.base_sha or "HEAD")
         self._git(workspace.path, "clean", "-fd")
+        # reset --hard rewrites LFS-tracked files back to pointer stubs.
+        _materialize_lfs(workspace.path, self.repo)
 
     def inspect(self, workspace: SourceWorkspace) -> ChangeSet:
         completed = subprocess.run(
@@ -152,8 +236,16 @@ class GitWorkspaceProvider:
         return sha
 
     def _drop_stale(self, path: Path) -> None:
-        if not path.exists():
-            return
+        """Clear any previous registration for this workspace id.
+
+        A retried/re-submitted worker can race another live worker on the
+        same id: the directory may exist, or git may hold a stale worktree
+        registration / branch from an attempt whose directory was already
+        wiped (``worktree add -B`` then dies with "already exists" /
+        "is missing but its branch..."). Remove all three layers — the
+        git registration first (it refuses directory removal otherwise),
+        then the branch, then whatever directory remains.
+        """
         subprocess.run(
             [
                 "git", "-C", str(self.repo), "worktree", "remove",
@@ -163,6 +255,16 @@ class GitWorkspaceProvider:
             stderr=subprocess.DEVNULL,
             check=False,
         )
+        subprocess.run(
+            [
+                "git", "-C", str(self.repo), "worktree", "prune",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if path.exists():
+            self._remove_path(path)
 
     def _remove_path(self, path: Path) -> None:
         resolved = path.resolve()
@@ -188,6 +290,11 @@ class GitWorkspaceProvider:
             stderr=subprocess.DEVNULL,
             check=False,
         )
+        # A directory with no git registration (worker died before
+        # `worktree add` registered it, or registration lived under a
+        # different path) survives both git commands — remove it directly.
+        if path.exists():
+            shutil.rmtree(path, ignore_errors=True)
 
     @staticmethod
     def _validate_id(workspace_id: str) -> None:

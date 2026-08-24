@@ -50,7 +50,7 @@ def test_run_seeds_root_node_and_episode(monkeypatch):
         # out so the CLI wiring is what's under test (see _measure_baseline).
         monkeypatch.setattr(
             "simpleevo.cli._measure_baseline",
-            lambda _cfg, _run_dir, _root_sha: {"TOTAL_MS": 100.0},
+            lambda _cfg, _run_dir, _root_sha, _submitter: {"TOTAL_MS": 100.0},
         )
         config_path = Path(tmp) / "task.yaml"
         config_path.write_text(
@@ -129,7 +129,7 @@ def test_resume_continues_without_config(monkeypatch):
         _write_repo(repo)
         monkeypatch.setattr(
             "simpleevo.cli._measure_baseline",
-            lambda _cfg, _run_dir, _root_sha: {"TOTAL_MS": 100.0},
+            lambda _cfg, _run_dir, _root_sha, _submitter: {"TOTAL_MS": 100.0},
         )
         config_path = Path(tmp) / "task.yaml"
         config_path.write_text(
@@ -164,7 +164,7 @@ def test_reseed_creates_fresh_episode(monkeypatch):
         config = _config_for_repo(repo)
         monkeypatch.setattr(
             "simpleevo.cli._measure_baseline",
-            lambda _cfg, _run_dir, _root_sha: {"TOTAL_MS": 100.0},
+            lambda _cfg, _run_dir, _root_sha, _submitter: {"TOTAL_MS": 100.0},
         )
         config_path = Path(tmp) / "task.yaml"
         config_path.write_text(
@@ -222,3 +222,128 @@ def test_ensure_baseline_skips_when_root_has_metrics(tmp_path, monkeypatch):
     assert ResearchQueries(run_dir / "simpleevo.db").root_node().metrics == {
         "TOTAL_MS": 100.0,
     }
+
+
+class _RecordingSubmitter:
+    """Stand-in for a BaseSubmitter that records submit_baseline calls and
+    writes a well-formed result envelope when asked to."""
+
+    backend = "recording"
+    presumes_dead_on_startup = True
+
+    def __init__(self, metrics=None, outcome="COMPLETED"):
+        self.calls = []
+        self.metrics = {"TOTAL_MS": 100.0} if metrics is None else metrics
+        self.outcome = outcome
+
+    def submit_baseline(self, run_id, payload):
+        self.calls.append((run_id, dict(payload)))
+        result_dir = Path(self.result_root) / "experiments" / run_id
+        result_dir.mkdir(parents=True, exist_ok=True)
+        from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
+        write_result(
+            result_dir / "result.json",
+            WorkerResult(
+                kind="experiment",
+                request_id=run_id,
+                status=WorkerStatus.COMPLETED,
+                result={
+                    "experiment_id": run_id,
+                    "outcome": self.outcome,
+                    "metrics": dict(self.metrics),
+                    "eval_block": "TOTAL_MS=100.0\nEVAL_RESULT=ok\n",
+                },
+                usage=(),
+                error=None,
+                execution={},
+            ),
+        )
+        return str(result_dir / "result.json")
+
+    result_root = ""
+
+    def remove_job(self, work_id, kind):
+        pass
+
+
+def test_measure_baseline_submits_eval_only_job(tmp_path, monkeypatch):
+    """The baseline must go through the SAME backend as candidate experiments
+    (SimpleLoop's hepjob contract): eval_only payload, result read from the
+    submitted path, metrics returned."""
+    from simpleevo.cli import _measure_baseline
+
+    repo = tmp_path / "repo"
+    _write_repo(repo)
+    config = _config_for_repo(repo)
+    submitter = _RecordingSubmitter()
+    submitter.result_root = str(tmp_path / "run")
+
+    metrics = _measure_baseline(config, tmp_path / "run", "abc123", submitter)
+
+    assert metrics == {"TOTAL_MS": 100.0}
+    run_id, payload = submitter.calls[0]
+    assert run_id == "baseline"
+    assert payload["eval_only"] is True
+    assert payload["parent_sha"] == "abc123"
+
+
+def test_measure_baseline_stale_result_is_cleared(tmp_path):
+    """A leftover result.json from an earlier baseline attempt must not be
+    read as the new job's result."""
+    from simpleevo.cli import _measure_baseline
+    from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
+
+    repo = tmp_path / "repo"
+    _write_repo(repo)
+    config = _config_for_repo(repo)
+    run_dir = tmp_path / "run"
+    stale = run_dir / "experiments" / "baseline" / "result.json"
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    write_result(
+        stale,
+        WorkerResult(
+            kind="experiment",
+            request_id="baseline",
+            status=WorkerStatus.COMPLETED,
+            result={"outcome": "COMPLETED", "metrics": {"TOTAL_MS": 1.0}},
+            usage=(),
+            error=None,
+            execution={},
+        ),
+    )
+    submitter = _RecordingSubmitter(metrics={"TOTAL_MS": 250.0})
+    submitter.result_root = str(run_dir)
+
+    metrics = _measure_baseline(config, run_dir, "abc123", submitter)
+
+    # The stale 1.0 must be gone; the fresh submitter's 250.0 wins.
+    assert metrics == {"TOTAL_MS": 250.0}
+
+
+def test_measure_baseline_rejects_failed_worker(tmp_path):
+    """A worker-level failure (infra) must abort the run loudly."""
+    from simpleevo.cli import _measure_baseline
+
+    repo = tmp_path / "repo"
+    _write_repo(repo)
+    config = _config_for_repo(repo)
+    submitter = _RecordingSubmitter(outcome="infra_failed")
+    submitter.result_root = str(tmp_path / "run")
+
+    with pytest.raises(RuntimeError, match="infra_failed"):
+        _measure_baseline(config, tmp_path / "run", "abc123", submitter)
+
+
+def test_measure_baseline_rejects_bad_objective(tmp_path):
+    """A completed envelope with a missing objective must abort, not optimize
+    blind against a nonexistent anchor."""
+    from simpleevo.cli import _measure_baseline
+
+    repo = tmp_path / "repo"
+    _write_repo(repo)
+    config = _config_for_repo(repo)
+    submitter = _RecordingSubmitter(metrics={})  # objective missing
+    submitter.result_root = str(tmp_path / "run")
+
+    with pytest.raises(RuntimeError, match="missing or not"):
+        _measure_baseline(config, tmp_path / "run", "abc123", submitter)

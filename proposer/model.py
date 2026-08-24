@@ -18,6 +18,29 @@ class ModelError(RuntimeError):
     """The configured model transport cannot produce a usable reply."""
 
 
+def resolve_api_key(config: dict, *env_names: str, provider: str) -> str:
+    """Config-pinned key wins; environment is only the fallback.
+
+    A key written into the task yaml (``researcher.api_key``) is the user's
+    explicit choice for THIS run and must never be silently overridden by
+    whatever credential happens to sit in the submitting shell — a stale
+    exported token from another provider era cost a full lane outage once
+    too often. Order: ``api_key`` in the role config, then the historical
+    environment variables, in the order given.
+    """
+    key = str(config.get("api_key") or "").strip()
+    if key:
+        return key
+    for name in env_names:
+        key = os.environ.get(name)
+        if key:
+            return key
+    raise ModelError(
+        f"no API key for the {provider} proposer: set researcher.api_key "
+        f"in the task config or export one of {', '.join(env_names)}"
+    )
+
+
 class EmptyReplyError(ModelError):
     """The model answered with zero content bytes.
 
@@ -290,11 +313,7 @@ class HepAIChatModel(OpenAICompatChatModel):
 
     @classmethod
     def from_config(cls, config: dict) -> "HepAIChatModel":
-        key = os.environ.get("HEPAI_API_KEY")
-        if not key:
-            raise ModelError(
-                "HEPAI_API_KEY is required for the HEPAI proposer"
-            )
+        key = resolve_api_key(config, "HEPAI_API_KEY", provider="hepai")
         try:
             from hepai import HepAI
         except ImportError as exc:
@@ -323,15 +342,9 @@ class ZhipuChatModel(OpenAICompatChatModel):
 
     @classmethod
     def from_config(cls, config: dict) -> "ZhipuChatModel":
-        key = (
-            os.environ.get("ZHIPU_API_KEY")
-            or os.environ.get("ZHIPUAI_API_KEY")
+        key = resolve_api_key(
+            config, "ZHIPU_API_KEY", "ZHIPUAI_API_KEY", provider="zhipu",
         )
-        if not key:
-            raise ModelError(
-                "ZHIPU_API_KEY (or ZHIPUAI_API_KEY) is required for the "
-                "Zhipu proposer"
-            )
         try:
             from openai import OpenAI
         except ImportError as exc:
@@ -362,11 +375,7 @@ class OpenAIChatModel(OpenAICompatChatModel):
 
     @classmethod
     def from_config(cls, config: dict) -> "OpenAIChatModel":
-        key = os.environ.get("OPENAI_API_KEY")
-        if not key:
-            raise ModelError(
-                "OPENAI_API_KEY is required for the openai proposer"
-            )
+        key = resolve_api_key(config, "OPENAI_API_KEY", provider="openai")
         try:
             from openai import OpenAI
         except ImportError as exc:
@@ -399,15 +408,11 @@ class AnthropicChatModel(_RetryChatModel):
 
     @classmethod
     def from_config(cls, config: dict) -> "AnthropicChatModel":
-        key = (
-            os.environ.get("ANTHROPIC_AUTH_TOKEN")
-            or os.environ.get("ANTHROPIC_API_KEY")
+        key = resolve_api_key(
+            config,
+            "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY",
+            provider="anthropic",
         )
-        if not key:
-            raise ModelError(
-                "ANTHROPIC_AUTH_TOKEN (or ANTHROPIC_API_KEY) is required "
-                "for the anthropic proposer"
-            )
         try:
             from anthropic import Anthropic
         except ImportError as exc:

@@ -1,0 +1,15 @@
+universe = vanilla
+executable = /lustrefs/juno26/users/lidian/SimpleEvolution/machine_probe/job.sh
+arguments = "$(ClusterId).$(ProcId)"
+output = /lustrefs/juno26/users/lidian/SimpleEvolution/machine_probe/job.out
+error = /lustrefs/juno26/users/lidian/SimpleEvolution/machine_probe/job.err
+log = /lustrefs/juno26/users/lidian/SimpleEvolution/machine_probe/job.log
+should_transfer_files = NO
+request_memory = 4000
+request_cpus = 1
+accounting_group = JUNO.juno.default
+accounting_group_user = lidian
++HepJob_RequestOS = "AlmaLinux9"
+Requirements = CpuFamily==25 && CpuModelNumber==17 && Machine == "bws0994.ihep.ac.cn"
++IHEP_RealGroup = "juno"
+queue

@@ -42,9 +42,11 @@ def test_example_config_resolves_and_declares_metrics():
     gate_keys = [g["key"] for g in config.metrics_schema["gates"]]
     assert gate_keys == ["CONTRACT", "FCN", "CONSISTENCY", "SINGLE_THREADED"]
     assert config.editable_paths == ("OMILRECV2/src",)
-    # The eval needs the JUNO toolchain + bench data inside the sandbox.
+    # The eval needs the JUNO toolchain + the eos xrootd fallback inside the
+    # sandbox; the bench input and RecMap are repo-local (assets/), so no
+    # /data bind is required.
     assert "/cvmfs" in config.read_only_binds
-    assert any(p.startswith("/data/") for p in config.read_only_binds)
+    assert "/junofs" in config.read_only_binds
     assert config.eval_commands and "sl_eval_v100.sh" in config.eval_commands[0]
 
 

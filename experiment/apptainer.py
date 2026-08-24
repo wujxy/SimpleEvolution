@@ -54,13 +54,36 @@ def forwarded_payload_env(
 
 def executor_environment(
     *, base_url: str | None, max_output_tokens: int,
+    api_key: str | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     result = forwarded_payload_env(environ)
+    if api_key:
+        # A config-pinned key is the user's explicit credential for THIS
+        # run: it overrides whatever the submitting shell happens to export
+        # (a stale ~/.claude/settings.json env block from another provider
+        # era once cost a full executor lane in 401s). The claude CLI
+        # prefers ANTHROPIC_AUTH_TOKEN over API_KEY, so clear the token
+        # too — the pinned key must be the one that authenticates.
+        result["ANTHROPIC_API_KEY"] = api_key
+        result.pop("ANTHROPIC_AUTH_TOKEN", None)
     if base_url:
         result["ANTHROPIC_BASE_URL"] = base_url
+        # Same authority rule for the endpoint: with a pinned base_url an
+        # inherited AUTH_TOKEN is a credential for some OTHER endpoint —
+        # drop it so API_KEY (config-pinned or forwarded) wins.
+        result.pop("ANTHROPIC_AUTH_TOKEN", None)
     result["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(max_output_tokens)
     result["HOME"] = pwd.getpwuid(os.getuid()).pw_dir
+    # Never let the executor CLI read the submitting user's interactive
+    # ~/.claude/settings.json: its `env` block overrides process
+    # environment inside the claude CLI (a settings.json
+    # ANTHROPIC_BASE_URL silently reroutes executor traffic away from the
+    # configured base_url). A per-job scratch config dir keeps only the
+    # env vars above in effect; the CLI creates the dir on demand, and the
+    # runner-side PID keeps concurrent jobs on one node out of each
+    # other's config.
+    result["CLAUDE_CONFIG_DIR"] = f"/tmp/simpleevo-claude-config-{os.getpid()}"
     return result
 
 

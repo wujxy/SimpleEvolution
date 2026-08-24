@@ -1,0 +1,181 @@
+# SimpleEvolution task: optimize the OMILREC v1.0.0 reconstruction algorithm
+# for speed — HTCondor backend variant. Same task as task.yaml; differences:
+#   - jobs.backend = condor: workers run as vanilla condor jobs pinned to ONE
+#     machine class (see below) so SPEED_MS is comparable across candidates.
+#   - external model traffic (api.siliconflow.cn) goes through the jump-host
+#     forward proxy; internal endpoints stay direct via no_proxy.
+#
+#   python -m simpleevo --run-dir runs/omilrec-condor-001 \
+#     init --config examples/omilrec_opt/task.condor.yaml
+#   python -m simpleevo --run-dir runs/omilrec-condor-001 \
+#     run --config examples/omilrec_opt/task.condor.yaml
+
+goal: >
+  Understand how a JUNO event is reconstructed end to end and develop an
+  account of what computational structure produces the time required for
+  that reconstruction. Minimize the time per event (SPEED_MS) while
+  satisfying the evaluation contract. Follow the reconstruction logic and
+  evidence wherever they lead. The current implementation is only a
+  starting point, not the boundary of the solution: you may redesign the
+  implementation as warranted, including changes across files, classes,
+  modules, data representations, or algorithmic structure.
+
+repo_path: repo
+runtime_image: apptainer.sif
+
+editable_paths:
+  - OMILRECV2/src
+frozen_paths: []
+
+# The eval needs the JUNO software stack (CVMFS) mounted read-only into the
+# sandbox. Benchmark input and RecMap are repo-local (repo/assets/, EOS-direct
+# input + maps, sha256-pinned); /junofs covers the eos xrootd fallback.
+read_only_binds:
+  - /cvmfs
+  - /junofs
+
+eval_commands:
+  - bash scripts/sl_eval_v100.sh --evtmax 100
+
+metrics_schema:
+  objective:
+    key: SPEED_MS
+    lower_is_better: true
+  gates:
+    - key: CONTRACT
+      description: >
+        Checks that the external evaluation contract remains intact:
+        protected evaluator assets, reference data, thresholds, and checks
+        are unchanged, and evaluation continues to reflect the intended
+        production behavior.
+    - key: FCN
+      description: >
+        Checks numerical equivalence on frozen likelihood probe cases. The
+        production reconstruction must return finite, distinct values within
+        1e-13 relative error of the v1.0.0 references, independent of how
+        the internal implementation is organized.
+    - key: CONSISTENCY
+      description: >
+        Checks reconstruction-level consistency on 18 frozen events. Final
+        reconstructed outputs are compared with the v1.0.0 references using
+        tolerances of 4 mm in position, 7 keV in energy, 10 ps in t0, and
+        0.1 PE in peSum.
+    - key: SINGLE_THREADED
+      description: >
+        Checks that the benchmark ran single-threaded (Sniper NTHREADS=1
+        and OMP/MKL/ROOT pinned to 1). Speedups must come from algorithm or
+        code improvements, not from parallelism — multi-threading the
+        reconstruction would reduce SPEED_MS without a real improvement.
+
+axes:
+  - SPEED_MS
+
+gate_block: |
+  The harness runs:
+    - bash scripts/sl_eval_v100.sh --evtmax 100
+  It builds with ENABLE_FCN_GATE_PROBE=ON, runs the CONTRACT / FCN /
+  CONSISTENCY gate suites, rebuilds probe-free, then benchmarks the production
+  library (single-threaded) and emits SPEED_MS (ms/evt, lower is better) plus
+  the four gate tokens. A change is accepted only if CONTRACT=FCN=
+  CONSISTENCY=SINGLE_THREADED=PASS; among accepted changes, lower SPEED_MS is
+  better. The eval requires the JUNO toolchain (/cvmfs), mounted read-only.
+
+# Job backend: HTCondor. Measurement comparability pins every worker to the
+# SAME CPU generation and the SAME machine: bws0988 is Zen4 (CpuFamily 25 /
+# CpuModelNumber 17, EPYC 9654 Genoa) with 192 static 1-CPU slots of 4016 MB.
+# Keep cpu_model and machine_constraint consistent — a contradiction idles
+# forever. memory_mb must stay <= 4016 (static slot cap; eval peaks ~2.7 GB
+# RSS). bws0988 is the only zen4-static machine with a POSITIVE start proof
+# for this job shape (node probe cluster 8086744, 2026-08-24: claude CLI +
+# openai SDK via the jump proxy both green on the node); aws006 idled 13 min
+# on a free slot, suggesting an undisclosed START policy. All zen4-static
+# machines run 0-2 free slots of 192 — brief queueing is normal and only
+# adds latency, never measurement bias.
+jobs:
+  backend: condor
+  collector: cm01.ihep.ac.cn
+  schedd_name: scheduler@schedd12.ihep.ac.cn
+  accounting_group: JUNO.juno.default
+  accounting_group_user: lidian
+  request_os: AlmaLinux9
+  cpu_model: zen4
+  # Machine pin relaxed 2026-08-24 after a cross-machine probe: the same
+  # eval measured 816.26 ms/evt on bws0990 vs 816.89 on bws0988 (0.08%
+  # spread — noise level), while the single pinned machine idled >1 h with
+  # 0/192 free slots. Same-generation zen4 (EPYC 9654) pool only.
+  memory_mb: 4000
+  cpus: 1
+  python_executable: /lustrefs/juno26/users/lidian/py_venv/miniconda3/bin/python3
+  poll_seconds: 30.0
+  # No condor-level wall clock: the worker self-terminates at
+  # agent_timeout_seconds. Kept above it for headroom only.
+  run_timeout_seconds: 10800
+  idle_warn_seconds: 3600
+  disappearance_grace_seconds: 120
+  # Jump-host forward proxy for external model APIs (execute nodes have no
+  # external internet; verified 2026-08-23 from gecam005 via this proxy).
+  http_proxy: http://192.168.237.165:3128
+  https_proxy: http://192.168.237.165:3128
+  no_proxy: localhost,127.0.0.1,aiapi.ihep.ac.cn,.ihep.ac.cn,junoeos01.ihep.ac.cn
+
+# Proposer (Scientist) — SiliconFlow OpenAI-compatible endpoint via the proxy
+# above. reasoning_effort is passed through as a top-level Chat Completions
+# param (accepted by SiliconFlow for GLM-5.2; verified 2026-08-24).
+# API keys: optional `api_key:` in either block pins the credential IN the
+# config — it then overrides anything the submitting shell exports (stale
+# interactive tokens from another provider era have twice hijacked a lane
+# through the env whitelist). Without `api_key` the historical environment
+# variables are the fallback (OPENAI_API_KEY here; the executor claude CLI
+# reads ANTHROPIC_API_KEY and must NOT see ANTHROPIC_AUTH_TOKEN).
+researcher:
+  api: openai
+  model: zai-org/GLM-5.2
+  base_url: https://api.siliconflow.cn/v1
+  # api_key: sk-...   # optional: pin here to ignore the environment entirely
+  reasoning_effort: medium
+  command_timeout_seconds: 360
+  command_output_cap_chars: 12000
+# Executor — SiliconFlow's Anthropic-compatible endpoint (base_url without a
+# path; the claude CLI appends /v1/messages). effort maps to `claude --effort`.
+executor:
+  api: anthropic
+  model: zai-org/GLM-5.2
+  base_url: https://api.siliconflow.cn
+  # api_key: sk-...   # optional: pin here to ignore the environment entirely
+  effort: medium
+
+# LLM token pricing for budget accounting (USD per 1M tokens). SiliconFlow
+# domestic pricing for zai-org/GLM-5.2: CNY 8 / 28 / 2 per M (in / out /
+# cache-hit); 1 $ = 6.7 CNY.
+pricing:
+  input_usd_per_1m: 1.19
+  output_usd_per_1m: 4.18
+  cache_read_usd_per_1m: 0.30
+  cache_creation_usd_per_1m: 0.0
+
+# Scheduling / episode budgets — sized for a LONG cluster run under the
+# seat architecture v6 (one node = N seats; a seat = one lease holding
+# exactly ONE reserved proposal id; breadth is the Supervisor buying
+# node x lens seats). proposal_slots / max_research_per_node /
+# max_proposals_per_node / generator_reseed are dissolved — not set here.
+# scientist_steps (200) is the proposer's PRIMARY budget (model turns);
+# agent_timeout_seconds (2.5 h) is the wall-clock fuse for the proposer
+# session and the ONLY limit on the executor claude session (which has no
+# step budget). One eval = 2 cmake builds + 3 gate suites + 100-event
+# benchmark (~5-8 min on a pinned Zen4 slot); 4 concurrent experiments
+# keep the 192-slot bws0988 fed without starving JUNO production.
+# The run-start baseline is itself submitted through this backend as an
+# eval-only condor job, so SPEED_MS anchor and candidates are measured on
+# the same pinned machine.
+scientist_steps: 200
+agent_timeout_seconds: 9000
+eval_timeout_seconds: 1800
+max_proposer_inflight: 6
+max_experiment_inflight: 4
+poll_seconds: 5.0
+queue_max_size: 16
+quiescence_window_proposals: 4
+
+# Frontier policy (used by lineage/seat validation; supervisor decides growth).
+frontier_policy: gepa
+frontier_top_k: 3

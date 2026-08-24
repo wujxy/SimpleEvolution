@@ -94,6 +94,18 @@ class BaseSubmitter(ABC):
         """Stage one request-scoped temporary Integrator worker."""
         return self._submit("integrator", request_id, payload, self._proposer_defaults())
 
+    def submit_baseline(self, run_id: str, payload: Mapping[str, Any]) -> str:
+        """Submit the run-start baseline as an eval-only experiment job.
+
+        Same manifest/result layout and the same launch seam as every other
+        worker, so under condor the baseline lands on the same machine class
+        (requirements, memory, schedd) as every candidate eval — the anchor
+        SPEED_MS and the candidates' SPEED_MS are measured by the same
+        population.  The payload carries ``eval_only``; the experiment worker
+        skips its executor and runs only the eval commands.
+        """
+        return self._submit("experiment", run_id, payload, self._experiment_defaults())
+
     def poll(self, spec: JobSpec) -> WorkerResult | None:
         """Return the parsed worker result once ``result.json`` exists."""
         if not spec.result_path.exists():

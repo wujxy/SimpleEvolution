@@ -93,6 +93,11 @@ class ExperimentRequest:
     attempt: int = 1
     attempt_id: str = ""
     executor: Mapping[str, Any] = field(default_factory=dict)
+    # Baseline (root-SHA) measurement: skip the executor entirely — the
+    # pristine tree needs no implementation agent — and run only the eval,
+    # through whatever backend submitted the job (local subprocess or condor),
+    # so the anchor lands on the same machine class as every candidate.
+    eval_only: bool = False
 
 
 @dataclass(frozen=True)

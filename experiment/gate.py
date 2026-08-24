@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from .contracts import EvaluationResult, GateDecision, GateResult
 
 
-PATHS = "PATHS"
+PATHS = "PATHS"  # reserved row: always True (editable-set enforcement moved
+# to the mount layer — the executor's world is physically RO outside the
+# rw overlays; kept as a row so stored gate decisions stay schema-stable)
 EVAL_COMMANDS = "EVAL_COMMANDS"
 
 
