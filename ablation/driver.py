@@ -56,9 +56,10 @@ from simpleevo.scheduler.loop import Scheduler
 ARMS = ("coding-agent", "loop", "topk")
 
 # Arms the plotter accepts beyond the runnable set: "tree" is the
-# Supervisor-gated tree run (scripts/run_supervisor_test.py), which shares
-# the standard run-dir layout but not this driver.
-PLOT_ARMS = ARMS + ("tree",)
+# Supervisor-gated tree run (scripts/run_supervisor_test.py) and "seat-v6"
+# the seat-architecture run (same script, seat task config); both share the
+# standard run-dir layout but not this driver.
+PLOT_ARMS = ARMS + ("tree", "seat-v6")
 
 # Terminal scientific statuses of an experiment (mirrors the scheduler map).
 _TERMINAL_STATUSES = frozenset({"completed", "gate_rejected", "no_change"})
@@ -538,6 +539,8 @@ def _cmd_plot(args: argparse.Namespace) -> int:
         out_path=args.out,
         arms=args.arms,
         x_axis=args.x_axis,
+        human_ref_lps=args.human_ref_lps,
+        unify_baseline=args.unify_baseline,
     )
     print(f"wrote {out}")
     return 0
@@ -591,8 +594,20 @@ def main(argv: list[str] | None = None) -> int:
     plot_p.add_argument("--out", default="ablation.png", type=Path)
     plot_p.add_argument("--arms", nargs="*", choices=PLOT_ARMS)
     plot_p.add_argument(
-        "--x-axis", default="cost", choices=("cost", "time"),
-        help="x projection: cumulative LLM spend or elapsed wall-clock hours",
+        "--x-axis", default="cost", choices=("cost", "time", "worktime"),
+        help="x projection: cumulative LLM spend, elapsed wall-clock hours, "
+             "or cumulative driver-running hours (dead gaps between killed "
+             "and relaunched drivers collapse to zero)",
+    )
+    plot_p.add_argument(
+        "--human-ref-lps", type=float, default=0.0,
+        help="absolute lps of a human-expert reference kernel; drawn per arm "
+        "over that arm's own baseline",
+    )
+    plot_p.add_argument(
+        "--unify-baseline", action="store_true",
+        help="re-express every curve over the average of the plotted runs' "
+        "root baselines (one shared denominator, one expert line)",
     )
     plot_p.set_defaults(func=_cmd_plot)
 

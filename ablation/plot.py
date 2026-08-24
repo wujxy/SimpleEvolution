@@ -34,12 +34,14 @@ ARM_COLORS = {
     "loop": "#eb6834",          # orange
     "topk": "#1baf7a",          # aqua
     "tree": "#1baf7a",          # aqua (successor of topk's slot)
+    "seat-v6": "#8250df",       # purple, categorical slot 4 (~6:1 on surface)
 }
 ARM_LABELS = {
     "coding-agent": "coding agent",
     "loop": "serial loop (k=1)",
     "topk": "top-k tree (k=3)",
     "tree": "supervisor tree",
+    "seat-v6": "seat-v6 (supervisor buys seats)",
 }
 # Short label + scheduling shape for the title/footer, per arm.
 ARM_SHORT = {
@@ -47,12 +49,14 @@ ARM_SHORT = {
     "loop": "serial loop",
     "topk": "top-k tree",
     "tree": "supervisor tree",
+    "seat-v6": "seat-v6",
 }
 ARM_SHAPE = {
     "coding-agent": "slots=1·inflight=1",
     "loop": "slots=1·inflight=1",
     "topk": "k=3 frontier·slots=1",
     "tree": "supervisor gate·slots=4·inflight=4",
+    "seat-v6": "seats=node×lens·inflight=4",
 }
 
 # Ink / chrome tokens.
@@ -71,9 +75,11 @@ def _run_points(
 
     ``x_axis="cost"`` projects onto cumulative LLM spend (usage ledger replayed
     at the run's configured prices); ``x_axis="time"`` onto elapsed wall-clock
-    hours since the root node's creation.  Both apply the same acceptance rule
-    as ``best_so_far``: only gate-passed nodes with a measured objective enter
-    the running best.
+    hours since the root node's creation; ``x_axis="worktime"`` onto cumulative
+    DRIVER-RUNNING hours (dead gaps between killed and relaunched drivers
+    collapse to zero — the fair axis when arms were paused mid-run).  All
+    apply the same acceptance rule as ``best_so_far``: only gate-passed nodes
+    with a measured objective enter the running best.
     """
     try:
         view = load_tree_view(run_dir)
@@ -91,26 +97,31 @@ def _run_points(
             print(f"  [plot] skip {run_dir}: no completed experiments", flush=True)
             return None
     else:
-        created = [v.created_at for v in view.nodes]
+        # Running best over gate-passed measured nodes in completion order —
+        # the same envelope best_so_far builds on the experiment-ordinal axis.
+        ordered = sorted(
+            (v for v in view.nodes if v.experiment_idx is not None),
+            key=lambda v: v.created_at,
+        )
+        created = [v.created_at for v in ordered]
         if len(created) < 2:
             print(f"  [plot] skip {run_dir}: no completed experiments", flush=True)
             return None
-        t0 = min(created)
-        # Running best over gate-passed measured nodes in completion order —
-        # the same envelope best_so_far builds on the experiment-ordinal axis.
+        if x_axis == "worktime":
+            xs = _uptime_axis(run_dir, created)
+        else:
+            t0 = min(v.created_at for v in view.nodes)  # root creation
+            xs = [(c - t0) / 3600.0 for c in created]
         best = None
         series = []
-        for v in sorted(
-            (v for v in view.nodes if v.experiment_idx is not None),
-            key=lambda v: v.created_at,
-        ):
+        for x, v in zip(xs, ordered, strict=True):
             if not v.passed or v.objective is None or not math.isfinite(v.objective):
                 continue
             if best is None or (
                 v.objective < best if view.lower_is_better else v.objective > best
             ):
                 best = v.objective
-            series.append(((v.created_at - t0) / 3600.0, best))
+            series.append((x, best))
         if not series:
             print(f"  [plot] skip {run_dir}: no completed experiments", flush=True)
             return None
@@ -125,6 +136,106 @@ def _run_points(
         if math.isfinite(best) and best > 0
     ]
     return points, view.objective_key, float(root)
+
+
+def _uptime_segments(run_dir: Path):
+    """Wall-clock [start, end] of every driver generation of a run.
+
+    The run log's own elapsed clock (reset to 0 at each relaunch) gives each
+    generation's exact lifetime; the log file's mtime anchors the final
+    generation's end (its last write); walking backwards, each earlier
+    generation ended when its rows stopped — its last DB row before the next
+    generation's start bounds the death (the kill-vs-drain tail between the
+    last row and the actual death is unbinned, typically a few minutes).
+
+    Returns None when the log or its clock is unusable — the caller then
+    falls back to the wall axis.
+    """
+    import re
+    import sqlite3
+
+    log = run_dir.parents[1] / f"{run_dir.parent.name}.run.log"
+    if not log.exists():
+        return None
+    elapsed = [
+        float(m) * 3600.0
+        for m in re.findall(r"elapsed=([0-9.]+)h", log.read_text(errors="replace"))
+    ]
+    if not elapsed:
+        return None
+    durations: list[float] = []
+    prev = elapsed[0]
+    cur_max = elapsed[0]
+    for e in elapsed[1:]:
+        if e + 1e-6 < prev:  # clock reset: new driver generation
+            durations.append(cur_max)
+            cur_max = e
+        else:
+            cur_max = max(cur_max, e)
+        prev = e
+    durations.append(cur_max)
+
+    db = run_dir / "simpleevo.db"
+    if not db.exists():
+        return None
+    conn = sqlite3.connect(str(db))
+    try:
+        stamps: list[float] = []
+        for table in ("scheduler_events", "nodes", "experiments",
+                      "proposer_allocations", "attempts"):
+            try:
+                stamps += [r[0] for r in conn.execute(
+                    f"SELECT created_at FROM {table}")]
+            except sqlite3.Error:
+                pass
+    finally:
+        conn.close()
+    stamps.sort()
+
+    # Backward walk: the final generation ends at the log's last write
+    # (mtime); each earlier generation ended when its rows stopped — the
+    # last DB row before the next generation's start bounds its death.
+    spans: list[tuple[float, float]] = []
+    end = log.stat().st_mtime
+    for k in range(len(durations) - 1, -1, -1):
+        start = end - durations[k]
+        spans.append((start, end))
+        if k > 0:
+            # 2-minute guard: the next generation's start is back-computed
+            # from a 2-decimal elapsed, so its first rows can land seconds
+            # "before" it — exclude them from this generation's death bound.
+            prior_rows = [t for t in stamps if t < start - 120.0]
+            end = prior_rows[-1] if prior_rows else start
+    spans.reverse()
+    return spans
+
+
+def _uptime_axis(run_dir: Path, created: list[float]) -> list[float] | None:
+    """Map node-creation wall times onto cumulative work hours.
+
+    Dead gaps between driver generations collapse to zero width; inside a
+    generation the offset from its start is preserved.  Falls back to
+    wall-clock (since the first activity) when no generations can be
+    recovered.
+    """
+    segments = _uptime_segments(run_dir)
+    if segments is None:
+        first = min(created)
+        return [(c - first) / 3600.0 for c in created]
+    acc: list[float] = []
+    total = 0.0
+    for start, end in segments:
+        acc.append(total)
+        total += end - start
+    out = []
+    for c in created:
+        val = total
+        for i, (start, end) in enumerate(segments):
+            if c <= end:
+                val = acc[i] + min(max(0.0, c - start), end - start)
+                break
+        out.append(val / 3600.0)
+    return out
 
 
 def _stepped(arr: list[tuple[float, float]], grid: list[float]) -> list[float]:
@@ -152,14 +263,25 @@ def render_ablation(
     arms: list[str] | None = None,
     log_y: bool = False,
     x_axis: str = "cost",
+    human_ref_lps: float = 0.0,
+    unify_baseline: bool = False,
 ) -> str:
-    """Render the performance overlay (vs cost or vs time) and return the path."""
-    if x_axis not in ("cost", "time"):
-        raise ValueError(f"unknown x_axis {x_axis!r}; expected 'cost' or 'time'")
+    """Render the performance overlay (vs cost or vs time) and return the path.
+
+    ``human_ref_lps`` (optional) draws a muted dashed line at the absolute
+    lps value.  With ``unify_baseline`` every curve is re-expressed over the
+    average of the plotted runs' root baselines (one shared denominator, one
+    expert line); without it each curve keeps its own baseline and the
+    reference is drawn per arm.
+    """
+    if x_axis not in ("cost", "time", "worktime"):
+        raise ValueError(
+            f"unknown x_axis {x_axis!r}; expected 'cost', 'time' or 'worktime'")
     runs_root = Path(runs_root)
     arms = arms or list(ARM_LABELS)
 
     per_arm: dict[str, list[list[tuple[float, float]]]] = {}
+    root_by_arm: dict[str, list[float]] = {}
     total_runs = 0
     for arm in arms:
         seed_dirs = sorted(
@@ -169,12 +291,25 @@ def render_ablation(
             result = _run_points(run_dir, x_axis)
             if result is None:
                 continue
-            points, _obj, _root = result
+            points, _obj, root = result
             per_arm.setdefault(arm, []).append(points)
+            root_by_arm.setdefault(arm, []).append(root)
             total_runs += 1
 
     if total_runs == 0:
         raise SystemExit(f"no usable runs found under {runs_root}")
+
+    # One shared denominator: re-scale every run's ×-own-baseline curve onto
+    # the average root baseline (y × own_root/avg = absolute lps / avg).
+    unified_root = 0.0
+    if unify_baseline:
+        all_roots = [r for roots in root_by_arm.values() for r in roots]
+        unified_root = sum(all_roots) / len(all_roots)
+        for arm, roots in root_by_arm.items():
+            for i, scale_root in enumerate(roots):
+                per_arm[arm][i] = [
+                    (x, y * scale_root / unified_root) for x, y in per_arm[arm][i]
+                ]
 
     grid = _grid_bounds([p for arm_points in per_arm.values() for p in arm_points])
     if len(grid) < 2:
@@ -194,23 +329,108 @@ def render_ablation(
         lo = _column_min(stepped)
         hi = _column_max(stepped)
         color = ARM_COLORS[arm]
+        # Where this arm's own data actually ends.  ``_stepped`` would carry
+        # best-so-far forward across the whole shared grid, but a flat tail
+        # to the right edge reads as "worked the whole time, plateaued" —
+        # for an arm that stopped early that's a false story.  Mask the
+        # curve beyond the arm's true last data point: the line physically
+        # ENDS where the work ended (early-stop markers below say why).
+        last_x = max(p[-1][0] for p in runs)
+        last_idx = max(
+            i for i, x in enumerate(grid) if x <= last_x + 1e-9
+        )
+        median = median[: last_idx + 1] + [math.nan] * (len(grid) - last_idx - 1)
+        lo = lo[: last_idx + 1] + [math.nan] * (len(grid) - last_idx - 1)
+        hi = hi[: last_idx + 1] + [math.nan] * (len(grid) - last_idx - 1)
         ax.fill_between(grid, lo, hi, color=color, alpha=0.10, linewidth=0, zorder=1)
         ax.plot(
             grid, median, color=color, linewidth=2.0, solid_joinstyle="round",
             zorder=3,
         )
-        arm_info[arm] = {"median": median, "lo": lo, "hi": hi, "color": color}
+        arm_info[arm] = {
+            "median": median, "lo": lo, "hi": hi, "color": color,
+            "last_x": last_x,
+        }
+
+    # Early-stop markers: an arm whose last data point sits well before the
+    # grid's right edge gets a dotted drop-line + note at its true end, so
+    # the flat tail reads as "idle", not "working".
+    _STOP_VERBS = {"coding-agent": "self-terminated"}
+    for arm, info in arm_info.items():
+        last_x = info["last_x"]
+        if last_x > grid[-1] * 0.90:
+            continue
+        idx = min(range(len(grid)), key=lambda i: abs(grid[i] - last_x))
+        y = info["median"][idx]
+        if math.isnan(y):
+            continue
+        ax.plot(
+            [last_x, last_x], [ax.get_ylim()[0], y],
+            color=info["color"], linewidth=1.0, linestyle=(0, (2, 3)),
+            alpha=0.55, zorder=2,
+        )
+        verb = _STOP_VERBS.get(arm, "stopped")
+        ax.annotate(
+            f"{verb} @{last_x:.1f}h\n(no data beyond)",
+            xy=(last_x, y), xytext=(6, 14), textcoords="offset points",
+            fontsize=8, color=INK_MUTED, ha="left",
+            arrowprops={
+                "arrowstyle": "-", "color": INK_MUTED,
+                "lw": 0.8, "alpha": 0.6,
+            },
+        )
 
     # Baseline (unmodified source = 1×).
     ax.axhline(1.0, color=BASELINE, linewidth=1.0, linestyle="--", zorder=2)
 
-    # Direct end-labels: final median × value at the right edge (relief for the
-    # sub-3:1 aqua slot; text wears ink, identity stays on the mark).
+    # External human-expert reference.  Unified: one line at ref/avg-root.
+    # Otherwise per arm (ref over that arm's own measured root — the lines
+    # differ because the denominators do).
+    if human_ref_lps > 0:
+        if unify_baseline:
+            ref_mult = human_ref_lps / unified_root
+            ax.axhline(
+                ref_mult, color=INK_MUTED, linewidth=1.0,
+                linestyle=(0, (4, 3)), alpha=0.9, zorder=2,
+            )
+            ax.annotate(
+                f"upstream author-optimized kernel (-k 1) "
+                f"≈{human_ref_lps/1e6:.2f}M lps "
+                f"({ref_mult:.2f}× avg baseline)",
+                xy=(grid[0], ref_mult), xytext=(4, 3),
+                textcoords="offset points", fontsize=8,
+                color=INK_MUTED, va="bottom",
+            )
+        else:
+            labelled = False
+            for arm, info in arm_info.items():
+                roots = root_by_arm.get(arm, [])
+                if not roots:
+                    continue
+                ref_mult = human_ref_lps / _median(sorted(roots))
+                ax.axhline(
+                    ref_mult, color=info["color"], linewidth=0.9,
+                    linestyle=(0, (4, 3)), alpha=0.45, zorder=2,
+                )
+                if not labelled:
+                    ax.annotate(
+                        f"upstream author-optimized kernel (-k 1) "
+                        f"≈{human_ref_lps/1e6:.2f}M lps "
+                        "(per arm's own baseline)",
+                        xy=(grid[0], ref_mult), xytext=(4, 3),
+                        textcoords="offset points", fontsize=8,
+                        color=INK_MUTED, va="bottom",
+                    )
+                    labelled = True
+
+    # Direct end-labels: final median × value at the arm's own end (right
+    # edge for full-length arms; true last point for early-stopped ones).
+    # The value is the raw last point of each seed (the grid's last tick at
+    # or before it would round away a final jump).
     for arm, info in arm_info.items():
-        final_x = grid[-1]
-        final_y = info["median"][-1]
-        if math.isnan(final_y):
-            continue
+        finals = [p[-1] for p in per_arm[arm]]
+        final_x = max(x for x, _ in finals)
+        final_y = _median([y for _, y in finals])
         ax.plot([final_x], [final_y], "o", markersize=4, color=info["color"],
                 markeredgecolor=SURFACE, markeredgewidth=1.5, zorder=4)
         ax.annotate(
@@ -232,7 +452,9 @@ def render_ablation(
     for spine in ("left", "bottom"):
         ax.spines[spine].set_color(BASELINE)
     ax.set_xlabel(
-        "elapsed time (h)" if x_axis == "time" else "cumulative LLM cost (USD)",
+        {"time": "elapsed wall-clock (h)",
+         "worktime": "driver work time (h, gaps excluded)",
+         "cost": "cumulative LLM cost (USD)"}[x_axis],
         color=INK_PRIMARY,
     )
     ax.set_ylabel("lookups/s vs baseline (×)", color=INK_PRIMARY)
@@ -317,6 +539,21 @@ if __name__ == "__main__":
     parser.add_argument("--out", default="ablation.png", type=Path)
     parser.add_argument("--arms", nargs="*")
     parser.add_argument("--log-y", action="store_true")
+    parser.add_argument("--x-axis", default="cost", choices=("cost", "time"))
+    parser.add_argument(
+        "--human-ref-lps", type=float, default=0.0,
+        help="absolute lps of a human-expert reference kernel; drawn per arm "
+        "over that arm's own baseline",
+    )
+    parser.add_argument(
+        "--unify-baseline", action="store_true",
+        help="re-express every curve over the average of the plotted runs' "
+        "root baselines (one shared denominator, one expert line)",
+    )
     args = parser.parse_args()
-    path = render_ablation(args.runs_root, out_path=args.out, arms=args.arms, log_y=args.log_y)
+    path = render_ablation(
+        args.runs_root, out_path=args.out, arms=args.arms, log_y=args.log_y,
+        x_axis=args.x_axis, human_ref_lps=args.human_ref_lps,
+        unify_baseline=args.unify_baseline,
+    )
     print(f"wrote {path}")

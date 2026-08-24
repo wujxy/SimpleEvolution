@@ -127,27 +127,51 @@ def main(run_dir: str) -> int:
         f"missing not-bought: {no_not_bought or 'none'}",
     )
 
-    # --- 5. lineage dedup ------------------------------------------------
+    # --- 5. lineage dedup (point-in-time replay) ------------------------
+    # The constraint is directional in time: when lens L is bought on node
+    # N, L must not already be burned on N or its ancestors.  An ancestor
+    # buying L LATER is legal — that is the same lens asking a fresh
+    # question of an earlier world.  Final-state set comparison (the first
+    # version of this check) false-flags those; replay in purchase order.
     nodes = {r["node_id"]: dict(r) for r in conn.execute(
         "SELECT node_id, parent_node_id FROM nodes")}
-    lens_by_node: dict[str, set[str]] = {}
-    for s in seats:
-        lens_by_node.setdefault(s["node_id"], set()).add(s["lens"])
-    violations = []
-    for node_id, node in nodes.items():
-        current = node["parent_node_id"]
+    seat_eps = conn.execute(
+        """
+        SELECT e.node_id, e.variation_operator AS lens, e.created_at
+        FROM episodes e
+        JOIN proposer_allocations a ON a.episode_id = e.episode_id
+        WHERE e.variation_operator IS NOT NULL
+        ORDER BY e.created_at
+        """
+    ).fetchall()
+
+    def _ancestors(node_id: str) -> list[str]:
+        chain: list[str] = []
+        current = nodes.get(node_id, {}).get("parent_node_id")
         hops = 0
         while current and hops < 100:
-            if lens_by_node.get(current, set()) & lens_by_node.get(node_id, set()):
-                overlap = lens_by_node[current] & lens_by_node[node_id]
-                violations.append(f"{node_id[:8]} shares {overlap} with "
-                                  f"ancestor {current[:8]}")
+            chain.append(current)
             current = nodes.get(current, {}).get("parent_node_id")
             hops += 1
+        return chain
+
+    burned: dict[str, set[str]] = {}
+    violations = []
+    for ep in seat_eps:
+        node_id, lens = ep["node_id"], ep["lens"]
+        prior = set(burned.get(node_id, set()))
+        for ancestor in _ancestors(node_id):
+            prior |= burned.get(ancestor, set())
+        if lens in prior:
+            violations.append(
+                f"{node_id[:8]} x {lens}: lens already burned on its "
+                "ancestry at purchase time")
+        burned.setdefault(node_id, set()).add(lens)
     check(
-        "5. no seat lens repeats on an ancestor path",
+        "5. no seat lens repeats on an ancestor path at purchase time",
         not violations,
-        f"violations: {violations or 'none'}",
+        f"violations: {violations or 'none'} "
+        f"({len(seat_eps)} seat episodes replayed in order)",
     )
 
     # --- 6/7. honest-quiescence artifacts + dormant table + skill --------

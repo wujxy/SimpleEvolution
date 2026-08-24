@@ -656,6 +656,23 @@ class Scheduler:
             )
         known = {item.id for item in basis}
         burned = self._burned_lenses()
+        parents = {
+            node.node_id: node.parent_node_id
+            for node in self._queries.list_nodes()
+        }
+
+        def _related(a: str, b: str) -> bool:
+            """True when a is an ancestor of b (or vice versa, checked by
+            the caller with swapped args)."""
+            current = parents.get(b)
+            hops = 0
+            while current and hops < 100:
+                if current == a:
+                    return True
+                current = parents.get(current)
+                hops += 1
+            return False
+
         seen: set[tuple[str, str]] = set()
         claimed: set[str] = set()
         leases: list[LeaseSpec] = []
@@ -678,6 +695,19 @@ class Scheduler:
                     f"lens {lens} already burned on {node_id} or its "
                     "ancestry; buy an untried lens (see the untried fact)"
                 )
+            # Intra-decision lineage dedup: the transaction is atomic, so
+            # the post-decision state must satisfy lineage dedup regardless
+            # of purchase order — a lens this decision buys on an ancestor
+            # (or on a descendant) of node_id burns it here too.  The
+            # precomputed snapshot above cannot see sibling purchases.
+            for prior_node, prior_lens in seen:
+                if (prior_lens == lens and prior_node != node_id
+                        and (_related(prior_node, node_id)
+                             or _related(node_id, prior_node))):
+                    raise ValueError(
+                        f"lens {lens} already burned on {node_id} or its "
+                        "ancestry; buy an untried lens (see the untried fact)"
+                    )
             episode = self._seat_episode_for_node(node_id, claimed)
             if episode is None:
                 raise ValueError(

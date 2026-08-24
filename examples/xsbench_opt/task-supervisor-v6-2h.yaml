@@ -1,0 +1,120 @@
+# SimpleEvolution task: XSBench — v6 SEAT architecture, 2h depth run.
+#
+# Same task and seat semantics as task-supervisor-v6-smoke.yaml; budgets and
+# parallelism are sized so the tree reaches depth 2-3 within the wall cap.
+# What this run is for: proposer behavior once seats inherit predecessor
+# notes (depth >= 2), and the Supervisor's second/third-round allocation
+# over real, priced children (its core duty: buy seats, name not-bought,
+# refuse premature quiescence).
+#
+# Run (bounded driver):
+#   unset APPTAINER_BIND
+#   BENCH_PIN=12 python scripts/run_supervisor_test.py \
+#     --config examples/xsbench_opt/task-supervisor-v6-2h.yaml \
+#     --run-dir runs/seat-v6-2h \
+#     --max-evals 24 --budget-usd 15.0 --max-seconds 7200
+
+goal: >
+  Optimize the XSBench macroscopic cross-section lookup kernel in src/ for
+  speed — higher lookups_per_sec (single-threaded, event-based, H-M small,
+  unionized grid; see scripts/config.sh) — while keeping results bit-identical:
+  the verification checksum printed by the binary must equal the frozen
+  reference in benchmarks/reference_hash.txt. Edit only src/. The evaluation
+  scripts (scripts/) and the frozen reference numbers (benchmarks/) are fixed
+  by the harness.
+
+repo_path: repo
+runtime_image: apptainer.sif
+
+editable_paths:
+  - src
+frozen_paths: []
+
+eval_commands:
+  - bash scripts/check_verify.sh && echo VERIFY=PASS || echo VERIFY=FAIL
+  - bash scripts/bench.sh
+
+metrics_schema:
+  objective:
+    key: lookups_per_sec
+    lower_is_better: false
+  gates:
+    - key: VERIFY
+      description: >
+        The binary's verification checksum matches the frozen reference
+        (benchmarks/reference_hash.txt). The checksum is a deterministic
+        function of every sampled cross-section lookup, so any change to the
+        computed cross sections, interpolation, search, or sampling that alters
+        a result fails. It is invariant to threading but not to arithmetic.
+    - key: RATE_PLAUSIBLE
+      description: >
+        lookups_per_sec is within a plausible single-threaded bound (<=8M,
+        ~3x the author-optimized kernel). Rejects precompute-in-init cheats
+        that move the whole per-lookup computation into untimed init and stream
+        the results from RAM in the timed loop — bit-identical, so VERIFY
+        passes, but the timed loop is no longer doing the lookup work (measured
+        cheat: 22-74M lps). The author-optimized kernel measures 2.56M lps;
+        8M leaves 3x headroom for genuine optimizations.
+
+axes:
+  - lookups_per_sec
+
+gate_block: |
+  Only modify files under src/. The harness runs, in order:
+    - bash scripts/check_verify.sh   (VERIFY gate: checksum == reference)
+    - bash scripts/bench.sh          (objective: lookups_per_sec; also emits the
+                                      RATE_PLAUSIBLE gate token)
+  A change is accepted only if VERIFY=PASS and RATE_PLAUSIBLE=PASS; among
+  accepted changes, higher lookups_per_sec is better. scripts/config.sh fixes
+  the benchmark run (-m event -s small -G unionized -t 1 -l 2000000).
+  RATE_PLAUSIBLE caps lookups_per_sec at 8M to reject timing cheats (moving
+  the lookup work into untimed init and streaming precomputed results in the
+  timed loop) that would otherwise keep VERIFY bit-identical.
+
+# Proposer (Scientist) chat-model configuration.
+researcher:
+  api: openai
+  model: deepseek-v4-flash
+  base_url: https://api.deepseek.com
+  command_timeout_seconds: 360
+  command_output_cap_chars: 12000
+  reasoning_effort: low  # thinking-depth valve (low|medium|high); None = provider default
+executor:
+  api: anthropic
+  model: deepseek-v4-flash
+  base_url: https://api.deepseek.com/anthropic
+  effort: low  # claude CLI --effort (low|medium|high|xhigh|max) for the executor agent
+
+# LLM token pricing for budget accounting (USD per 1M tokens). 1 $ = 6.7 CNY
+pricing:
+  input_usd_per_1m: 0.67
+  output_usd_per_1m: 2.02
+  cache_read_usd_per_1m: 0.02
+  cache_creation_usd_per_1m: 0.0
+
+# Scheduling / episode budgets.  Parallelism sized for a 3-4 seat frontier:
+# the root's three children compete for seats, so 4 proposer leases and 3
+# experiment slots let the Supervisor's allocation actually choose between
+# nodes instead of being serialized behind inflight caps.
+# (proposal_slots dissolved: a seat reserves exactly one proposal id)
+scientist_steps: 64          # deeper seats inherit predecessor notes; more rope
+agent_timeout_seconds: 3600
+eval_timeout_seconds: 600
+max_proposer_inflight: 4
+max_experiment_inflight: 3
+poll_seconds: 2.0
+queue_max_size: 16
+quiescence_window_proposals: 2
+
+# Frontier selection policy.
+frontier_policy: topk  # gepa or topk
+# Width for the "topk" policy — depth 2-3 keeps 6 candidate nodes alive.
+frontier_top_k: 6
+# Seat design v6: max_research_per_node / max_proposals_per_node /
+# generator_reseed are dissolved. Breadth is the Supervisor buying seats
+# (node x lens); one seat = one lease with exactly one reserved proposal id;
+# the budget is the only boundary. Lenses live in the repo-root
+# generator.json (three-part standard).
+# Persistent growth-gate runtime (see task-supervisor.yaml).
+supervisor_steps: 40
+supervisor_max_retries: 3

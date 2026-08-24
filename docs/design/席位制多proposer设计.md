@@ -401,3 +401,216 @@ untried 耗尽路径由单测 test_empty_selection_completes_when_untried_exhaus
 v5 终局回填（反面教材定稿）：树臂 1.66h quiesce，2 terminal evals/$1.30
 （预算剩 ~97%）。病理链与 §1 预测一致：研究三弃权 → 空 growth →
 quiescence。旧架构的"合理等待"没有事实边界，v6 的 untried 集就是那个边界。
+
+## 11. 4h 对比 run（runs/seat-v6-2h，2026-08-24，4.79× / 29 evals / $12.62）
+
+与 ablation-v5 两臂（coding-agent、serial loop，同 benchmark 同 4h 累计
+driver 时间）对照。配置 `examples/xsbench_opt/task-supervisor-v6-2h.yaml`
+（scientist_steps=64、proposer inflight=4、experiment inflight=3、
+top_k=6）；2h 墙钟处换 driver 续到 4h（`runs/seat-v6-2h.extend.sh`，剩余
+秒数按最初起点算，终点钉死）。
+
+**终值**（baseline 1,514,004 lps，全部 VERIFY bit-identical）：
+
+| 臂 | 4h 终值 | evals | 花费 | 备注 |
+|---|---|---|---|---|
+| **seat-v6** | **4.79×**（7,246,377 lps） | 29 | $12.62 | 30 节点（d1×6/d2×12/d3×11），33 席位 episode |
+| coding-agent | 4.21×（6,134,969） | 11 | $4.21 | 单 agent 长链，d1 一击 |
+| loop 串行 | 1.94× | 9 | $4.47 | |
+| tree（v5） | 1.85× | 2 | $1.30 | 1.66h quiesce（§1 反面教材；已被 seat-v6 取代，不入图） |
+
+图（三臂：coding-agent / loop / seat-v6——**seat-v6 即 supervisor tree**，
+v5 tree 不再单列）：`ablation-v6-worktime.png`（工作时间轴，主对比）/
+`ablation-v6.png`（墙钟轴）/ `ablation-v6-cost.png`（成本轴）。
+seat-v6 前三节点 4.79×/4.65×/4.62× 来自三条不同谱系（含一个 d1 直连
+root 的 4.62×——决策 20 后 root 补席的直接回报）。
+
+**supervisor 职责观察**（27 个 growth 决策全程）：
+
+- 定价阶梯清晰：首轮铺三席 → 热点加席（exploit）→ 独立新枝（breadth，
+  root-G4 一席产出 +81.2% 的 d1，全场最优投资）→ 对**树上位置**定价
+  （"同样的钱早一步不如直接在最优上问"）。
+- 负谱系翻案：−29.5% 子节点先被拒（无证据），恢复迹象（+37.8%）出现后
+  立即三面下注——负资产被重新定价而非永久弃子。
+- 透镜账本进入决策："G6 4/4 pass / best 81.3%" 粒度引用；决策 6 买战绩
+  透镜（求稳）与决策 8 拒绝战绩透镜（"single strong result is a small
+  sample"，求新）构成一对自然对照，两种风格各有在飞实验。
+- 容量超买被拦 7 次（2/3/4/6 席 > 空位），全部在重试内收敛为合法决策；
+  决策过期（事件批前进）2 次，均正常重议。改进项：payload 应显式给
+  "空余席位数"事实以省拒绝对回合。
+
+**深度 2-3 的 proposer 表现**：同父三席走出 2.2×（b0561935 →
+4.64×/2.87×/2.27× 层内分化）；子辈席位精准吃掉父辈设计残留（G2 两阶段
+桶表留下桶内二分 → G5 子席以 rank 表去之，+49.7%）；跨谱系透镜重组出
+王朝（root-G4 对称性缓存 × G5 rank 表 = 2.74M → 4.11M → 4.64M 谱系）。
+
+**发现并修复的 harness 缺陷**：`_seat_leases` 的 burned 快照在决策事务
+外预取，批内"祖先买 L + 后代买 L"穿透（run 中 1 例：root-G8 与
+b07b15d0-G8 同决策，episode d72a959a，产出 1 条 proposal）。修复为批内
+对称祖先检查（与顺序无关）；回归测试
+`test_lineage_dedup_within_one_decision`；checker（check 5）同时改为
+购买时序重放语义（祖先后买同透镜 = 合法新问法，旧终态对比误报 16 例）。
+244 tests 全过。4h run 数据按修复前如实保留该 1 例违例。
+
+**已知问题（下轮再议，本轮零实际伤害）**：谱系查重现为祖先域语义
+（ancestry 上任一票即烧），有两处过严：①祖先晚买透镜会把它烧给整棵
+下游子树——root 01:47 烧 G6、03:06 烧 G8 后，战绩最好的 G8 在最后两
+小时对全树不可雇（untried 静默缩水，无拒绝记录，纯机会成本）；②L 输
+在祖先、后代走的是别的枝时也被禁——但 L 的答案并未进入后代的世界，
+与跨谱系移植同价。正确语义应为**具身查重**：L 在 N 被禁 ⟺ L 参与建造
+了 N 的世界（N 自身跑过 L，或 N 路径上某节点由 L 的席位产出）。单调
+钻探在具身语义下仍被完全挡住（链上步步具身），v5 兜底不损失；长程风
+险方向是现行规则可能让程序在新鲜 (透镜×材料) 组合尚多时提前"合法穷尽"
+（untried 缩水过快 → 过早 quiescence）。本轮 4h 内 7 次拒绝全为容量、
+查重从未实际出手，故不实现，仅记录。批内互斥若随之放松为同节点去重，
+需与 §10 的回归测试同步改。
+
+时间轴口径补充：`ablation-v6.png` 是墙钟轴（含两臂中段被会话重启杀掉的
+~2.5h 死等，臂间不对齐）；`ablation-v6-worktime.png` 是工作时间轴
+（plot.py `x_axis="worktime"`：日志 elapsed 时钟按重置分代 + mtime 锚末代
++ DB 行定各代边界，死等折叠为零）。工作时间重建与各臂日志累计精确一致
+（coding-agent 4.21h、loop 4.08h、tree 1.66h、seat-v6 4.38h 含 2h 处
+换班的 5 分钟空档）。
+
+### 11.1 事后修正：coding-agent 臂的真实机制与平台期病理（2026-08-24）
+
+§11 初版把 coding-agent 的平台期写成"绕着冠军重写、逃不出范式"——
+事后核对 DB 提案/实验时间线，**机制与此不同**：该臂的 no-op proposer
+瞬时完成，在 frontier 尚为 bootstrap root 的头几秒内按配额一口气发布
+9 条锚定 root 的提案入 FIFO 队列；实验槽 inflight=1 串行消化，4h 只跑
+完 11 条（root×9 + 1.71M 首子×2）。全 run 共发布 2680 条提案、2669 条
+未及运行，其中 2644 条锚定 6.13M 冠军（+111m 起 frontier 持续指向它，
+但队列从未轮到）。三个事实：①实验世界 sha 固定在
+root，从不在 best 上；②跨轮信息只剩指令里提案时刻的过时标量（exp8
+执行时仍被告知 best=1.46M，实际树内 best 已 6.13M）；③**6.13M 冠军
+从未被用作父代**（其队列提案 4h 到点未轮到）。故该臂实为 11 次对
+baseline 的独立重写，4.21× 是独立抽签的最大值，平台期是"无积累"而非
+"范式锁定"。loop 臂核对为真链式（exp3-9 全锚定当时 best），其平台期
+维持"研究员范式锁定"的诊断（峰后 6 提案同族微手术 + 一次 init 作弊
+未遂、被 RATE_PLAUSIBLE 击落）。
+
+**ablation 解释力 caveat**：coding-agent 臂一半死于 harness 人工痕迹
+（瞬时 proposer + FIFO + 提案时点快照），非纯粹 coding-agent 范式失败；
+公平 baseline 应令执行者每轮见当前 best 代码与数值。若复跑：proposer
+配额按实验完成节流（提案在实验空出时才发），或在提案消费时重锚定到
+当前 frontier。seat-v6 不受此影响（席位 payload 消费时构造，锚定被买
+节点 + 前驱档案，队列深度恒 1）。
+
+## 12. 持续 coding-agent 臂：一个 Claude Code，一个世界，4 小时（2026-08-24）
+
+§11.1 的公平 baseline 兑现：`scripts/run_cont_agent.py`。执行者本来就是
+一次 `claude -p` 会话（experiment/agent.py），此前每 ~11-25 分钟一换、
+世界即弃、情报过期。本臂改为**单会话单世界跑满墙钟**：
+
+- **一个会话**：一次 claude 调用，timeout = 剩余墙钟（4h − 启动开销）。
+  上下文压力由 CLI 自身 auto-compact 处理；会话世界**整仓可写**挂载
+  （标准 executor 是 /work 只读 + src 可写——那会让自测 bench 写不进
+  build 产物）。agent 可随时自跑 `check_verify.sh`/`bench.sh`——旧臂
+  的 executor 从未见过自己的分数，这是本臂补上的反馈回路。
+- **快照不静音**：harness 每 5 分钟用临时 GIT_INDEX_FILE 把 src/ 冻成
+  侧链 commit（agent 无感知；pathspec 只含 src，PROGRESS.md / build
+  产物 / 对冻结脚本的篡改永远不入档，replay 永远跑干净 harness）。
+  src 树无变化则跳过该拍。
+- **监测三层**：①harness 视角——每第 2 个有效快照在**另一颗核**
+  （core 11）上即时试评，run.log 出 `LIVE snap#N: X.XXx gate=…`（指
+  示值，与 agent 自测竞争内存带宽）；②agent 视角——stream-json 逐事
+  件落 trace，工具调用与其自测数字可 tail；③叙事线——prompt 要求在
+  仓库根维护 PROGRESS.md（src 外，永不入档），一行一测。
+- **终局权威回放**：班次结束后，每个有效快照在空闲的 agent 核上按序
+  过冻结 gate + bench，回填为标准 proposal/experiment/node 三元组，
+  `created_at` 回溯到快照时刻——run-dir 与其它臂同构，直接入图。
+- **记账重建**：usage 不再依赖终局 result 事件（被墙钟杀掉的会话一
+  无所有，正常结束也只有单点）；改为从 trace 的 assistant 事件逐事件
+  求和回填 usage.jsonl，时间戳按事件序线性插值（近似，成本轴由单点
+  变全程曲线）。注意：此记法与其余臂（终局单事件 usage）口径不同，
+  跨臂成本对比时以本臂更接近真实 API 计费。
+- **入图替换**：旧队列雪崩 run 挪至 `runs/ablation-v5/coding-agent-queue/`
+  留档不入图；新 run 落 `coding-agent/seed-1`，图仍三臂——coding-agent
+  （本臂）/ loop / seat-v6。本臂 run.log 刻意不含 `elapsed=` 模式，plot
+  的工时重建自动落到墙钟轴——本臂无空挡，墙钟即工时。
+
+冒烟（4 分钟班）：48 个 assistant 事件 $0.18、3 快照、0.97×→1.10×
+（中途回退被快照诚实记录）。正式班 2026-08-24 启动：baseline
+1,345,895 lps，4h 墙钟，预算帽 $30。
+
+### 12.1 首班结果（2026-08-24，1h 自收工）
+
+| 臂 | 终值 | 工时 | 花费 | 行为 |
+| --- | --- | --- | --- | --- |
+| coding-agent（持续班，本节） | **2.08×**（2.79M） | 0.99h | $0.86 | **自愿收工**，3h 预算未用 |
+| coding-agent（旧队列臂，§11.1） | 4.21× | 4.21h | $4.21 | 11 次强制重启 |
+| loop | 1.94× | 4.08h | $4.47 | 真链式，范式锁定 |
+| seat-v6 | 4.79× | 4.38h | $12.62 | 全程买席位 |
+
+12 快照全 gate-PASS。四步机制与 seat 早期谱系同梯（增量 LCG 种子 →
+分桶查找 → 双趟预取 → 计数排序重排），每步带 bit-identity 论证，
+SELF_REPORT 质量高——**它不是能力不足，是满足型（satisficer）**：
+"Both gates pass on a clean rebuild. The work is complete."
+
+三个读数：
+1. **单会话的极限形态是"高效爬梯 + 早退"**。没有人在场问"就这些
+   吗？"——supervisor 架构的存在意义恰好是永不停止这个问题。seat-v6
+   同期（1h）2.24× 与本班 2.08× 几乎同速，其后 3h 的 2.24→4.79× 全
+   来自"被要求继续"。
+2. **重启压力 > 自愿持续**：旧队列臂的病理（9 条冷启动提案强制灌入）
+   反而以 11 次重抽拿到 4.21×——粗糙的外部压力胜过 agent 的内在动
+   机。持续班给它世界、反馈、时间三样齐了，独缺"不许停"。
+3. 成本侧持续班最优（$0.86 → 2.08×，每美元 2.4×，seat 为 0.38×/
+   $）——若任务只要"快速到一个不错的解"，单会话是最高效形态；
+   议会买的是它不生产的东西：不满足。
+
+诚实边界：n=1、deepseek-v4-flash effort=low、本 prompt 措辞（"pace
+yourself"未强压"用满时间"）。"4h 授权下自愿干多久"本身是被测行为，
+不是缺陷；若复跑可加一条"finishing early is failure"对照臂。
+
+**自愿还是优化不动了？**（trace 终段取证）自愿。三证：①整班
+PROGRESS.md 零 REVERT、零 VERIFY 失败——它撞过零次墙；②退出发生在
+**最大一跳（计数排序 2.1×）之后**而非收益枯竭处（+3% 边际低谷在突破
+之前，t7）；③终段推理是"final review → 干净重建复验 → The work is
+complete"——seat 后期靠的 rank 表、桶内低/高端共享、对称统一等下一
+梯级完全未尝试。它的任务框架是"把内核正确地变快"：达成即完备，
+3.8h 是预算不是配额。图上已标注：`self-terminated @0.9h (no data
+beyond)` 的虚线垂标 + best-so-far 平线铺满全横轴——平尾读作"闲置"
+而非"卡住"。
+
+### 12.2 第二班（continuation）：压力下的满足型（2026-08-24）
+
+同 run-dir 从 d12 尖端（2.79M）续班：继承世界 + 注入第一班 SELF_REPORT
+全文作交接档案 + 明令 "work the ENTIRE shift; finishing early is a
+failure mode"。结果两读：
+
+- **性能**：4h 授权下又干 ~40 分钟，2.79M → **6.7M 峰值（5.00×，统一
+  core-9 口径）**，终值 6.54M（4.86×）。绝对值 6.54M vs seat 7.25M
+  （-10%）；×值 5.00 vs 4.79（本 run 基线 1.346M 低于 seat 的
+  1.514M，跨 run 噪声内基本平手）。总成本 **$3.06**（seat $12.62 的
+  1/4）、总工时 ~1.66h（seat 4.38h 的 38%）。
+- **行为**：显式抗早退指令**没有改变退场时刻**（第一班 57min、第二班
+  40min，均在"最大一跳之后 + floor 论证"处自认完备）。压力改变的是
+  **到达的高度**（2.08×→5.00×），不是**停留的时长**。满足型不是 prompt
+  能修的，是分布属性。
+
+第二班的方法学增量（seat 未走过的新梯级）：pass2 顺序缓冲直排
+（2.34→3.53M）、pe-bucket 计数排序 + 单调 idx 扫（免去 pass1 二分）、
+**AVX2 向量化 4 通道插值（逐 lane bit-identical，不用 FMA）**、
+NuclideGridPoint 通道前置 + 64B 对齐。被拒实验亦有账（对齐 load 段错误
+自修、非时间性存储回退等）。
+
+**终局对比表（4h 同 benchmark，统一口径注记）**：
+
+| 臂 | 终值 | 绝对 lps | 成本 | 工时 | 退场方式 |
+| --- | --- | --- | --- | --- | --- |
+| coding-agent（两班+手动点火） | 5.00× | 6.73M | $3.06 | ~1.7h | 两班均自收工（40-57min） |
+| loop | 1.94× | 2.27M | $4.47 | 4.08h | 跑满（范式锁定） |
+| seat-v6 | 4.79× | 7.25M | $12.62 | 4.38h | 跑满（买满席位） |
+
+操作痕迹如实记录：两班之间的人工再点火（判断、档案、压力）= supervisor
+职能的手工扮演，且第二班 prompt 含系统外信息（"别人到过更高处"）；
+班中 midrun 五拍曾用 core-11 评（偏高 ~7%），终局已统一 core-9 重评。
+驱动器班末重放因运行中进程无 sha 去重撞 UNIQUE 约束崩过一次，收尾入库
+由手工完成（脚本已补 get_node_by_sha 去重）。
+
+**结论重述**：连续性 + 廉价再点火 ≈ 议会性能的 90%+，成本的 1/4。议会
+的剩余价值不在速度在保障：自主持续（不依赖外部点火）、多谱系并行
+（单线中断即全停）、以及操作者盲区免疫。最小修正方向：把"再点火"做成
+harness 内的机械规则（班次结束 → 档案自动交接 → 新会话强制满班），
+议会收缩为"点火器 + 一两席对冲"。

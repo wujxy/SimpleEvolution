@@ -339,6 +339,43 @@ def test_lineage_dedup_rejects_burned_lens(tmp_path: Path):
     assert "already burned" in error
 
 
+def test_lineage_dedup_within_one_decision(tmp_path: Path):
+    """A lens bought on an ancestor and a descendant in the SAME decision
+    is a repeated bet whatever the order — the transaction is atomic, so
+    the post-decision lineage must satisfy dedup either way.
+
+    Found live in runs/seat-v6-2h: one decision bought root x G8 and its
+    child x G8 together; the pre-decision burn snapshot cannot see sibling
+    purchases, so the second slipped through (episode d72a959a)."""
+    for tag, first, second in (
+        ("ancestor_first", "root", "child"),
+        ("descendant_first", "child", "root"),
+    ):
+        store = ResearchStore(tmp_path / f"state-{tag}.db")
+        root, _, child = _seed(store, extra_child=True)
+        submitter = Submitter(tmp_path / f"run-{tag}")
+        scheduler = _scheduler(store, submitter.run_dir, submitter)
+
+        scheduler.step()
+        work_id, _ = submitter.supervisor[0]
+        nodes = {"root": root.node_id, "child": child.node_id}
+        submitter.write_decision(work_id, {
+            "decision_id": f"d-{tag}", "decision_kind": "growth",
+            "seat_purchases": [
+                {"node_id": nodes[first], "lens": "G5"},
+                {"node_id": nodes[second], "lens": "G5"},
+            ],
+            "rationale": "buy G5 twice on one lineage.", "detail": {},
+            "event_cursor_to": 1,
+        })
+        scheduler.step()
+        assert store.get_supervisor_decision(f"d-{tag}") is None
+        error = store.latest_scheduler_event(
+            "supervisor_decision_rejected")["error"]
+        assert "already burned" in error
+        assert store.open_allocations() == []
+
+
 def test_empty_selection_completes_when_untried_exhausted(tmp_path: Path):
     store = ResearchStore(tmp_path / "state.db")
     root, _, child = _seed(store, extra_child=True)
