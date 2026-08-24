@@ -7,9 +7,12 @@ import socket
 import uuid
 from pathlib import Path
 
+from simpleevo.db.queries import ResearchQueries
+from simpleevo.generator import load_generator_basis
 from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
 
 from .memory.l2 import L2MemoryService
+from .supervisor_facts import build_batch, build_runtime_facts
 from .model import build_chat_model
 from .scientist import ContextPolicy
 from .supervisor import SupervisorAgent, SupervisorTools, load_supervisor_session
@@ -28,6 +31,30 @@ def main(argv: list[str] | None = None) -> int:
     result = None
     try:
         run_dir = Path(payload["run_dir"])
+        queries = ResearchQueries(run_dir / "simpleevo.db")
+        # Wake-time facts assembly (module contract §3): the envelope
+        # carried cursor bounds and static knobs; the batch and runtime
+        # facts are read from the store NOW.
+        bounds = payload["event_batch_bounds"]
+        knobs = payload.get("knobs") or {}
+        batch = build_batch(
+            queries,
+            load_generator_basis(),
+            knobs.get("metrics_schema"),
+            cursor_from=int(bounds["cursor_from"]),
+            cursor_to=int(bounds["cursor_to"]),
+            work_id=str(payload.get("work_id") or manifest["request_id"]),
+        )
+        runtime_facts = build_runtime_facts(
+            queries, run_dir,
+            max_proposer_inflight=int(
+                knobs.get("max_proposer_inflight", 2)),
+            max_experiment_inflight=int(
+                knobs.get("max_experiment_inflight", 2)),
+            max_terminal_evals=knobs.get("max_terminal_evals"),
+            budget_usd=knobs.get("budget_usd"),
+            pricing=knobs.get("pricing"),
+        )
         memory = L2MemoryService(run_dir)
         session = load_supervisor_session(run_dir)
         agent = SupervisorAgent(
@@ -40,11 +67,11 @@ def main(argv: list[str] | None = None) -> int:
         turn = agent.resume(
             session=session,
             tools=SupervisorTools(
-                memory, runtime_facts=payload.get("runtime_facts") or {}),
-            batch=payload["batch"],
+                memory, runtime_facts=runtime_facts),
+            batch=batch,
             run_context=payload.get("run_context"),
         )
-        cursor_to = int(payload["batch"]["event_batch"]["cursor_to"])
+        cursor_to = int(bounds["cursor_to"])
         # Audit mirror only; the authoritative cursor lives in the store and
         # advances inside the scheduler's decision-commit transaction.
         session.meta["event_cursor"] = cursor_to

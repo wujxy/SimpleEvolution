@@ -13,6 +13,8 @@ from simpleevo.config import EvolutionConfig
 from simpleevo.db.store import GateDecision, ResearchStore
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.generator import Generator
+from proposer.wake import build_wake_view
+from simpleevo.generator import load_generator_basis
 from simpleevo.scheduler.loop import Scheduler, SchedulerConfig
 
 _FIXTURE_BASIS = [
@@ -131,6 +133,12 @@ def test_frontier_reseed_carries_no_lens_suggestion():
         episodes = queries.episodes_for_node(root.node_id, limit=1000)
         assert all(e.variation_operator is None for e in episodes)
         for payload in captured:
-            assert payload["seat"] is None
+            assert "seat" not in payload
             assert "suggested_operator_id" not in payload
             assert "generator_basis" not in payload
+            assert build_wake_view(
+                ResearchQueries(run_dir / "simpleevo.db"),
+                load_generator_basis(),
+                node_id=payload["node_id"],
+                episode_id=payload["episode_id"],
+            )["seat"] is None

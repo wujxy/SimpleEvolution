@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from proposer.wake import research_state_seed
 from simpleevo.db.store import GateDecision, GateResult, Proposal, ResearchStore
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.scheduler.frontier import FrontierConfig
@@ -67,7 +68,7 @@ class _GateSubmitter:
                 ],
                 "rationale": rationale,
                 "detail": detail or {},
-                "event_cursor_to": payload["batch"]["event_batch"]["cursor_to"],
+                "event_cursor_to": payload["event_batch_bounds"]["cursor_to"],
             },
             "error": None, "execution": {},
         })
@@ -206,8 +207,9 @@ def test_scheduler_closes_proposer_experiment_loop(env):
     experiment_proposal = queries.get_proposal(
         submitter.experiments[0][1]["proposal_id"])
     assert experiment_proposal.research_state_id == states[0].research_state_id
-    seed = scheduler._research_state_seed_for(
-        queries.get_node(children[0]["node_id"])
+    seed = research_state_seed(
+        ResearchQueries(store.path),
+        queries.get_node(children[0]["node_id"]),
     )
     assert seed["originating_research_state"]["working_model"] == (
         "Repeated setup crosses the call boundary."
@@ -221,9 +223,12 @@ def test_scheduler_closes_proposer_experiment_loop(env):
     assert t5["supervisor_pending"] == 1  # evidence awaits judgment
     assert len(submitter.supervisor) == 2
     _, wake_payload = submitter.supervisor[1]
-    wake = wake_payload["batch"]["event_batch"]
+    wake = wake_payload["event_batch_bounds"]
     assert wake["cursor_from"] == 1
-    assert [e["type"] for e in wake["events"]] == ["experiment_terminal"]
+    assert [
+        e.type for e in ResearchQueries(store.path).supervisor_events_between(
+            wake["cursor_from"], wake["cursor_to"])
+    ] == ["experiment_terminal"]
 
 
 def test_group_workflow_allocates_divergent_branch_and_promotes_shared_epoch(env):

@@ -12,9 +12,11 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .store import (
-    Episode, Experiment, Node, Proposal,
-    _episode_from_row, _experiment_from_row, _node_from_row, _proposal_from_row,
-    _research_state_from_row,
+    Epoch, Episode, Experiment, Node, Proposal, ProposerAllocation,
+    SupervisorEvent,
+    _episode_from_row, _epoch_from_row, _experiment_from_row,
+    _node_from_row, _proposal_from_row,
+    _proposer_allocation_from_row, _research_state_from_row,
 )
 from simpleevo.research_state import ResearchState
 
@@ -185,6 +187,114 @@ class ResearchQueries:
                 (episode_id,),
             ).fetchall()
             return [_research_state_from_row(row) for row in rows]
+
+    # ------------------------------------------------------------------
+    # Shared reads (single implementation: the Scheduler and the agent
+    # workers both consume these — facts and enforcement must not fork)
+    # ------------------------------------------------------------------
+
+    def open_allocations(self) -> list[ProposerAllocation]:
+        """Return proposer allocations that are still in flight."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM proposer_allocations WHERE finished_at IS NULL"
+            ).fetchall()
+            return [_proposer_allocation_from_row(row) for row in rows]
+
+    def count_running_attempts(self, kind: str) -> int:
+        """Count attempts currently marked running for a work kind."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM attempts "
+                "WHERE kind = ? AND status = 'running'", (kind,),
+            ).fetchone()
+            return int(row["n"])
+
+    def current_epoch(self) -> Epoch | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM epochs "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1"
+            ).fetchone()
+            return None if row is None else _epoch_from_row(row)
+
+    def scheduler_rejection_for_work(self, work_id: str) -> str | None:
+        """The most recent rejection error recorded for one logical work id."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT payload FROM scheduler_events "
+                "WHERE type = 'supervisor_decision_rejected' "
+                "AND json_extract(payload, '$.work_id') = ? "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (work_id,),
+            ).fetchone()
+        return None if row is None else json.loads(row["payload"]).get("error")
+
+    def supervisor_event_cursor(self, consumer: str = "supervisor") -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT last_consumed_event_id FROM supervisor_cursor "
+                "WHERE consumer = ?", (consumer,),
+            ).fetchone()
+            return 0 if row is None else int(row[0])
+
+    def pending_supervisor_events(self) -> list[SupervisorEvent]:
+        cursor = self.supervisor_event_cursor()
+        return self.supervisor_events_between(cursor, None)
+
+    def supervisor_events_between(
+        self, after_id: int, upto_id: int | None,
+    ) -> list[SupervisorEvent]:
+        """Events with ``after_id < event_id`` (and ``<= upto_id`` if given).
+
+        The bounded read is what an agent worker uses to rebuild exactly the
+        batch it was hired for, even if new events landed after submission.
+        """
+        sql = "SELECT * FROM supervisor_events WHERE event_id > ?"
+        params: list[Any] = [after_id]
+        if upto_id is not None:
+            sql += " AND event_id <= ?"
+            params.append(upto_id)
+        sql += " ORDER BY event_id"
+        with self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
+            return [
+                SupervisorEvent(
+                    event_id=int(row["event_id"]),
+                    type=row["type"],
+                    payload=json.loads(row["payload"]),
+                    created_at=row["created_at"],
+                )
+                for row in rows
+            ]
+
+    def burned_lenses(self) -> dict[str, set[str]]:
+        """Lenses burned per node: its own episodes plus its whole ancestry.
+
+        A lens stamped on an episode is a question this lineage has already
+        bought; re-buying it downstream repeats the same bet (seat design
+        §2.2).  Open seats count as burned — their episodes exist.
+        """
+        nodes = {
+            node.node_id: node for node in self.list_nodes()
+        }
+        own: dict[str, set[str]] = {}
+        for row in self.episode_operator_rows():
+            own.setdefault(row["node_id"], set()).add(row["lens"])
+        burned: dict[str, set[str]] = {}
+        for node_id in nodes:
+            tried: set[str] = set()
+            current = node_id
+            hops: set[str] = set()
+            while current and current not in hops:
+                hops.add(current)
+                node = nodes.get(current)
+                if node is None:
+                    break
+                tried.update(own.get(current, ()))
+                current = node.parent_node_id
+            burned[node_id] = tried
+        return burned
 
     def research_state_width(self) -> list[dict[str, Any]]:
         """Return Node-local identity counts without interpreting state text."""

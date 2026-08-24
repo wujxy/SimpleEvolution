@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 from proposer.context import build_research_state_seed_pack
+from proposer.wake import build_wake_view, research_state_seed
+from simpleevo.db.queries import ResearchQueries
 from simpleevo.db.store import GateDecision, Proposal, ResearchStore
+from simpleevo.generator import load_generator_basis
 from simpleevo.research_state import ResearchState
 from simpleevo.scheduler.loop import Scheduler, SchedulerConfig
 
@@ -88,7 +91,7 @@ def _seed_completed_research_path(store: ResearchStore):
 
 def test_child_seed_joins_state_expectation_and_outcome(store):
     child = _seed_completed_research_path(store)
-    seed = _scheduler(store)._research_state_seed_for(child)
+    seed = research_state_seed(ResearchQueries(store.path), child)
     assert seed["child_node"]["node_id"] == child.node_id
     assert seed["originating_research_state"]["working_model"] == (
         "The boundary loses reusable state."
@@ -101,12 +104,12 @@ def test_child_seed_joins_state_expectation_and_outcome(store):
 
 def test_root_has_no_research_state_seed(store):
     root = _seed_root(store)
-    assert _scheduler(store)._research_state_seed_for(root) == {}
+    assert research_state_seed(ResearchQueries(store.path), root) == {}
 
 
 def test_seed_pack_gives_child_facts_before_predecessor_note(store):
-    seed = _scheduler(store)._research_state_seed_for(
-        _seed_completed_research_path(store)
+    seed = research_state_seed(
+        ResearchQueries(store.path), _seed_completed_research_path(store)
     )
     text = build_research_state_seed_pack(seed)
     assert "You are newly assigned to this Child world" in text
@@ -140,7 +143,14 @@ def test_child_proposer_payload_uses_research_state_seed(store):
     payload = scheduler._proposer_payload(
         allocation, child, episode, "attempt-1", 1,
     )
-    assert payload["research_state_seed"]["proposal"]["proposal_id"] == (
+    # Envelope: IDs only.  The seed is the worker's wake-time product.
+    assert "research_state_seed" not in payload
+    assert "world_transition" not in payload
+    view = build_wake_view(
+        ResearchQueries(store.path), load_generator_basis(),
+        node_id=child.node_id, episode_id=episode.episode_id,
+    )
+    assert view["research_state_seed"]["proposal"]["proposal_id"] == (
         "proposal-1"
     )
-    assert "world_transition" not in payload
+    assert "world_transition" not in view

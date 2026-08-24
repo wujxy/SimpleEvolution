@@ -20,7 +20,6 @@ from simpleevo.db.store import (
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.generator import Generator, load_generator_basis
 from simpleevo.jobs.base import BaseSubmitter
-from simpleevo.research_state import research_state_to_dict
 from .admission import validate_integration_request
 
 from .frontier import (
@@ -725,32 +724,9 @@ class Scheduler:
         return leases
 
     def _burned_lenses(self) -> dict[str, set[str]]:
-        """Lenses burned per node: its own episodes plus its whole ancestry.
-
-        A lens stamped on an episode is a question this lineage has already
-        bought; re-buying it downstream repeats the same bet (seat design
-        §2.2).  Open seats count as burned — their episodes exist.
-        """
-        nodes = {
-            node.node_id: node for node in self._queries.list_nodes()
-        }
-        own: dict[str, set[str]] = {}
-        for row in self._queries.episode_operator_rows():
-            own.setdefault(row["node_id"], set()).add(row["lens"])
-        burned: dict[str, set[str]] = {}
-        for node_id in nodes:
-            tried: set[str] = set()
-            current = node_id
-            hops: set[str] = set()
-            while current and current not in hops:
-                hops.add(current)
-                node = nodes.get(current)
-                if node is None:
-                    break
-                tried.update(own.get(current, ()))
-                current = node.parent_node_id
-            burned[node_id] = tried
-        return burned
+        """Shared tree function (queries.burned_lenses): enforcement here,
+        facts in supervisor_facts — one implementation, two consumers."""
+        return self._queries.burned_lenses()
 
     def _seat_episode_for_node(self, node_id: str, claimed: set[str]):
         """A distinct fresh episode for one seat on ``node_id``.
@@ -849,252 +825,41 @@ class Scheduler:
         return False
 
     def _supervisor_payload(self, pending, attempt) -> dict[str, Any]:
+        """IDs and static knobs only — the worker rebuilds the batch and
+        runtime facts from the store at wake time (module contract §3:
+        a queued payload must not age)."""
         head = pending[-1].event_id
-        epoch = self.store.current_epoch()
         cfg = self.evolution_config
         supervisor_steps = (
             int(getattr(cfg, "supervisor_steps", 40)) if cfg is not None
             else 40
         )
-        runtime_facts: dict[str, Any] = {
-            "max_proposer_inflight": self.config.max_proposer_inflight,
-            "max_experiment_inflight": self.config.max_experiment_inflight,
-            # Seat semantics: a purchase is one seat; there are no
-            # proposal slots to manage and no per-node research/proposal
-            # caps — the budget is the boundary (seat design §2.1/§4).
-            "seats_inflight": self.store.count_running_attempts("proposer"),
-            "max_terminal_evals": self.config.max_terminal_evals,
-            "budget_usd": self.config.budget_usd,
-        }
-        # First-hand budget facts: the limits say nothing without the
-        # amounts already spent, and opportunity-cost reasoning needs both
-        # on every wake (same numbers the durable cap derives).
-        # Capacity likewise: without the free count the gate cannot see
-        # the wall before hitting it (v3: 8 capacity rejections, 2 stalls).
-        runtime_facts["free_proposer_capacity"] = self._proposer_capacity()
-        terminal_used = self._queries.terminal_experiment_count()
-        runtime_facts["terminal_evals_used"] = terminal_used
-        if self.config.max_terminal_evals is not None:
-            runtime_facts["remaining_terminal_evals"] = max(
-                0, int(self.config.max_terminal_evals) - terminal_used)
-        if cfg is not None and cfg.pricing:
-            # Token pricing so the worker's budget view can price the
-            # run's usage ledger itself.
-            runtime_facts["pricing"] = dict(cfg.pricing)
-            spend = spend_usd(self.run_dir, cfg.pricing)
-            runtime_facts["spend_usd"] = round(spend, 6)
-            if self.config.budget_usd is not None:
-                runtime_facts["remaining_usd"] = round(
-                    max(0.0, float(self.config.budget_usd) - spend), 6)
         return {
-            "batch": {
-                # A retry wakes the same session on the same unconsumed
-                # batch; without the recorded reason the session cannot
-                # see why its previous decision was refused (v3: capacity
-                # rejections repeated until stall, blind to the cause).
-                **({
-                    "previous_rejection": (
-                        "Your previous decision for this batch was rejected "
-                        f"by the scheduler: {rejection}. Submit a corrected "
-                        "decision."
-                    ),
-                } if (rejection := self.store.scheduler_rejection_for_work(
-                        attempt.logical_work_id)) else {}),
-                "event_batch": {
-                    "cursor_from": self.store.supervisor_event_cursor(),
-                    "cursor_to": head,
-                    "events": [
-                        {
-                            "event_id": item.event_id,
-                            "type": item.type,
-                            "payload": item.payload,
-                        }
-                        for item in pending
-                    ],
-                },
-                # First-hand candidate facts: the mechanical decision set
-                # with each node's measured metrics, in creation order —
-                # facts only, no ranking, no recommendation (design §6:
-                # ordering by any quality signal would be the Harness
-                # judging on the gate's behalf).
-                "allocatable_nodes": self._allocatable_node_facts(),
-                # Seat/lens facts (seat design §7.4) — the state of the
-                # world, not the answer to a decision: what has been
-                # bought, what remains untried, and what each lens has
-                # produced so far.
-                "seat_ledger": self._seat_ledger_facts(),
-                "untried": self._untried_lens_facts(),
-                "lens_stats": self._lens_stats_facts(),
-                "epoch": None if epoch is None else {
-                    "epoch_id": epoch.epoch_id,
-                    "root_node_id": epoch.root_node_id,
-                },
-            },
-            "decision_id": uuid.uuid4().hex,
+            "work_id": attempt.logical_work_id,
             "attempt_id": attempt.attempt_id,
+            "decision_id": uuid.uuid4().hex,
             "supervisor_steps": supervisor_steps,
-            "runtime_facts": runtime_facts,
+            "event_batch_bounds": {
+                "cursor_from": self.store.supervisor_event_cursor(),
+                "cursor_to": head,
+            },
+            "knobs": {
+                "max_proposer_inflight": self.config.max_proposer_inflight,
+                "max_experiment_inflight": self.config.max_experiment_inflight,
+                "max_terminal_evals": self.config.max_terminal_evals,
+                "budget_usd": self.config.budget_usd,
+                "pricing": dict(cfg.pricing) if (
+                    cfg is not None and cfg.pricing) else None,
+                "metrics_schema": (
+                    dict(cfg.metrics_schema)
+                    if cfg is not None else None),
+            },
             "run_context": {"goal": cfg.goal} if cfg is not None else {},
         }
-
-    def _allocatable_node_facts(self) -> list[dict[str, Any]]:
-        """The mechanical decision set with measured metrics, creation order.
-
-        Mirrors the allocatable computation in ``SupervisorTools._list_nodes``
-        so the batch and the tool never disagree about eligibility.  Facts
-        only — no ranking, no ordering by any quality signal (design §6).
-        A node holding open seats stays purchasable for a DIFFERENT lens:
-        concurrency on one node is the seat design's whole point, and the
-        lineage-dedup fact (``untried``) already excludes the lenses those
-        seats hold.
-        """
-        open_counts: dict[str, int] = {}
-        for allocation in self.store.open_allocations():
-            open_counts[allocation.node_id] = (
-                open_counts.get(allocation.node_id, 0) + 1)
-        rows: list[dict[str, Any]] = []
-        for node in self._queries.list_nodes():
-            if node.status == "dead":
-                continue
-            rows.append({
-                "node_id": node.node_id,
-                "depth": node.depth,
-                "status": node.status,
-                "metrics": dict(node.metrics),
-                "seats_inflight": open_counts.get(node.node_id, 0),
-            })
-        return rows
 
     # ------------------------------------------------------------------
     # Seat/lens facts (seat design §7.4)
     # ------------------------------------------------------------------
-
-    def _seat_ledger_facts(self) -> list[dict[str, Any]]:
-        """Every seat ever bought, per node, with its outcome so far."""
-        per_node: dict[str, list[dict[str, Any]]] = {}
-        for row in self._queries.episode_operator_rows():
-            if row["leases"] == 0:
-                # An episode stamped with a lens but never leased cannot
-                # happen post-commit (stamping is atomic with the
-                # allocation); skip defensively rather than show a phantom.
-                continue
-            per_node.setdefault(row["node_id"], []).append({
-                "lens": row["lens"],
-                "episode_id": row["episode_id"],
-                "state": "open" if row["open_leases"] else "finished",
-                "proposals": row["proposals"],
-            })
-        return [
-            {"node": node_id, "seats": seats}
-            for node_id, seats in sorted(per_node.items())
-        ]
-
-    def _untried_lens_facts(self) -> list[dict[str, Any]]:
-        """Per living node, the lenses lineage-dedup still allows.
-
-        This is the fact an empty selection is judged against: the seat
-        menu is empty everywhere exactly when the program has asked every
-        question its basis can buy (honest completion, seat design §2.4).
-        """
-        basis = self._generator_basis_or_load()
-        if not basis:
-            return []
-        basis_ids = [item.id for item in basis]
-        burned = self._burned_lenses()
-        rows: list[dict[str, Any]] = []
-        for node in self._queries.list_nodes():
-            if node.status == "dead":
-                continue
-            rows.append({
-                "node": node.node_id,
-                "lenses": [
-                    lens for lens in basis_ids
-                    if lens not in burned.get(node.node_id, ())
-                ],
-            })
-        return rows
-
-    def _lens_stats_facts(self) -> list[dict[str, Any]]:
-        """Per lens, what its seats have produced across the program.
-
-        Output statistics only — the reading (buy more / beware crowding)
-        is the Supervisor's judgment; the harness states numbers.  Note the
-        anti-monotone fact the numbers cannot show by themselves: a lens
-        with the best record is also the one whose repeated purchase
-        narrows the program's diversity.
-        """
-        seats: dict[str, int] = {}
-        for row in self._queries.episode_operator_rows():
-            if row["leases"]:
-                seats[row["lens"]] = seats.get(row["lens"], 0) + 1
-        objective = (
-            (self.evolution_config.metrics_schema or {}).get("objective")
-            if self.evolution_config is not None else None
-        )
-        obj_key = (objective or {}).get("key")
-        lower_is_better = bool((objective or {}).get("lower_is_better"))
-        stats: dict[str, dict[str, Any]] = {}
-        for row in self._queries.proposal_outcome_rows():
-            lens = row["lens"]
-            if lens is None:
-                continue
-            entry = stats.setdefault(lens, {
-                "lens": lens, "proposals": 0, "gate_passed": 0,
-                "best_gain": None,
-            })
-            entry["proposals"] += 1
-            experiment_status = row["status"]
-            gate_passed = bool(
-                (row["gate_result"] or {}).get("passed")
-            ) and experiment_status in {"completed", "no_change"}
-            if experiment_status == "completed" and gate_passed:
-                entry["gate_passed"] += 1
-                gain = self._objective_gain(
-                    row, obj_key, lower_is_better)
-                if gain is not None:
-                    best = entry["best_gain"]
-                    if best is None or gain > best:
-                        entry["best_gain"] = gain
-        out = []
-        for item in self._generator_basis_or_load():
-            entry = stats.get(item.id) or {
-                "lens": item.id, "proposals": 0, "gate_passed": 0,
-                "best_gain": None,
-            }
-            entry["seats"] = seats.get(item.id, 0)
-            out.append(entry)
-        return out
-
-    def _objective_gain(
-        self, row: dict[str, Any], obj_key: str | None,
-        lower_is_better: bool,
-    ) -> float | None:
-        """Child-vs-parent objective improvement in percent for one row.
-
-        Sign follows the objective's direction; None when the objective or
-        the parent value is unknown (never fabricate a gain).
-        """
-        if not obj_key:
-            return None
-        child = (row["metrics"] or {}).get(obj_key)
-        parent_node = (
-            self._queries.get_node(row["parent_node_id"])
-            if row["parent_node_id"] else None
-        )
-        parent = (
-            parent_node.metrics.get(obj_key)
-            if parent_node is not None else None
-        )
-        if (not isinstance(child, (int, float))
-                or isinstance(child, bool)
-                or not isinstance(parent, (int, float))
-                or isinstance(parent, bool)
-                or parent == 0):
-            return None
-        raw = (
-            (parent - child) if lower_is_better else (child - parent)
-        ) / abs(parent)
-        return round(raw * 100.0, 2)
 
     def _supervisor_max_retries(self) -> int:
         if self.evolution_config is not None:
@@ -1351,127 +1116,16 @@ class Scheduler:
     def _proposer_payload(
         self, allocation, node, episode, attempt_id: str, attempt: int,
     ) -> dict[str, Any]:
-        """Assemble the proposer job payload from L2 (also used on re-submit)."""
-        seed = self._research_state_seed_for(node)
-        payload = {
+        """IDs only (also used on re-submit): the worker assembles its own
+        worldview from the store at wake time (module contract §3)."""
+        return {
             "allocation_id": allocation.allocation_id,
             "node_id": node.node_id,
-            "node_sha": node.sha,
             "episode_id": episode.episode_id,
-            "inherited_from_episode_id": episode.inherited_from_episode_id,
-            # The seat's identity block: the lens this episode was hired
-            # under, three parts verbatim from the basis.  Frontier-baseline
-            # leases carry no lens and no seat block.
-            "seat": self._seat_block(episode),
             "proposal_ids": list(allocation.reserved_proposal_ids),
             "proposal_slots": len(allocation.reserved_proposal_ids),
             "attempt_id": attempt_id,
             "attempt": attempt,
-        }
-        if seed:
-            payload["research_state_seed"] = seed
-        else:
-            payload["world_transition"] = self._world_transition_for(node)
-        return payload
-
-    def _seat_block(self, episode) -> dict[str, Any] | None:
-        """The seat payload block for an episode's lens, or None."""
-        lens_id = getattr(episode, "variation_operator", None)
-        if not lens_id:
-            return None
-        for item in self._generator_basis_or_load():
-            if item.id == lens_id:
-                return {
-                    "lens_id": item.id,
-                    "name_zh": item.name,
-                    "directive": item.directive or item.description,
-                    "forbidden": item.forbidden,
-                    "self_check": item.self_check,
-                }
-        return {"lens_id": lens_id, "name_zh": lens_id,
-                "directive": "", "forbidden": "", "self_check": ""}
-
-    def _world_transition_for(self, node) -> dict[str, Any]:
-        """Assemble the reality record a child Scientist sees on resume (§8).
-
-        ``node.experiment_id`` is the Experiment that produced this Node; its
-        facts (metrics / gate / diff) are the world transition from the parent
-        the forked Scientist last saw.
-        """
-        if node.experiment_id is None:
-            return {}
-        experiment = self._queries.get_experiment(node.experiment_id)
-        if experiment is None:
-            return {}
-        parent = self._queries.get_node(experiment.parent_node_id)
-        return {
-            "parent_node_id": experiment.parent_node_id,
-            "experiment_id": experiment.experiment_id,
-            "metrics": dict(experiment.metrics),
-            "gate": {
-                "passed": experiment.gate_result.passed,
-                "results": {
-                    name: {"passed": gr.passed, "detail": gr.detail}
-                    for name, gr in experiment.gate_result.results.items()
-                },
-            },
-            "diff": list(experiment.changed_paths),
-            "parent_metrics": dict(parent.metrics) if parent else {},
-        }
-
-    def _research_state_seed_for(self, node) -> dict[str, Any]:
-        """Join the one State/Proposal/Experiment path that produced a Child."""
-        if node.experiment_id is None:
-            return {}
-        experiment = self._queries.get_experiment(node.experiment_id)
-        if experiment is None:
-            return {}
-        proposal = self._queries.get_proposal(experiment.proposal_id)
-        if proposal is None or not proposal.research_state_id:
-            return {}
-        state = self._queries.get_research_state(proposal.research_state_id)
-        if state is None:
-            return {}
-        facts = self._world_transition_for(node)
-        # The author seat's lens: the memo a Child inherits is one school's
-        # attributed view, and the attribution travels with it (seat design
-        # §2.3 — 署名透镜 makes the discounting structural, not advised).
-        author_episode = self._queries.get_episode(state.episode_id)
-        originating_lens = (
-            author_episode.variation_operator
-            if author_episode is not None else None
-        )
-        return {
-            "originating_lens": originating_lens,
-            "child_node": {
-                "node_id": node.node_id,
-                "sha": node.sha,
-                "metrics": dict(node.metrics),
-                "gate": {
-                    "passed": node.gate_result.passed,
-                    "results": {
-                        name: {"passed": result.passed, "detail": result.detail}
-                        for name, result in node.gate_result.results.items()
-                    },
-                },
-            },
-            "originating_research_state": research_state_to_dict(state),
-            "proposal": {
-                "proposal_id": proposal.proposal_id,
-                "instruction": proposal.instruction,
-                "expectation": proposal.rationale.get("expectation"),
-                "material_difference": proposal.rationale.get(
-                    "material_difference"
-                ),
-            },
-            "experiment": {
-                "experiment_id": experiment.experiment_id,
-                "parent_node_id": experiment.parent_node_id,
-                "metrics": facts.get("metrics", {}),
-                "gate": facts.get("gate", {}),
-                "changed_paths": facts.get("diff", []),
-                "parent_metrics": facts.get("parent_metrics", {}),
-            },
         }
 
     # ------------------------------------------------------------------

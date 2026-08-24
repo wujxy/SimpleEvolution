@@ -202,6 +202,10 @@ class ResearchStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_schema()
+        # Read-only view shared with the agent workers.  queries.py imports
+        # this module, so the import stays lazy.
+        from simpleevo.db.queries import ResearchQueries
+        self._read = ResearchQueries(self.path)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.path))
@@ -708,11 +712,7 @@ class ResearchStore:
 
     def open_allocations(self) -> list[ProposerAllocation]:
         """Return proposer allocations that are still in flight."""
-        with self.transaction() as tx:
-            rows = tx._conn.execute(
-                "SELECT * FROM proposer_allocations WHERE finished_at IS NULL"
-            ).fetchall()
-            return [_proposer_allocation_from_row(row) for row in rows]
+        return self._read.open_allocations()
 
     def allocated_episode_ids(self) -> set[str]:
         """Return every episode id that has ever been allocated (single-use).
@@ -839,12 +839,7 @@ class ResearchStore:
 
     def count_running_attempts(self, kind: str) -> int:
         """Count attempts currently marked running for a work kind."""
-        with self.transaction() as tx:
-            row = tx._conn.execute(
-                "SELECT COUNT(*) AS n FROM attempts WHERE kind = ? AND status = 'running'",
-                (kind,),
-            ).fetchone()
-            return int(row["n"])
+        return self._read.count_running_attempts(kind)
 
     def running_attempts(self, kind: str) -> list[Attempt]:
         """Return attempts currently marked running for a work kind."""
@@ -960,11 +955,7 @@ class ResearchStore:
             conn.close()
 
     def current_epoch(self) -> Epoch | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM epochs ORDER BY created_at DESC, rowid DESC LIMIT 1"
-            ).fetchone()
-        return None if row is None else _epoch_from_row(row)
+        return self._read.current_epoch()
 
     def record_scheduler_event(self, event_type: str, payload: dict[str, Any]) -> str:
         event_id = _new_id()
@@ -992,16 +983,7 @@ class ResearchStore:
         the reason in the retry's wake the session cannot see why its
         previous attempt was refused and re-decides blind.
         """
-        row = self._with_conn(lambda conn: conn.execute(
-            "SELECT payload FROM scheduler_events "
-            "WHERE type = 'supervisor_decision_rejected' "
-            "AND json_extract(payload, '$.work_id') = ? "
-            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
-            (work_id,),
-        ).fetchone())
-        if row is None:
-            return None
-        return json.loads(row["payload"]).get("error")
+        return self._read.scheduler_rejection_for_work(work_id)
 
     # ------------------------------------------------------------------
     # Supervisor growth gate: wake events, cursor, decisions (§4/§9)
@@ -1023,12 +1005,7 @@ class ResearchStore:
         ).fetchone()[0]))
 
     def supervisor_event_cursor(self, consumer: str = "supervisor") -> int:
-        row = self._with_conn(lambda conn: conn.execute(
-            "SELECT last_consumed_event_id FROM supervisor_cursor "
-            "WHERE consumer = ?",
-            (consumer,),
-        ).fetchone())
-        return 0 if row is None else int(row[0])
+        return self._read.supervisor_event_cursor(consumer)
 
     def pending_supervisor_events(self) -> list[SupervisorEvent]:
         cursor = self.supervisor_event_cursor()

@@ -11,12 +11,15 @@ import shutil
 import socket
 from pathlib import Path
 
+from simpleevo.db.queries import ResearchQueries
+from simpleevo.generator import load_generator_basis
 from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
 from simpleevo.research_state import research_state_to_dict
 
 from experiment.git_worktree import GitWorkspaceProvider, WorkspaceSpec
 
 from .memory.l2 import L2MemoryService
+from .wake import build_wake_view
 from .model import build_chat_model
 from .orchestrator import ProposerOrchestrator
 from .runtime import ApptainerRuntime, world_mount_map
@@ -169,14 +172,9 @@ def main(argv: list[str] | None = None) -> int:
     run_dir = Path(payload["run_dir"])
     episode_id = payload["episode_id"]
     node_id = payload["node_id"]
-    node_sha = payload["node_sha"]
     proposal_ids = list(payload.get("proposal_ids", []))
     attempt_id = str(payload.get("attempt_id", ""))
     attempt = int(payload.get("attempt", 1))
-    inherited_from_episode_id = payload.get("inherited_from_episode_id") or None
-    seat = payload.get("seat") or None
-    research_state_seed = payload.get("research_state_seed") or {}
-    world_transition = payload.get("world_transition") or {}
     goal = payload["goal"]
     editable = list(payload.get("editable_paths", []))
     gate_block = payload.get("gate_block", "")
@@ -184,6 +182,21 @@ def main(argv: list[str] | None = None) -> int:
     scientist_steps = int(payload.get("scientist_steps", 200))
     runtime_image = Path(payload["runtime_image"])
     repo_path = Path(payload["repo_path"])
+
+    # Wake-time worldview assembly (module contract §3): the envelope
+    # carried IDs; every dynamic fact below is read from the store NOW.
+    wake_view = build_wake_view(
+        ResearchQueries(run_dir / "simpleevo.db"),
+        load_generator_basis(),
+        node_id=node_id,
+        episode_id=episode_id,
+    )
+    node_sha = wake_view["node_sha"]
+    inherited_from_episode_id = (
+        wake_view["inherited_from_episode_id"] or None)
+    seat = wake_view["seat"]
+    research_state_seed = wake_view.get("research_state_seed") or {}
+    world_transition = wake_view.get("world_transition") or {}
 
     # Materialize the Node World at the exact node SHA (§9).  The Scientist
     # must study its own world, not the repo's current checkout.  This mirrors

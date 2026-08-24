@@ -4,10 +4,28 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from proposer.supervisor_facts import build_batch, build_runtime_facts
+from proposer.wake import build_wake_view
 from simpleevo.config import EvolutionConfig
+from simpleevo.db.queries import ResearchQueries
 from simpleevo.db.store import GateDecision, GateResult, Proposal, ResearchStore
+from simpleevo.generator import load_generator_basis
 from simpleevo.scheduler.frontier import Frontier
 from simpleevo.scheduler.loop import Scheduler, SchedulerConfig
+
+
+def _worker_batch(store: ResearchStore, payload: dict) -> dict:
+    """What the supervisor worker assembles at wake (module contract §3):
+    the envelope carries bounds; the batch is rebuilt from the store."""
+    bounds = payload["event_batch_bounds"]
+    return build_batch(
+        ResearchQueries(store.path),
+        load_generator_basis(),
+        (payload.get("knobs") or {}).get("metrics_schema"),
+        cursor_from=int(bounds["cursor_from"]),
+        cursor_to=int(bounds["cursor_to"]),
+        work_id=payload.get("work_id", ""),
+    )
 
 
 def _gate(passed: bool = True) -> GateDecision:
@@ -99,7 +117,7 @@ def test_gate_batch_carries_first_hand_facts(tmp_path: Path):
 
     scheduler.step()
     (_, payload) = submitter.supervisor[0]
-    batch = payload["batch"]
+    batch = _worker_batch(store, payload)
 
     # Baseline metrics ride with root_ready.
     assert batch["event_batch"]["events"][0]["payload"]["root_metrics"] == {
@@ -116,7 +134,11 @@ def test_gate_batch_carries_first_hand_facts(tmp_path: Path):
     assert "previous_rejection" not in batch
 
     # Budget facts: limits are useless without the spent amounts.
-    facts = payload["runtime_facts"]
+    facts = build_runtime_facts(
+        ResearchQueries(store.path), tmp_path,
+        **{k: (payload["knobs"])[k] for k in (
+            "max_proposer_inflight", "max_experiment_inflight",
+            "max_terminal_evals", "budget_usd", "pricing")})
     assert facts["terminal_evals_used"] == 0
     assert facts["remaining_terminal_evals"] == 5
     # Capacity facts: the free count, not just the ceiling — the gate
@@ -134,7 +156,7 @@ def test_gate_wakes_on_events_and_creates_linked_leases(tmp_path: Path):
     assert len(submitter.supervisor) == 1
     work_id, payload = submitter.supervisor[0]
     assert work_id == "supervisor-1"
-    batch = payload["batch"]["event_batch"]
+    batch = _worker_batch(store, payload)["event_batch"]
     assert batch["cursor_from"] == 0 and batch["cursor_to"] == 1
     assert [e["type"] for e in batch["events"]] == ["root_ready"]
     # Facts and stable ids only — no prepared ranking (invariant 6).
@@ -163,15 +185,23 @@ def test_gate_wakes_on_events_and_creates_linked_leases(tmp_path: Path):
     assert len(allocation.reserved_proposal_ids) == 1
     episode = scheduler._queries.get_episode(allocation.episode_id)
     assert episode.variation_operator == "G5"
-    # The proposer payload carries the seat identity block, not a catalog.
+    # The envelope carries IDs only; the seat identity block (lens
+    # three-piece, not a catalog) is rebuilt by the worker from the
+    # stamped episode (module contract §3).
     (allocation_id, payload) = submitter.proposer[0]
-    assert payload["seat"]["lens_id"] == "G5"
-    assert payload["seat"]["directive"]
-    assert payload["seat"]["forbidden"]
-    assert payload["seat"]["self_check"]
+    assert "seat" not in payload and "node_sha" not in payload
     assert "suggested_operator_id" not in payload
     assert "generator_basis" not in payload
     assert payload["proposal_slots"] == 1
+    view = build_wake_view(
+        ResearchQueries(store.path), load_generator_basis(),
+        node_id=payload["node_id"], episode_id=payload["episode_id"],
+    )
+    assert view["seat"]["lens_id"] == "G5"
+    assert view["seat"]["directive"]
+    assert view["seat"]["forbidden"]
+    assert view["seat"]["self_check"]
+    assert view["node_sha"] == "root"
     assert store.latest_scheduler_event("supervisor_decision_accepted")[
         "decision_id"] == "d1"
     assert len(submitter.proposer) == 1
@@ -395,7 +425,7 @@ def test_empty_selection_completes_when_untried_exhausted(tmp_path: Path):
 
     scheduler.step()
     work_id, _ = submitter.supervisor[0]
-    untried = submitter.supervisor[0][1]["batch"]["untried"]
+    untried = _worker_batch(store, submitter.supervisor[0][1])["untried"]
     assert all(not row["lenses"] for row in untried)
     submitter.write_decision(work_id, {
         "decision_id": "d-done", "decision_kind": "growth",
@@ -456,7 +486,7 @@ def test_stale_decision_is_not_applied_and_batch_is_redelivered(tmp_path: Path):
     scheduler.step()
     work_id2, payload = submitter.supervisor[1]
     assert work_id2 == "supervisor-2"
-    batch = payload["batch"]["event_batch"]
+    batch = _worker_batch(store, payload)["event_batch"]
     assert batch["cursor_from"] == 0 and batch["cursor_to"] == 2
     assert [e["event_id"] for e in batch["events"]] == [1, 2]
 
@@ -544,10 +574,9 @@ def test_over_capacity_decision_is_rejected_whole(tmp_path: Path):
     scheduler.step()
     (retry_id, retry_payload) = submitter.supervisor[1]
     assert retry_id == work_id
-    assert "exceeds proposer capacity" in retry_payload["batch"][
-        "previous_rejection"]
-    assert "Submit a corrected decision" in retry_payload["batch"][
-        "previous_rejection"]
+    rejection = _worker_batch(store, retry_payload)["previous_rejection"]
+    assert "exceeds proposer capacity" in rejection
+    assert "Submit a corrected decision" in rejection
 
 
 def _seed_donor(store, root, episode):
@@ -958,8 +987,16 @@ def test_budget_limits_are_durable_and_change_events_are_real(tmp_path: Path):
     scheduler.step()
     # The wake payload carries the configured budget facts.
     _, payload = submitter.supervisor[0]
-    assert payload["runtime_facts"]["max_terminal_evals"] == 5
-    assert payload["runtime_facts"]["budget_usd"] == 2.0
+    # The wake envelope carries the knobs; the worker rebuilds the facts.
+    assert payload["knobs"]["max_terminal_evals"] == 5
+    assert payload["knobs"]["budget_usd"] == 2.0
+    facts = build_runtime_facts(
+        ResearchQueries(store.path), tmp_path,
+        **{k: payload["knobs"][k] for k in (
+            "max_proposer_inflight", "max_experiment_inflight",
+            "max_terminal_evals", "budget_usd", "pricing")})
+    assert facts["max_terminal_evals"] == 5
+    assert facts["budget_usd"] == 2.0
     # First install: rows written, but constructing a run is not a budget
     # intervention — only root_ready is on the log.
     assert store.run_limits() == {
