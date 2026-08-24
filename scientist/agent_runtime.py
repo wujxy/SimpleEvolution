@@ -40,6 +40,7 @@ class AgentRuntime:
         terminal_name: str | tuple[str, ...],
         budget_nudge: str,
         handle_terminal,
+        time_nudge: str | None = None,
         compact,
         checkpoint,
         capture_expectations: bool = False,
@@ -54,6 +55,7 @@ class AgentRuntime:
         usages: list = []
         reminder_step = int(0.8 * steps_budget)
         reminded = False
+        time_reminded = False
         started = time.monotonic()
 
         with TemporaryDirectory(prefix="simpleloop-scratch-") as scratch, \
@@ -73,6 +75,32 @@ class AgentRuntime:
                 if not reminded and reminder_step > 0 and step >= reminder_step:
                     messages.append({"role": "user", "content": budget_nudge})
                     reminded = True
+                # Wall-clock pacing: the step nudge fires on 80% of STEPS,
+                # but a hand-working seat can burn the whole wall with
+                # two-thirds of its steps unspent (probe A round 2 died at
+                # the deadline mid-exploration).  Fires once, at 80% of the
+                # wall budget — information, not a stop order.
+                if (time_nudge and not time_reminded
+                        and time.monotonic() - started
+                        >= 0.8 * self.agent.timeout_seconds):
+                    messages.append({"role": "user", "content": time_nudge})
+                    time_reminded = True
+                # Graceful wall exit: with less than ~10% of the wall (cap
+                # 90s) left there is no room for another model call plus a
+                # conclusion — end the loop NOW so the lease concludes
+                # cut_off on file (design §2.3: 预算断 = 出口三,不是 infra
+                # 暴毙重发整个 attempt).  The margin scales with the budget
+                # so short-budget tests keep their full loop.  The hard
+                # deadline still guards hung tool calls below.
+                wall_margin = min(90.0, 0.1 * self.agent.timeout_seconds)
+                if deadline - time.monotonic() < wall_margin:
+                    print(
+                        f"[{_stamp()}] [agent runtime step {step}/"
+                        f"{steps_budget}] wall nearly spent; concluding "
+                        "cut_off",
+                        flush=True,
+                    )
+                    break
 
                 actions, reply_text = self.agent._step(
                     state,

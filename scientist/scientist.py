@@ -555,12 +555,26 @@ def _build_research_start_messages(
 
 
 _BUDGET_NUDGE = (
-    "Your research turn is nearing its computation budget. If you have a "
-    "direction you currently believe is worth an experiment, submit your "
-    "proposal now via submit_explorations or submit_synthesis. If your angle "
-    "provably has nothing here, register your memo state and abstain "
-    "honestly. This is a resource notice, not a required phase — keep "
-    "researching if your best judgment says nothing yet clears the bar."
+    "Your research turn is nearing its step budget. If your world is "
+    "built and self-verified, update_research_state and deliver it now "
+    "(deliver_world). If your angle provably has nothing here, update "
+    "your state and abstain honestly. This is a resource notice, not a "
+    "required phase — keep researching if your best judgment says nothing "
+    "yet clears the bar."
+)
+
+# The lease budget is fourfold (time / token / work calls / consult
+# calls); the wall leg was invisible to the seat until probe A round 2
+# died at the deadline mid-exploration with two-thirds of its steps
+# unspent.  The nudge is pacing INFORMATION, not a stop order — what the
+# seat does with the remaining fifth of the wall is its own judgment.
+_TIME_NUDGE = (
+    "TIME: about 80% of your wall-clock budget is spent; the harness will "
+    "cut the lease off when it runs out (whatever is on file survives, "
+    "but the conclusion would not be yours). If your world is built and "
+    "self-verified, update_research_state and deliver it now. If the "
+    "remaining work is heavy building you have not started, one work() "
+    "call to your assistant may be cheaper than your own hands."
 )
 
 _SUSPEND_PROMPT = (
@@ -2459,6 +2473,7 @@ class ScientistAgent(ResearchAgent):
             tools_factory=tools_factory,
             terminal_name=("deliver_world", "abstain"),
             budget_nudge=_BUDGET_NUDGE,
+            time_nudge=_TIME_NUDGE,
             capture_expectations=True,
             make_result=make_result,
         )
@@ -2699,6 +2714,7 @@ class ScientistAgent(ResearchAgent):
         budget_nudge: str,
         make_result,
         capture_expectations: bool = False,
+        time_nudge: str | None = None,
     ):
         """The shared agentic step-loop for one deliberation (task research OR
         self-review). The caller builds the mode-specific system prompt, initial
@@ -2728,6 +2744,7 @@ class ScientistAgent(ResearchAgent):
                 source_root=source_root,
                 build_tools=tools_factory, terminal_name=terminal_name,
                 budget_nudge=budget_nudge, handle_terminal=make_result,
+                time_nudge=time_nudge,
                 compact=self._maybe_compact,
                 checkpoint=self._suspension_checkpoint,
                 capture_expectations=capture_expectations,
