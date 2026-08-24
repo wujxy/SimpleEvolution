@@ -50,7 +50,7 @@ from simpleevo.jobs.local import LocalSubmitter
 from simpleevo.scheduler.loop import Scheduler
 from simpleevo.scheduler.telemetry import spend_usd
 
-from proposer.model import build_chat_model
+from scientist.model import build_chat_model
 
 _EVENT_KINDS = {
     "supervisor_decision_accepted",

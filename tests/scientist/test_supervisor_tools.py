@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from proposer.memory.l2 import L2MemoryService
-from proposer.supervisor import SupervisorTools
+from scientist.memory.l2 import L2MemoryService
+from supervisor.agent import SupervisorTools
 from simpleevo.db.store import GateDecision, GateResult, ResearchStore
 
 

@@ -1,7 +1,7 @@
 """Worker CLI for one SimpleEvolution proposer episode.
 
 Usage:
-    python -m proposer.cli --manifest path/to/manifest.json
+    python -m scientist.cli --manifest path/to/manifest.json
 """
 from __future__ import annotations
 

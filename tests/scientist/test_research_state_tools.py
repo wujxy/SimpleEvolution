@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from proposer.cli import _enrich_proposals, _proposal_to_dict, _result_to_dict
-from proposer.research_agent import (
+from scientist.cli import _enrich_proposals, _proposal_to_dict, _result_to_dict
+from scientist.research_agent import (
     WorkingState, _build_telemetry, _build_trace, _register_evidence,
 )
-from proposer.research_tools import ResearchTools
-from proposer.research_skills import render_research_skill_catalog
-from proposer.runtime import MountMap
-from proposer.scientist import (
+from scientist.research_tools import ResearchTools
+from scientist.research_skills import render_research_skill_catalog
+from scientist.runtime import MountMap
+from scientist.scientist import (
     ProposerError,
     _validate_action_guard,
     parse_response,

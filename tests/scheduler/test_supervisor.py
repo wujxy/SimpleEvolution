@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from proposer.supervisor_facts import build_batch, build_runtime_facts
-from proposer.wake import build_wake_view
+from supervisor.facts import build_batch, build_runtime_facts
+from scientist.wake import build_wake_view
 from simpleevo.config import EvolutionConfig
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.db.store import GateDecision, GateResult, Proposal, ResearchStore
@@ -61,7 +61,7 @@ class Submitter:
     def __init__(self, run_dir: Path):
         self.run_dir = run_dir
         self.supervisor: list[tuple[str, dict]] = []
-        self.proposer: list[tuple[str, dict]] = []
+        self.scientist: list[tuple[str, dict]] = []
         self.integrator: list[tuple[str, dict]] = []
 
     def submit_supervisor(self, work_id: str, payload: dict) -> str:
@@ -69,7 +69,7 @@ class Submitter:
         return str(self.run_dir / "supervisor_decisions" / work_id / "result.json")
 
     def submit_proposer(self, allocation_id: str, payload: dict) -> str:
-        self.proposer.append((allocation_id, payload))
+        self.scientist.append((allocation_id, payload))
         return str(self.run_dir / "proposer_allocations" / allocation_id / "result.json")
 
     def submit_experiment(self, experiment_id: str, payload: dict) -> str:
@@ -161,7 +161,7 @@ def test_gate_wakes_on_events_and_creates_linked_leases(tmp_path: Path):
     assert [e["type"] for e in batch["events"]] == ["root_ready"]
     # Facts and stable ids only — no prepared ranking (invariant 6).
     assert set(batch["events"][0]) == {"event_id", "type", "payload"}
-    assert submitter.proposer == []
+    assert submitter.scientist == []
 
     submitter.write_decision(work_id, {
         "decision_id": "d1", "decision_kind": "growth",
@@ -188,7 +188,7 @@ def test_gate_wakes_on_events_and_creates_linked_leases(tmp_path: Path):
     # The envelope carries IDs only; the seat identity block (lens
     # three-piece, not a catalog) is rebuilt by the worker from the
     # stamped episode (module contract §3).
-    (allocation_id, payload) = submitter.proposer[0]
+    (allocation_id, payload) = submitter.scientist[0]
     assert "seat" not in payload and "node_sha" not in payload
     assert "suggested_operator_id" not in payload
     assert "generator_basis" not in payload
@@ -204,12 +204,12 @@ def test_gate_wakes_on_events_and_creates_linked_leases(tmp_path: Path):
     assert view["node_sha"] == "root"
     assert store.latest_scheduler_event("supervisor_decision_accepted")[
         "decision_id"] == "d1"
-    assert len(submitter.proposer) == 1
+    assert len(submitter.scientist) == 1
 
     # Idle capacity never re-asks without new evidence (invariant 10).
     scheduler.step()
     assert len(submitter.supervisor) == 1
-    assert len(submitter.proposer) == 1
+    assert len(submitter.scientist) == 1
 
 
 def test_gate_selects_historical_node_unrelated_to_new_event(tmp_path: Path):
@@ -511,7 +511,7 @@ def test_worker_failures_never_fall_back_and_end_in_stall(tmp_path: Path):
         "work_id"] == "supervisor-1"
     assert store.supervisor_event_cursor() == 0
     assert store.open_allocations() == []
-    assert submitter.proposer == []
+    assert submitter.scientist == []
     with store._connect() as conn:
         fallbacks = conn.execute(
             "SELECT COUNT(*) FROM scheduler_events "
@@ -520,7 +520,7 @@ def test_worker_failures_never_fall_back_and_end_in_stall(tmp_path: Path):
 
     outcome = scheduler.run(max_steps=8)
     assert outcome["status"] == "stalled"
-    assert submitter.proposer == []
+    assert submitter.scientist == []
 
 
 def test_invalid_decision_is_rejected_and_retried_same_batch(tmp_path: Path):
@@ -926,7 +926,7 @@ def test_capped_run_starts_no_new_gate_or_integrator_work(tmp_path: Path):
 
     assert submitter.supervisor == []
     assert submitter.integrator == []
-    assert submitter.proposer == []
+    assert submitter.scientist == []
     assert store.get_integration_request("req-open").status == "open"
 
 
@@ -1040,7 +1040,7 @@ def test_durable_eval_cap_blocks_new_work_on_restart(tmp_path: Path):
     # The restart's very first step starts nothing despite pending
     # evidence — the durable cap is derived before any new work.
     assert submitter.supervisor == []
-    assert submitter.proposer == []
+    assert submitter.scientist == []
     assert submitter.integrator == []
     assert scheduler._allocation_disabled() is True
     assert store.pending_supervisor_events()  # batch stays unconsumed

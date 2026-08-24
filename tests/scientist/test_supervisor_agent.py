@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from proposer.model import ModelReply
-from proposer.supervisor import (
+from scientist.model import ModelReply
+from supervisor.agent import (
     SUPERVISOR_PROMPT_VERSION,
     SupervisorAgent,
     SupervisorError,
@@ -223,7 +223,7 @@ def test_step_budget_exhaustion_is_an_error_not_a_default(tmp_path: Path):
 
 
 def test_live_context_compaction_keeps_archive_complete(tmp_path: Path):
-    from proposer.scientist import ContextPolicy
+    from scientist.scientist import ContextPolicy
 
     session = load_supervisor_session(tmp_path)
     agent = SupervisorAgent(

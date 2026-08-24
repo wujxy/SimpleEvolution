@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 from simpleevo.contracts import CommitRequest, WorkspaceSpec
-from proposer.assistant.git_worktree import GitWorkspaceProvider
+from scientist.assistant.git_worktree import GitWorkspaceProvider
 
 
 def _run(repo: Path, *args: str) -> None:

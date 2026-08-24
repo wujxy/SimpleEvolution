@@ -255,7 +255,7 @@ def _api_preflight(config) -> None:
     different provider authenticates 401 inside every experiment attempt
     with no diagnostic at the driver level.
     """
-    from proposer.model import build_chat_model
+    from scientist.model import build_chat_model
 
     for role in ("researcher", "executor"):
         spec = dict(getattr(config, role))

@@ -1,6 +1,6 @@
 """Knowledge Exchange context stays factual and reaches cold Scientists."""
 
-from proposer.scientist import _COLD_START, _build_research_start_messages
+from scientist.scientist import _COLD_START, _build_research_start_messages
 
 
 def test_cold_start_receives_seed_then_global_coverage():

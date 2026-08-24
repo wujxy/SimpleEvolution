@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from proposer.wake import research_state_seed
+from scientist.wake import research_state_seed
 from simpleevo.db.store import GateDecision, GateResult, Proposal, ResearchStore
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.scheduler.frontier import FrontierConfig
@@ -35,7 +35,7 @@ class _GateSubmitter:
     def __init__(self, run_dir: Path):
         self.run_dir = run_dir
         self.supervisor: list[tuple[str, dict]] = []
-        self.proposer: list[tuple[str, dict]] = []
+        self.scientist: list[tuple[str, dict]] = []
         self.experiments: list[tuple[str, dict]] = []
 
     def submit_supervisor(self, work_id: str, payload: dict) -> str:
@@ -43,7 +43,7 @@ class _GateSubmitter:
         return str(self.run_dir / "supervisor_decisions" / work_id / "result.json")
 
     def submit_proposer(self, allocation_id: str, payload: dict) -> str:
-        self.proposer.append((allocation_id, payload))
+        self.scientist.append((allocation_id, payload))
         return str(self.run_dir / "proposer_allocations" / allocation_id / "result.json")
 
     def submit_experiment(self, experiment_id: str, payload: dict) -> str:
@@ -174,7 +174,7 @@ def test_scheduler_closes_proposer_experiment_loop(env):
     # Step 2: the decision commits and the proposer lease is launched.
     t2 = scheduler.step()
     assert t2["proposer_jobs"] == 1
-    allocation_id, proposer_payload = submitter.proposer[0]
+    allocation_id, proposer_payload = submitter.scientist[0]
     assert proposer_payload["node_id"] == root.node_id
     (allocation,) = store.open_allocations()
     assert allocation.decision_id == "decision-1"
@@ -276,7 +276,7 @@ def test_group_workflow_allocates_divergent_branch_and_promotes_shared_epoch(env
         rationale="fund the distinct low-base lineage",
         decision_id="decision-1")
     scheduler.step()
-    assert submitter.proposer[0][1]["node_id"] == divergent.node_id
+    assert submitter.scientist[0][1]["node_id"] == divergent.node_id
     (lease,) = store.open_allocations()
     assert lease.decision_id == "decision-1"
 

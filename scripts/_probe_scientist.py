@@ -9,7 +9,7 @@ it separates the selector (which proposals does the disposition pick)
 from the lab-verify filter (which proposals survive self-verification).
 
 Usage:
-  python scripts/_probe_proposer.py <episode_id> <node_id> [repeats]
+  python scripts/_probe_scientist.py <episode_id> <node_id> [repeats]
 """
 import json
 import sqlite3
@@ -19,7 +19,7 @@ from pathlib import Path
 from simpleevo.config import load_config
 
 from proposer import scientist as S
-from proposer.model import build_chat_model
+from scientist.model import build_chat_model
 
 RUN = Path("runs/supervisor-tree-xsbench")
 CONFIG = "examples/xsbench_opt/task-supervisor-branch.yaml"
@@ -131,7 +131,7 @@ def main() -> int:
     if episode_id.upper() == "NONE":  # control: same world, no notebook
         notebook = ""
     elif episode_id.upper() == "MEMO":  # G0: v4 facts + pointer-only
-        from proposer.context import build_research_state_seed_pack
+        from scientist.context import build_research_state_seed_pack
         seed_pack = build_research_state_seed_pack({
             "child_node": CHILD,
             "experiment": EXPERIMENT,
@@ -162,7 +162,7 @@ def main() -> int:
         globals()["_MEMO_PREFIX"] = _note_pack(facts, note) + "\n\n"
     elif episode_id.upper() == "NOTE0":  # control: real facts, v4 pointer
         facts, note = _real_seed("3325e324")
-        from proposer.context import build_research_state_seed_pack
+        from scientist.context import build_research_state_seed_pack
         seed = {**facts, "originating_research_state": {"working_model": note}}
         notebook = ""
         globals()["_MEMO_PREFIX"] = (
@@ -177,7 +177,7 @@ def main() -> int:
         "SELECT sha FROM nodes WHERE node_id = ?", (node_id,)
     ).fetchone()[0]
     system = S._build_system_prompt(
-        charter=Path("proposer/prompts/proposer.md").read_text(encoding="utf-8"),
+        charter=Path("proposer/prompts/scientist.md").read_text(encoding="utf-8"),
         goal=config.goal,
         editable=list(config.editable_paths),
         base_sha=sha,

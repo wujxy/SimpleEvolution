@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from proposer.integrator import IntegratorAgent, IntegratorError
-from proposer.model import ModelReply
+from scientist.integrator import IntegratorAgent, IntegratorError
+from scientist.model import ModelReply
 
 
 class FakeModel:

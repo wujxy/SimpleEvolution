@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from proposer.memory.l2 import L2MemoryService
+from scientist.memory.l2 import L2MemoryService
 from simpleevo.db.store import GateDecision, GateResult, ResearchStore
 from simpleevo.research_state import ResearchState
 

@@ -78,7 +78,7 @@ def test_submit_stages_job_files_and_parses_cluster_id(tmp_path, monkeypatch):
     # job.sh sources job_env.sh and runs the worker with --job-id from $1.
     job_sh = (exp_dir / "job.sh").read_text()
     assert "source" in job_sh and "job_env.sh" in job_sh
-    assert "-m proposer.assistant.cli" in job_sh
+    assert "-m scientist.assistant.cli" in job_sh
     assert "--backend condor" in job_sh
     assert '--job-id "$1"' in job_sh
 
@@ -219,7 +219,7 @@ def test_supervisor_uses_its_own_worker_artifact(tmp_path, monkeypatch):
     manifest = json.loads((work_dir / "manifest.json").read_text())
     assert result_path == str(work_dir / "result.json")
     assert manifest["kind"] == "supervisor"
-    assert "-m proposer.supervisor_cli" in (work_dir / "job.sh").read_text()
+    assert "-m supervisor.cli" in (work_dir / "job.sh").read_text()
 
 
 def test_integrator_uses_request_scoped_worker_artifact(tmp_path, monkeypatch):
@@ -233,4 +233,4 @@ def test_integrator_uses_request_scoped_worker_artifact(tmp_path, monkeypatch):
     work_dir = tmp_path / "integration_requests" / "request-1"
     assert result_path == str(work_dir / "result.json")
     assert json.loads((work_dir / "manifest.json").read_text())["kind"] == "integrator"
-    assert "-m proposer.integrator_cli" in (work_dir / "job.sh").read_text()
+    assert "-m scientist.integrator_cli" in (work_dir / "job.sh").read_text()

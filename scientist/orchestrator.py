@@ -7,7 +7,7 @@ round, persists the session, and maps the outcome to the ``LaneResult`` /
 
 The Generator→Cognitive pipeline, hypothesis cards, and the feedback loop are
 gone. Idea content, judgment, and research direction all live in the Scientist
-(``roles/proposer.py``); this module is intentionally a thin adapter.
+(``roles/scientist.py``); this module is intentionally a thin adapter.
 ``LaneResult`` and ``ProposerResult`` shapes are preserved so loop.py and the
 HEPJob collector need no modification — that shape is the interface firewall of
 this refactor.

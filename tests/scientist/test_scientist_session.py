@@ -4,8 +4,8 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from proposer.cli import _inherit_parent_session
-from proposer.scientist_session import ScientistSession
+from scientist.cli import _inherit_parent_session
+from scientist.scientist_session import ScientistSession
 
 
 def test_load_or_create_for_episode():

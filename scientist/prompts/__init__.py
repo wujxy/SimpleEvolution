@@ -1,6 +1,6 @@
 """Proposer prompt loading.
 
-The Scientist charter (``proposer.md``) lives in this package and travels with
+The Scientist charter (``scientist.md``) lives in this package and travels with
 it. The Host may override the charter for a run by passing a ``prompt_dir``
 (via the lane manifest); otherwise the packaged default is used. This is the
 S2b(i) cut of the ``simpleloop.prompts.load_semantic`` cross-dependency — the

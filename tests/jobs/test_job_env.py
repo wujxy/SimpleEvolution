@@ -10,12 +10,12 @@ from simpleevo.jobs import job_env
 
 
 def test_package_parent_points_at_the_repo():
-    # simpleevo/proposer/experiment all live beside the simpleevo package.
+    # simpleevo/scientist/supervisor all live beside the simpleevo package.
     parent = job_env.package_parent()
     assert (parent / "simpleevo").is_dir()
-    assert (parent / "proposer").is_dir()
-    assert (parent / "proposer").is_dir()
-    assert (parent / "proposer" / "assistant").is_dir()
+    assert (parent / "scientist").is_dir()
+    assert (parent / "supervisor").is_dir()
+    assert (parent / "scientist" / "assistant").is_dir()
 
 
 def test_worker_environment_sets_pythonpath_and_forwarded_env():

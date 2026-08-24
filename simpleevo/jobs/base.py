@@ -168,10 +168,10 @@ class BaseSubmitter(ABC):
         """Worker argv (before python / job.sh).  --backend is transport
         metadata the worker reports into ``execution.scheduler``."""
         modules = {
-            "proposer": "proposer.cli",
-            "supervisor": "proposer.supervisor_cli",
-            "integrator": "proposer.integrator_cli",
-            "experiment": "proposer.assistant.cli",
+            "proposer": "scientist.cli",
+            "supervisor": "supervisor.cli",
+            "integrator": "scientist.integrator_cli",
+            "experiment": "scientist.assistant.cli",
         }
         module = modules[kind]
         return [

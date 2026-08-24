@@ -13,7 +13,7 @@ from simpleevo.config import EvolutionConfig
 from simpleevo.db.store import GateDecision, ResearchStore
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.generator import Generator
-from proposer.wake import build_wake_view
+from scientist.wake import build_wake_view
 from simpleevo.generator import load_generator_basis
 from simpleevo.scheduler.loop import Scheduler, SchedulerConfig
 

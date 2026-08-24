@@ -1,7 +1,7 @@
 """Lens-seat probe: does a generator (透镜) actually change the angle a
 proposer opens with, or is it decoration?
 
-Stage-A single-call probe (same shape as _probe_proposer.py): freeze ONE real
+Stage-A single-call probe (same shape as _probe_scientist.py): freeze ONE real
 wake context — the v5 tree run's ROOT study opening turn, verbatim from its
 session file — and run 11 arms: 10 lens seats + 1 no-lens control.  Every arm
 shares an identical compact charter; only the seat-identity block differs.
@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 
 from simpleevo.config import load_config
-from proposer.model import build_chat_model
+from scientist.model import build_chat_model
 
 RUN_DIR = Path("runs/ablation-v5/tree/seed-1")
 # Study 2 (child-world wake): the only v5 episode whose session file records

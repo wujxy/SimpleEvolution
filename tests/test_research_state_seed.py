@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from proposer.context import build_research_state_seed_pack
-from proposer.wake import build_wake_view, research_state_seed
+from scientist.context import build_research_state_seed_pack
+from scientist.wake import build_wake_view, research_state_seed
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.db.store import GateDecision, Proposal, ResearchStore
 from simpleevo.generator import load_generator_basis

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from proposer.model import ModelError, resolve_api_key
+from scientist.model import ModelError, resolve_api_key
 
 
 def test_config_api_key_wins_over_environment(monkeypatch):

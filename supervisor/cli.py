@@ -11,11 +11,11 @@ from simpleevo.db.queries import ResearchQueries
 from simpleevo.generator import load_generator_basis
 from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
 
-from .memory.l2 import L2MemoryService
-from .supervisor_facts import build_batch, build_runtime_facts
-from .model import build_chat_model
-from .scientist import ContextPolicy
-from .supervisor import SupervisorAgent, SupervisorTools, load_supervisor_session
+from scientist.memory.l2 import L2MemoryService
+from supervisor.facts import build_batch, build_runtime_facts
+from scientist.model import build_chat_model
+from scientist.scientist import ContextPolicy
+from supervisor.agent import SupervisorAgent, SupervisorTools, load_supervisor_session
 
 
 def main(argv: list[str] | None = None) -> int:

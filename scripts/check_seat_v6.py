@@ -183,7 +183,7 @@ def main(run_dir: str) -> int:
         f"rows: {transformations}",
     )
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from proposer.research_skills import render_research_skill_catalog
+    from scientist.research_skills import render_research_skill_catalog
     catalog = render_research_skill_catalog()
     check(
         "7b. reframe_inherited_problem skill still in catalog",

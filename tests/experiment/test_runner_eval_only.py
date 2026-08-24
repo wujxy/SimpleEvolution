@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from simpleevo.contracts import EvaluationResult, ExperimentRequest
-from proposer.assistant.runner import ExperimentRunner
+from scientist.assistant.runner import ExperimentRunner
 
 
 def _write_repo(path: Path) -> None:
@@ -27,7 +27,7 @@ def _write_repo(path: Path) -> None:
 
 
 def _request(tmp_path: Path, *, eval_commands: tuple[str, ...]) -> ExperimentRequest:
-    from proposer.assistant.git_worktree import GitWorkspaceProvider
+    from scientist.assistant.git_worktree import GitWorkspaceProvider
 
     repo = tmp_path / "repo"
     _write_repo(repo)
@@ -60,7 +60,7 @@ def _request(tmp_path: Path, *, eval_commands: tuple[str, ...]) -> ExperimentReq
 @pytest.fixture()
 def _stubbed_eval(monkeypatch):
     """Stub the Apptainer evaluator; expose per-test EvaluationResults."""
-    from proposer.assistant import runner as runner_mod
+    from scientist.assistant import runner as runner_mod
 
     state = {"result": None}
 
