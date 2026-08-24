@@ -68,11 +68,17 @@ def executor_environment(
         result["ANTHROPIC_API_KEY"] = api_key
         result.pop("ANTHROPIC_AUTH_TOKEN", None)
     if base_url:
+        forwarded_base = result.get("ANTHROPIC_BASE_URL")
         result["ANTHROPIC_BASE_URL"] = base_url
-        # Same authority rule for the endpoint: with a pinned base_url an
-        # inherited AUTH_TOKEN is a credential for some OTHER endpoint —
-        # drop it so API_KEY (config-pinned or forwarded) wins.
-        result.pop("ANTHROPIC_AUTH_TOKEN", None)
+        # Same authority rule for the endpoint — but only when the token
+        # really is a foreign credential: an inherited AUTH_TOKEN belongs
+        # to SOME OTHER endpoint exactly when the forwarded base_url
+        # disagrees with the pinned one.  When they agree, the token is
+        # this endpoint's own credential and must survive (otherwise a
+        # task that pins base_url without api_key strips its only key and
+        # every executor attempt exits 1 — the smoke-mc crashloop).
+        if forwarded_base != base_url:
+            result.pop("ANTHROPIC_AUTH_TOKEN", None)
     result["CLAUDE_CODE_MAX_OUTPUT_TOKENS"] = str(max_output_tokens)
     result["HOME"] = pwd.getpwuid(os.getuid()).pw_dir
     # Never let the executor CLI read the submitting user's interactive
