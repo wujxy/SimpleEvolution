@@ -53,18 +53,20 @@ class LaneResult:
 
 @dataclass(frozen=True)
 class EpisodeResult:
-    """One Scientist episode's outcome (SimpleEvolution anchor)."""
+    """One Scientist episode's outcome (SimpleEvolution anchor).
+
+    Complete research: the episode ends in a lease conclusion —
+    deliver | abstain | cut_off.  ``outcome`` is "concluded" or "error".
+    """
 
     episode_id: str
     node_id: str
-    proposals: tuple = ()  # tuple[ResearchProposal, ...]
-    outcome: str = "submit"
+    conclusion: dict | None = None
+    outcome: str = "concluded"
     abstain_reason: str | None = None
     deliberation_telemetry: dict = field(default_factory=dict)
     trace: dict = field(default_factory=dict)
     research_states: tuple[ResearchState, ...] = ()
-    research_operation: str | None = None
-    donor_experiment_ids: tuple[str, ...] = ()
 
 
 def _safe_save_meta(
@@ -115,12 +117,20 @@ class ProposerOrchestrator:
         command_output_cap_chars: int,
         usage_observer=None,
         context_policy: ContextPolicy | None = None,
+        hands=None,
+        db_path=None,
+        lease_id: str | None = None,
     ):
         self.model = model
         self.runtime = runtime
         self.timeout_seconds = timeout_seconds
         self.command_timeout_seconds = command_timeout_seconds
         self.command_output_cap_chars = command_output_cap_chars
+        # The seat's claude assistant hands and the incremental state
+        # writer (complete research); threaded into the tool factory.
+        self.hands = hands
+        self.db_path = db_path
+        self.lease_id = lease_id
         self.usage_observer = usage_observer
         self.scientist = ScientistAgent(
             model=model, runtime=runtime,
@@ -260,6 +270,7 @@ class ProposerOrchestrator:
         hints: list[str] | None = None,
         proposal_slots: int = 1,
         scientist_steps: int = 200,
+        adjudication_feedback: dict | None = None,
     ) -> "EpisodeResult":
         """Run one seat episode keyed by (episode_id, node_id).
 
@@ -283,6 +294,9 @@ class ProposerOrchestrator:
                 research_state_seed=research_state_seed,
                 lens=lens,
                 node_id=node_id, episode_id=episode_id,
+                hands=self.hands, db_path=self.db_path,
+                lease_id=self.lease_id,
+                adjudication_feedback=adjudication_feedback,
             )
         except (ProposerError, Exception) as exc:
             print(f"[orchestrator] episode {episode_id} research failed: {exc}", flush=True)
@@ -296,24 +310,23 @@ class ProposerOrchestrator:
                 trace=getattr(exc, "proposer_trace", None) or {},
             )
         _safe_save_meta(session, node_id=node_id, node_sha=node_sha)
-        outcome = "abstain" if result.abstained else "submit"
+        conclusion = result.conclusion or {"kind": "cut_off"}
+        outcome = "concluded"
         elapsed = time.monotonic() - started
         print(
-            f"[orchestrator] episode {episode_id} → {len(result.proposals)} "
-            f"proposal(s) in {elapsed:.1f}s",
+            f"[orchestrator] episode {episode_id} → {conclusion.get('kind')} "
+            f"in {elapsed:.1f}s",
             flush=True,
         )
         return EpisodeResult(
             episode_id=episode_id,
             node_id=node_id,
-            proposals=tuple(result.proposals),
+            conclusion=conclusion,
             outcome=outcome,
             abstain_reason=result.abstain_reason,
             deliberation_telemetry=result.deliberation_telemetry,
             trace=result.trace,
             research_states=result.research_states,
-            research_operation=result.research_operation,
-            donor_experiment_ids=result.donor_experiment_ids,
         )
 
     def _run_lane(

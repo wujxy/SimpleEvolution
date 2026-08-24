@@ -200,6 +200,13 @@ class BaseSubmitter(ABC):
             "command_output_cap_chars": cfg.command_output_cap_chars,
             "eval_timeout_seconds": cfg.eval_timeout_seconds,
             "researcher": dict(cfg.researcher),
+            # The seat's claude assistant runs on the executor channel
+            # (consult/work), and the lease-level hand budgets.
+            "executor": dict(cfg.executor),
+            "lease_max_work_calls": getattr(
+                cfg, "lease_max_work_calls", None),
+            "lease_max_consult_calls": getattr(
+                cfg, "lease_max_consult_calls", None),
             "context": dict(cfg.context),
             "prompt_dir": str(cfg.prompt_dir) if cfg.prompt_dir else "",
         }

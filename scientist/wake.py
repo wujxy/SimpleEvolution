@@ -152,4 +152,16 @@ def build_wake_view(
         view["research_state_seed"] = seed
     else:
         view["world_transition"] = world_transition(queries, node)
+    # Adjudication write-back (科学家完整研究制 §2.4): a reopened seat reads
+    # what the gate rejected and why, at wake, from durable state — the
+    # previous_rejection pattern.  Absent on a first attempt.
+    adjudication = queries.lease_adjudication_for_episode(episode_id)
+    if adjudication is not None:
+        view["adjudication_feedback"] = adjudication
+        head = queries.research_state_head(episode_id)
+        if head is not None and head.conclusion:
+            delivered = (head.conclusion or {}).get("delivered_sha")
+            if delivered:
+                view["adjudication_feedback"]["delivered_world_sha"] = (
+                    delivered)
     return view

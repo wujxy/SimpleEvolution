@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from scientist.cli import _enrich_proposals, _proposal_to_dict, _result_to_dict
+from scientist.cli import _result_to_dict
 from scientist.research_agent import (
     WorkingState, _build_telemetry, _build_trace, _register_evidence,
 )
@@ -106,39 +106,54 @@ def test_research_skill_is_discoverable_and_loaded_on_demand(tmp_path):
     assert "The predecessor material is a memo" in result["content"]
 
 
-def test_register_research_state_assigns_host_identity(tmp_path):
+def test_update_research_state_assigns_head_identity(tmp_path):
     state = WorkingState()
     state.session_evidence.add("__source_examined__")
     result = _tools(tmp_path).execute(
         {
-            "action": "register_research_state",
+            "action": "update_research_state",
             "working_model": "Repeated work crosses the FCN boundary.",
             "evidence_refs": ["source:src/fcn.cc:FCN"],
+            "evidence": [{"claim": "c", "status": "belief"}],
+            "experiment_log": [{"intent": "i", "verdict": "worse"}],
         },
         deadline=time.monotonic() + 10,
         working_state=state,
     )
     assert result["ok"] is True
-    assert result["research_state_id"] == "rs-ep-1-001"
+    # One evolving head row per lease, stable id.
+    assert result["research_state_id"] == "rs-ep-1-head"
     assert state.research_states[result["research_state_id"]].node_id == "node-1"
+    assert state.research_states[result["research_state_id"]].evidence[0][
+        "status"] == "belief"
+
+    # The seat never awards itself verified status.
+    denied = _tools(tmp_path).execute(
+        {
+            "action": "update_research_state",
+            "working_model": "m",
+            "evidence": [{"claim": "c", "status": "verified"}],
+        },
+        deadline=time.monotonic() + 10,
+        working_state=state,
+    )
+    assert denied["ok"] is False
+    assert "graduation" in denied["error"]
 
 
-def test_registration_rejects_unknown_local_references(tmp_path):
+def test_registration_rejects_unseen_evidence_references(tmp_path):
     tools = _tools(tmp_path)
-    for field, value in (
-        ("derived_from_research_state_id", "rs-missing"),
-    ):
-        result = tools.execute(
-            {
-                "action": "register_research_state",
-                "working_model": "A concrete model.",
-                field: value,
-            },
-            deadline=time.monotonic() + 10,
-            working_state=WorkingState(),
-        )
-        assert result["ok"] is False
-        assert value in result["error"]
+    result = tools.execute(
+        {
+            "action": "update_research_state",
+            "working_model": "A concrete model.",
+            "evidence_refs": ["experiment:exp-unseen"],
+        },
+        deadline=time.monotonic() + 10,
+        working_state=WorkingState(),
+    )
+    assert result["ok"] is False
+    assert "unseen evidence reference" in result["error"]
 
 
 def test_registration_rejects_empty_working_model():
@@ -163,131 +178,100 @@ def _proposal_payload(research_state_id: str, instruction: str) -> dict:
     }
 
 
-def test_submit_proposal_requires_registered_research_state():
+def test_exit_without_registered_state_is_rejected_by_guard():
     state = WorkingState()
     action = parse_response(json.dumps({
-        "action": "submit_proposals",
-        "proposals": [_proposal_payload(
-            "rs-ep-1-999",
-            "Preserve event-level invariants across FCN calls.",
-        )],
-    }), proposal_slots=3)
-    assert (
-        _validate_action_guard(state, [action], Path("."))
-        == "unknown_research_state"
-    )
-
-
-def test_one_registered_state_can_submit_two_proposals(tmp_path):
-    state = WorkingState()
-    registered = _tools(tmp_path).execute(
-        {
-            "action": "register_research_state",
-            "working_model": "Repeated work crosses the FCN boundary.",
+        "action": "deliver_world",
+        "handover": {
+            "dead_ends": ["axis: spent, measured"],
+            "open_questions": ["bucket prefetch"],
+            "warning": "do not trust the flat profile",
         },
-        deadline=time.monotonic() + 10,
-        working_state=state,
-    )
-    state_id = registered["research_state_id"]
-    first = _proposal_payload(state_id, "Move ownership to the event boundary.")
-    second = _proposal_payload(state_id, "Cache the invariant at the call boundary.")
-    second["material_difference"] = "Tests caching rather than ownership."
-    action = parse_response(json.dumps({
-        "action": "submit_proposals",
-        "proposals": [first, second],
-    }), proposal_slots=3)
-    assert _validate_action_guard(state, [action], Path(".")) is None
-    assert [item.research_state_id for item in action["proposals"]] == [
-        state_id,
-        state_id,
-    ]
+    }), proposal_slots=1)
+    verdict = _validate_action_guard(state, [action], Path("."))
+    assert verdict is not None
+    assert verdict.startswith("exit_without_registered_state")
 
 
-def test_explore_and_synthesis_terminal_actions_are_distinct(tmp_path):
+def test_exit_with_registered_state_passes_guard(tmp_path):
     state = WorkingState()
-    state_id = _tools(tmp_path).execute(
-        {"action": "register_research_state", "working_model": "model"},
+    _tools(tmp_path).execute(
+        {"action": "update_research_state", "working_model": "model"},
         deadline=time.monotonic() + 10,
         working_state=state,
-    )["research_state_id"]
-    explore = parse_response(json.dumps({
-        "action": "submit_explorations",
-        "proposals": [_proposal_payload(state_id, "Try mechanism A.")],
-    }), proposal_slots=2)
-    assert explore["operation"] == "explore"
-    assert explore["action"] == "submit_proposals"
-
-    synthesis = parse_response(json.dumps({
-        "action": "submit_synthesis",
-        "proposal": _proposal_payload(state_id, "Port donor result."),
-        "donor_experiment_ids": ["exp-1"],
-    }), proposal_slots=2)
-    assert synthesis["operation"] == "synthesize"
-    assert synthesis["donor_experiment_ids"] == ("exp-1",)
-    assert _validate_action_guard(state, [synthesis], Path(".")) == "uninspected_donor"
-
-
-def test_synthesis_rejects_multiple_proposals():
-    with pytest.raises(ProposerError, match="proposal"):
-        parse_response(json.dumps({
-            "action": "submit_synthesis",
-            "proposals": [_proposal_payload("rs-1", "A")],
-            "donor_experiment_ids": ["exp-1"],
-        }), proposal_slots=2)
-
-
-def test_synthesis_metadata_reaches_proposal_artifact():
-    proposal = parse_response(json.dumps({
-        "action": "submit_synthesis",
-        "proposal": _proposal_payload("rs-1", "Port donor result."),
-        "donor_experiment_ids": ["exp-1"],
-    }), proposal_slots=1)["proposals"][0]
-
-    artifact = _enrich_proposals(
-        (proposal,), ["prop-1"],
-        research_operation="synthesize",
-        donor_experiment_ids=("exp-1",),
-    )[0]
-
-    assert artifact["research_operation"] == "synthesize"
-    assert artifact["donor_experiment_ids"] == ["exp-1"]
-
-
-def test_worker_result_serializes_research_records_and_proposal_linkage():
-    research_state = ResearchState(
-        research_state_id="rs-ep-1-001",
-        node_id="node-1",
-        episode_id="ep-1",
-        derived_from_research_state_id=None,
-        transformation_id="ct-ep-1-001",
-        working_model="Repeated work crosses the FCN boundary.",
-        evidence_refs=("source:src/fcn.cc:FCN",),
-        created_at=1.0,
     )
-    proposal = parse_response(json.dumps({
-        "action": "submit_proposals",
-        "proposals": [_proposal_payload(
-            research_state.research_state_id,
-            "Move ownership to the event boundary.",
-        )],
-    }), proposal_slots=1)["proposals"][0]
+    action = parse_response(json.dumps({
+        "action": "deliver_world",
+        "handover": {
+            "dead_ends": ["axis: spent, measured"],
+            "open_questions": ["bucket prefetch"],
+            "warning": "do not trust the flat profile",
+        },
+    }), proposal_slots=1)
+    assert _validate_action_guard(state, [action], Path(".")) is None
+
+
+def test_deliver_world_parses_and_enforces_handover_shape():
+    good = parse_response(json.dumps({
+        "action": "deliver_world",
+        "handover": {
+            "dead_ends": ["axis: spent, measured"],
+            "open_questions": ["bucket prefetch", "unused mechanism X @1.4x self-test"],
+            "warning": "the flat profile misleads",
+        },
+    }), proposal_slots=1)
+    assert good["action"] == "deliver_world"
+    assert good["handover"]["warning"] == "the flat profile misleads"
+
+    # Missing block -> protocol error.
+    with pytest.raises(ProposerError, match="open_questions"):
+        parse_response(json.dumps({
+            "action": "deliver_world",
+            "handover": {"dead_ends": ["a"], "warning": "w"},
+        }), proposal_slots=1)
+
+    # Over the hard cap -> mechanical rejection (rewrite or degrade).
+    padding = " ".join(f"w{i}" for i in range(700))
+    with pytest.raises(ProposerError, match="hard cap"):
+        parse_response(json.dumps({
+            "action": "deliver_world",
+            "handover": {
+                "dead_ends": [padding],
+                "open_questions": ["q"],
+                "warning": "w",
+            },
+        }), proposal_slots=1)
+
+    # Degraded delivery (after two rewrites) parses with the flag.
+    degraded = parse_response(json.dumps({
+        "action": "deliver_world",
+        "handover_compliant": False,
+        "handover": {
+            "dead_ends": [padding],
+            "open_questions": ["q"],
+            "warning": "w",
+        },
+    }), proposal_slots=1)
+    assert degraded["handover_compliant"] is False
+
+
+def test_worker_result_serializes_conclusion():
     result = type("Result", (), {
         "episode_id": "ep-1",
         "node_id": "node-1",
-        "outcome": "submit",
+        "outcome": "concluded",
+        "conclusion": {"kind": "deliver", "handover": {
+            "dead_ends": ["d"], "open_questions": ["q"], "warning": "w",
+        }},
         "abstain_reason": None,
-        "deliberation_telemetry": {},
-        "trace": {},
-        "research_states": (research_state,),
+        "deliberation_telemetry": {"tool_calls": 3},
+        "trace": {"rounds": []},
     })()
-    serialized = _result_to_dict(
-        result, [_proposal_to_dict(proposal, "prop-1")],
-    )
-    assert serialized["research_states"][0]["research_state_id"] == "rs-ep-1-001"
-    assert serialized["proposals"][0]["research_state_id"] == "rs-ep-1-001"
-    assert serialized["proposals"][0]["rationale"]["expectation"] == (
-        "FCN call-local time and total time both decrease."
-    )
+    serialized = _result_to_dict(result, world_sha="a" * 40)
+    assert serialized["conclusion"]["kind"] == "deliver"
+    assert serialized["conclusion"]["world_sha"] == "a" * 40
+    assert serialized["conclusion"]["episode_id"] == "ep-1"
+    assert serialized["outcome"] == "concluded"
 
 
 def test_cognitive_telemetry_and_trace_include_ids_not_working_model(tmp_path):
@@ -412,34 +396,28 @@ def test_research_state_can_cite_two_inspected_experiments(tmp_path):
     assert record.evidence_refs == ("experiment:exp-a", "experiment:exp-b")
 
 
-def test_abstain_without_registered_state_is_rejected():
-    """Empty-seat exit contract: an abstain must leave its memo behind."""
-    action = parse_response(
-        '{"action":"abstain","reason":"Nothing to ask here."}',
-        proposal_slots=1,
-    )
-    assert _validate_action_guard(
-        WorkingState(), [action], Path("."),
-    ) == (
-        "empty_seat_memo_missing: register your research "
-        "state first (what you checked along your lens's "
-        "axes and why they are all empty), then abstain — "
-        "an empty exit without a memo erases your seat's "
-        "investigation"
-    )
+def test_abstain_requires_axes_and_registered_state(tmp_path):
+    # Shape: axes_checked is required.
+    with pytest.raises(ProposerError, match="axes_checked"):
+        parse_response(json.dumps({
+            "action": "abstain", "reason": "no ore",
+        }), proposal_slots=1)
 
-
-def test_abstain_with_registered_state_passes(tmp_path):
+    # Guard: no state on file -> the generalized exit guard fires.
     state = WorkingState()
+    action = parse_response(json.dumps({
+        "action": "abstain", "reason": "no ore",
+        "axes_checked": ["cache axis: all layouts measured slower"],
+    }), proposal_slots=1)
+    verdict = _validate_action_guard(state, [action], Path("."))
+    assert verdict is not None
+    assert verdict.startswith("exit_without_registered_state")
+
+    # With a registered state the exit passes.
     _tools(tmp_path).execute(
-        {"action": "register_research_state", "working_model": "Lens axes "
-         "audited; all empty on this world."},
+        {"action": "update_research_state", "working_model": "empty memo"},
         deadline=time.monotonic() + 10,
         working_state=state,
-    )
-    action = parse_response(
-        '{"action":"abstain","reason":"All lens axes empty."}',
-        proposal_slots=1,
     )
     assert _validate_action_guard(state, [action], Path(".")) is None
 

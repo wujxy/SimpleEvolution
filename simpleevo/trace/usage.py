@@ -76,8 +76,11 @@ class UsageRecorder:
     def __init__(self, run_dir: Path):
         self.path = Path(run_dir) / "telemetry" / "usage.jsonl"
 
-    def record(self, role: str, usage: Any, *, work_id: str | None = None) -> None:
-        """Append one usage record; ``work_id`` attributes it to a lease.
+    def record(
+        self, role: str, usage: Any, *, work_id: str | None = None,
+        lease_id: str | None = None,
+    ) -> None:
+        """Append one usage record; ``work_id``/``lease_id`` attribute it.
 
         A record without ``work_id`` (all pre-complete-research records)
         is only run-attributable — lease-level budgets skip it, run-level
@@ -90,6 +93,8 @@ class UsageRecorder:
         record = {"role": role, "timestamp": time.time(), **tokens}
         if work_id:
             record["work_id"] = work_id
+        if lease_id:
+            record["lease_id"] = lease_id
         with self.path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record, ensure_ascii=False) + "\n")
             stream.flush()

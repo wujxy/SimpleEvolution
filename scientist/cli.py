@@ -14,9 +14,8 @@ from pathlib import Path
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.generator import load_generator_basis
 from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
-from simpleevo.research_state import research_state_to_dict
 
-from .assistant.git_worktree import GitWorkspaceProvider, WorkspaceSpec
+from .assistant.git_worktree import GitWorkspaceProvider
 
 from .memory.l2 import L2MemoryService
 from .wake import build_wake_view
@@ -81,80 +80,27 @@ def _write_l1_trace(
         print(f"[trace] proposer L1 write failed: {exc}", flush=True)
 
 
-def _result_to_dict(result, proposals_with_meta) -> dict:
+def _result_to_dict(result, *, world_sha: str | None = None) -> dict:
+    conclusion = dict(getattr(result, "conclusion", None) or {})
+    # The worker result carries the seat's conclusion; the delivery's
+    # world_sha is snapshotted HERE by the harness (the seat cannot choose
+    # a different SHA than its laboratory's current state).
+    if conclusion.get("kind") == "deliver":
+        conclusion["world_sha"] = world_sha
+        conclusion.setdefault("node_id", result.node_id)
+        conclusion.setdefault("episode_id", result.episode_id)
+    else:
+        conclusion.setdefault("node_id", result.node_id)
+        conclusion.setdefault("episode_id", result.episode_id)
     return {
         "episode_id": result.episode_id,
         "node_id": result.node_id,
         "outcome": result.outcome,
-        "proposals": proposals_with_meta,
-        "research_states": [
-            research_state_to_dict(item)
-            for item in getattr(result, "research_states", ())
-        ],
+        "conclusion": conclusion,
         "abstain_reason": result.abstain_reason,
         "telemetry": result.deliberation_telemetry,
         "trace": result.trace,
     }
-
-
-def _proposal_to_dict(
-    proposal,
-    proposal_id: str,
-    *,
-    research_operation: str | None = None,
-    donor_experiment_ids: tuple[str, ...] = (),
-) -> dict:
-    """Serialize a ResearchProposal and attach its L2 identity (proposal_id)."""
-    target: dict = {}
-    rt = proposal.research_target
-    if hasattr(rt, "finding_id"):
-        target = {"kind": "existing_finding", "finding_id": rt.finding_id}
-    else:
-        target = {
-            "kind": "new_finding",
-            "question": rt.question,
-            "mechanisms": list(rt.mechanisms),
-            "code_regions": list(rt.code_regions),
-        }
-    return {
-        "proposal_id": proposal_id,
-        "research_operation": research_operation,
-        "donor_experiment_ids": list(donor_experiment_ids),
-        "research_state_id": proposal.research_state_id,
-        "instruction": proposal.instruction,
-        "rationale": {
-            "research_target": target,
-            "expectation": proposal.expectation,
-            "material_difference": proposal.material_difference,
-        },
-        "expectations": [],
-        "falsifiers": [],
-        "evidence_refs": list(proposal.evidence_refs),
-    }
-
-
-def _enrich_proposals(
-    proposals: tuple,
-    proposal_ids: list[str],
-    *,
-    research_operation: str | None = None,
-    donor_experiment_ids: tuple[str, ...] = (),
-) -> list[dict]:
-    """Attach the Scheduler-issued proposal_ids to the proposals."""
-    if len(proposal_ids) < len(proposals):
-        raise ValueError(
-            f"reserved {len(proposal_ids)} proposal ids but produced "
-            f"{len(proposals)} proposals"
-        )
-    return [
-        _proposal_to_dict(
-            proposal,
-            proposal_id,
-            research_operation=research_operation,
-            donor_experiment_ids=donor_experiment_ids,
-        )
-        for proposal, proposal_id in zip(proposals, proposal_ids)
-    ]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -197,16 +143,23 @@ def main(argv: list[str] | None = None) -> int:
     seat = wake_view["seat"]
     research_state_seed = wake_view.get("research_state_seed") or {}
     world_transition = wake_view.get("world_transition") or {}
+    adjudication_feedback = wake_view.get("adjudication_feedback")
 
-    # Materialize the Node World at the exact node SHA (§9).  The Scientist
-    # must study its own world, not the repo's current checkout.  This mirrors
-    # the Executor's GitWorkspaceProvider but for read-only investigation.
+    # Materialize the lease's LABORATORY at the exact node SHA (§9): one
+    # persistent writable world for the whole lease.  The seat's own shell
+    # and every work() call share it; a reopen resumes it.  Unlike the old
+    # read-only proposer workspace, the lab is NEVER dropped here — the
+    # delivered side-chain SHAs live in the clone's object store precisely
+    # so the adjudication worker can evaluate them.
     provider = GitWorkspaceProvider(run_dir, repo_path)
     provider.initialize()
-    workspace = provider.create(WorkspaceSpec(
-        f"proposer-{episode_id}-{node_id[:8]}",
-        node_sha,
-    ))
+    from .assistant.lab import Laboratory
+
+    lab = Laboratory(
+        provider=provider, episode_id=episode_id, node_sha=node_sha,
+        editable_paths=tuple(editable),
+    )
+    workspace = lab.main()
 
     # Session handling: inherit the parent episode's final cognition only on
     # FIRST entry (no lived trajectory yet).  A crash-retry of the same episode
@@ -232,19 +185,62 @@ def main(argv: list[str] | None = None) -> int:
     from simpleevo.trace.usage import UsageRecorder
 
     usage_recorder = UsageRecorder(run_dir)
+    db_path = run_dir / "simpleevo.db"
+    lease_id = str(payload.get("allocation_id") or "")
+
+    # Guarantee the lease's research-state head row exists from the first
+    # breath: the generalized exit guard (≥1 state before ANY conclusion)
+    # then always has something on file, and a crash mid-attempt cannot
+    # evaporate the investigation.
+    from simpleevo.db.lease_writer import upsert_lease_research_state
+
+    if lease_id:
+        try:
+            upsert_lease_research_state(
+                db_path, lease_id=lease_id, episode_id=episode_id,
+                node_id=node_id,
+                working_model="(lease opened; no model registered yet)",
+            )
+        except Exception as exc:
+            print(f"[proposer] initial state upsert failed: {exc}",
+                  flush=True)
+
+    # The seat's claude assistant (consult/work) — the two hands.
+    from .assistant.hands import AssistantHands, HandTally
+
+    hands = AssistantHands(
+        run_dir=run_dir, db_path=db_path, lease_id=lease_id,
+        episode_id=episode_id, node_id=node_id, node_sha=node_sha,
+        lens=(seat or {}).get("lens_id"),
+        lab=lab, runtime_image=runtime_image,
+        executor_cfg=dict(payload.get("executor", {})),
+        editable_paths=tuple(editable),
+        read_only_binds=tuple(payload.get("read_only_binds", [])),
+        tally=HandTally(
+            max_consult_calls=payload.get("lease_max_consult_calls"),
+            max_work_calls=payload.get("lease_max_work_calls"),
+        ),
+        usage_observer=lambda usage, call_id: usage_recorder.record(
+            "assistant", usage, work_id=call_id),
+        attempt_id=attempt_id or None,
+    )
+
     orchestrator = ProposerOrchestrator(
         model=build_chat_model(researcher_cfg),
         runtime=runtime,
         timeout_seconds=int(payload.get("agent_timeout_seconds", 3600)),
         command_timeout_seconds=int(researcher_cfg.get("command_timeout_seconds", 120)),
         command_output_cap_chars=int(researcher_cfg.get("command_output_cap_chars", 12000)),
-        usage_observer=lambda usage: usage_recorder.record("proposer", usage),
+        usage_observer=lambda usage: usage_recorder.record(
+            "proposer", usage, work_id=attempt_id or None,
+            lease_id=lease_id or None),
         context_policy=ContextPolicy.from_config(payload.get("context")),
+        hands=hands,
     )
 
     status = "completed"
     error = None
-    proposals_with_meta: list[dict] = []
+    world_sha: str | None = None
     try:
         result = orchestrator.run_episode(
             episode_id=episode_id,
@@ -273,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
             lens=seat,
             proposal_slots=proposal_slots,
             scientist_steps=scientist_steps,
+            adjudication_feedback=adjudication_feedback,
         )
         if result.outcome == "error":
             # The orchestrator converts a research crash (API/network/protocol
@@ -282,12 +279,18 @@ def main(argv: list[str] | None = None) -> int:
             # as a clean "completed" abstention that would close the allocation.
             raise RuntimeError(
                 result.abstain_reason or "proposer episode errored")
-        proposals_with_meta = _enrich_proposals(
-            result.proposals,
-            proposal_ids,
-            research_operation=result.research_operation,
-            donor_experiment_ids=result.donor_experiment_ids,
-        )
+        if (result.conclusion or {}).get("kind") == "deliver":
+            # The delivery IS the laboratory's current state: the harness
+            # snapshots it mechanically at the moment of delivery.
+            world_sha = lab.snapshot("deliver")
+            if world_sha is None:
+                # No editable-path change since the node — an empty
+                # delivery is not a world.  Refuse like the scheduler
+                # would, with the reason.
+                raise RuntimeError(
+                    "deliver_world with an unchanged laboratory: the "
+                    "delivered world must differ from the purchased node"
+                )
     except Exception as exc:
         status = "failed"
         error = str(exc)
@@ -295,13 +298,13 @@ def main(argv: list[str] | None = None) -> int:
             "episode_id": episode_id,
             "node_id": node_id,
             "outcome": "error",
-            "proposals": (),
+            "conclusion": None,
             "abstain_reason": str(exc),
             "deliberation_telemetry": {},
             "trace": {},
         })()
-    finally:
-        provider.remove(workspace)
+    # NOTE: the lab worktree is deliberately NOT removed — it is the
+    # lease's persistent world; a reopen or adjudication resumes it.
 
     _write_l1_trace(
         run_dir,
@@ -330,7 +333,7 @@ def main(argv: list[str] | None = None) -> int:
             kind="proposer",
             request_id=manifest.get("request_id", episode_id),
             status=WorkerStatus.COMPLETED if status == "completed" else WorkerStatus.FAILED,
-            result=_result_to_dict(result, proposals_with_meta),
+            result=_result_to_dict(result, world_sha=world_sha),
             usage=(),
             error=error,
             execution=execution,

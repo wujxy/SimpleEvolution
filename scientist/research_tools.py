@@ -206,15 +206,58 @@ RESEARCH_TOOL_SPECS = (
         ),
     ),
     ResearchToolSpec(
-        action="register_research_state",
+        action="update_research_state",
         schema=(
-            '{"action":"register_research_state",'
+            '{"action":"update_research_state",'
             '"working_model":"your current scientific understanding",'
-            '"evidence_refs":[],"derived_from_research_state_id":null}'
+            '"evidence_refs":[],'
+            '"evidence":[{"claim":"...","how":"verified how",'
+            '"numbers":{},"source":"experiment:...|source:...|assistant:...",'
+            '"status":"belief"}],'
+            '"experiment_log":[{"intent":"...","sha":"...","numbers":{},'
+            '"verdict":"..."}],'
+            '"deliverables":[{"world_sha":"...","material_difference":"..."}],'
+            '"conclusion":{"type":"delivered|empty|cut_off",'
+            '"exhaustion":"...","open_questions":[...]}}'
         ),
         description=(
-            "Register one immutable working model. The Host assigns identity; "
-            "this records your judgment and does not promote it to fact."
+            "Upsert your lease's ONE evolving research state (six blocks). "
+            "It is written to the ledger immediately — a crash no longer "
+            "evaporates your investigation — and revision increments each "
+            "write. Evidence entries you author are belief; verified is "
+            "harness-awarded at graduation, never yours to claim. Register "
+            "after every work cycle, and before any conclusion."
+        ),
+    ),
+    ResearchToolSpec(
+        action="consult",
+        schema=(
+            '{"action":"consult","question":"...","context":"...",'
+            '"read":"none|node|lab"}'
+        ),
+        description=(
+            "Ask your assistant (问/辩/审). It can search the web and the "
+            "literature, read code fast, and argue back; it never touches "
+            "your world. read=node shows it the pristine world under study, "
+            "read=lab your work in progress, read=none nothing. The return "
+            "is a distilled BELIEF — adopting it is your judgment. For 辩 "
+            "state your hypothesis and demand refutation, not agreement."
+        ),
+    ),
+    ResearchToolSpec(
+        action="work",
+        schema=(
+            '{"action":"work","instruction":"...","mode":"continue|fresh",'
+            '"budget_minutes":30}'
+        ),
+        description=(
+            "Have your assistant do heavy lifting in your laboratory (做). "
+            "continue works in your main world (your edits and its edits "
+            "share it); fresh runs a throwaway side world. Brief it like a "
+            "capable junior: mechanism, files, constraints, what to "
+            "self-measure. The harness snapshots the world after each call; "
+            "you get a distillation and its self-measured numbers — your "
+            "own verification remains your responsibility."
         ),
     ),
 )
@@ -484,12 +527,20 @@ class ResearchTools:
         node_id: str | None = None,
         episode_id: str | None = None,
         inherited_research_states: dict[str, str] | None = None,
+        hands=None,
+        db_path: Path | None = None,
+        lease_id: str | None = None,
     ):
         self.memory = memory_service
         self.command_timeout_seconds = command_timeout_seconds
         self.node_id = node_id
         self.episode_id = episode_id
         self.inherited_research_states = inherited_research_states or {}
+        # The seat's claude assistant (consult/work) and the narrow write
+        # path for incremental state registration (科学家完整研究制 §2.2/2.3).
+        self.hands = hands
+        self.db_path = db_path
+        self.lease_id = lease_id
         self.files = ResearchFiles(
             work=workspace,
             repo=repo,
@@ -526,8 +577,37 @@ class ResearchTools:
                     "skill_id": action["skill_id"],
                     "content": load_research_skill(action["skill_id"]),
                 }
+            if name == "update_research_state":
+                return self._update_research_state(action, working_state)
             if name == "register_research_state":
-                return self._register_research_state(action, working_state)
+                # Legacy alias from the proposal era; same handler.
+                return self._update_research_state(action, working_state)
+            if name in {"consult", "work"}:
+                if self.hands is None:
+                    return {
+                        "ok": False,
+                        "error": "assistant hands not configured",
+                    }
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return {"ok": False, "error": "proposer deadline exceeded"}
+                if name == "consult":
+                    return {
+                        "ok": True,
+                        "result": self.hands.consult(
+                            action["question"],
+                            context=action.get("context", ""),
+                            read=action.get("read", "none"),
+                        ),
+                    }
+                return {
+                    "ok": True,
+                    "result": self.hands.work(
+                        action["instruction"],
+                        mode=action.get("mode", "continue"),
+                        budget_minutes=action.get("budget_minutes"),
+                    ),
+                }
             if name == "run_research_command":
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -630,17 +710,20 @@ class ResearchTools:
             raise ValueError("cognitive action requires node_id and episode_id")
         return working_state
 
-    def _register_research_state(
+    def _update_research_state(
         self, action: dict, working_state: WorkingState | None,
     ) -> dict:
+        """Upsert the lease's evolving six-block research state.
+
+        The write is incremental and immediate (lease_writer): a crash
+        mid-lease no longer evaporates the investigation, and every work
+        cycle's understanding is on file at the moment it forms.  The
+        in-session copy stays for the round's own guards and telemetry.
+        """
         state = self._require_cognitive_state(working_state)
-        derived_from = action.get("derived_from_research_state_id")
-        if derived_from:
-            local = state.research_states.get(derived_from)
-            if local is None and derived_from not in self.inherited_research_states:
-                raise ValueError(f"unknown research state: {derived_from}")
-            if local is not None and local.episode_id != self.episode_id:
-                raise ValueError(f"research state belongs to another episode: {derived_from}")
+        working_model = str(action.get("working_model") or "").strip()
+        if not working_model:
+            raise ValueError("working_model must be non-empty")
         evidence_refs = tuple(action.get("evidence_refs", ()))
         for evidence_ref in evidence_refs:
             if evidence_ref.startswith("source:"):
@@ -648,15 +731,68 @@ class ResearchTools:
                     raise ValueError("source evidence requires source inspection")
             elif evidence_ref not in state.session_evidence:
                 raise ValueError(f"unseen evidence reference: {evidence_ref}")
-        research_state_id = f"rs-{self.episode_id}-{len(state.research_states) + 1:03d}"
+        # Six-block payload.  evidence entries carry status belief|verified;
+        # verified is only ever set by the harness at graduation — a seat
+        # marking its own claim verified is a protocol violation.
+        evidence = _as_entry_list(action.get("evidence"))
+        for entry in evidence:
+            if entry.get("status", "belief") == "verified":
+                raise ValueError(
+                    "evidence.status=verified is harness-awarded at "
+                    "graduation; your own entries are belief"
+                )
+        experiment_log = _as_entry_list(action.get("experiment_log"))
+        deliverables = _as_entry_list(action.get("deliverables"))
+        conclusion = action.get("conclusion")
+        if conclusion is not None and not isinstance(conclusion, dict):
+            raise ValueError("conclusion must be an object")
+
+        research_state_id = f"rs-{self.episode_id}-head"
         record = ResearchState(
             research_state_id=research_state_id,
             node_id=self.node_id,
             episode_id=self.episode_id,
-            derived_from_research_state_id=derived_from,
-            working_model=action["working_model"],
+            derived_from_research_state_id=None,
+            working_model=working_model,
             evidence_refs=evidence_refs,
             created_at=time.time(),
+            evidence=tuple(evidence),
+            experiment_log=tuple(experiment_log),
+            deliverables=tuple(deliverables),
+            conclusion=conclusion,
+            lease_id=self.lease_id,
         )
         state.research_states[research_state_id] = record
+        if self.db_path is not None and self.lease_id:
+            from simpleevo.db.lease_writer import upsert_lease_research_state
+
+            revision = upsert_lease_research_state(
+                self.db_path,
+                lease_id=self.lease_id,
+                episode_id=self.episode_id,
+                node_id=self.node_id,
+                working_model=working_model,
+                evidence=evidence,
+                experiment_log=experiment_log,
+                deliverables=deliverables,
+                conclusion=conclusion,
+                evidence_refs=list(evidence_refs),
+            )
+            return {
+                "ok": True,
+                "research_state_id": research_state_id,
+                "revision": revision,
+            }
         return {"ok": True, "research_state_id": research_state_id}
+
+
+def _as_entry_list(value) -> list[dict]:
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("expected a list of entries")
+    out = []
+    for item in value:
+        if isinstance(item, dict):
+            out.append(item)
+    return out

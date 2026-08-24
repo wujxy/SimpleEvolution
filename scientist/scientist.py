@@ -51,7 +51,9 @@ from .research_tools import (
     ResearchTools,
     render_research_tool_prompt,
 )
-from .research_skills import render_research_skill_catalog
+from .research_skills import (
+    render_research_skill_catalog, render_startup_skills,
+)
 from .research_agent import (
     AgentError,
     ResearchAgent,
@@ -101,18 +103,22 @@ class ProposerResult:
 
 @dataclass(frozen=True)
 class ScientistRound:
-    """Internal: one Scientist round's outcome, mapped to LaneResult by the
-    orchestrator."""
+    """Internal: one Scientist round's outcome, mapped to the worker result
+    by the orchestrator.
 
-    proposals: list[ResearchProposal]
+    Complete research: the round ends in a lease conclusion — deliver
+    (handover; the world SHA is snapshotted by the harness at ingest) or
+    abstain — or the harness-forced cut_off (budget expiry, ``abstained``
+    stays True with a cut_off conclusion).
+    """
+
+    conclusion: dict | None = None
     abstained: bool = False
     abstain_reason: str | None = None
     usage: object = None
     deliberation_telemetry: dict = field(default_factory=dict)
     trace: dict = field(default_factory=dict)
     research_states: tuple[ResearchState, ...] = ()
-    research_operation: str | None = None
-    donor_experiment_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -181,14 +187,23 @@ class ReflectionResult:
 # Research / memory tools never terminate the loop.
 _RESEARCH_TOOL_ACTIONS = frozenset({
     "run_research_command", "read_file", "grep_files", "glob_files",
-    "write_scratch_file", "use_research_skill", "register_research_state",
+    "write_scratch_file", "use_research_skill", "update_research_state",
+    "consult", "work",
 } | MEMORY_TOOL_ACTIONS)
 
 # Terminal actions end the deliberation; they are always sent alone, never
 # inside an {"actions": [...]} batch.
 _TERMINAL_ACTIONS = frozenset({
-    "submit_proposals", "submit_self_decision", "submit_reflection_handoff",
+    "deliver_world", "abstain",
+    "submit_self_decision", "submit_reflection_handoff",
 })
+
+# Handover double cap (科学家完整研究制 §8.4): the prompt teaches ≤400;
+# the harness rejects beyond 600 — "写超了" is first a violation feeling,
+# and only past the hard cap a mechanical rejection.  The seat may deliver
+# degraded (handover_compliant=false) after its two bounded rewrites.
+_HANDOVER_SOFT_WORD_CAP = 400
+_HANDOVER_HARD_WORD_CAP = 600
 
 # Cap on actions per {"actions": [...]} batch envelope.
 _MAX_BATCH_ACTIONS = 8
@@ -419,6 +434,14 @@ _SKILL_BLOCK = (
     "with use_research_skill to read it):\n" + render_research_skill_catalog()
 )
 
+# claude_use loads in FULL at wake-up (always_load): the seat-assistant
+# relationship must be present before the first decision, not fetched
+# after the seat has already forgotten its assistant exists.
+_STARTUP_SKILLS_BLOCK = (
+    "Loaded skill (standing context — you carry this from the first "
+    "step):\n" + render_startup_skills()
+)
+
 _PROTOCOL_BLOCK = """Output protocol (immutable): every response is exactly one \
 JSON object, in one of two shapes. A single action object — its "action" field \
 names the action and the action's own fields sit alongside it, exactly as the \
@@ -431,8 +454,8 @@ A batch's actions run sequentially in one step and all their results return \
 together as one {"tool_results": [...]} message — reach for it when you have \
 several independent lookups (reads, greps, globs) so each costs no turn of \
 its own. A single action's result arrives in the same {"tool_results": [...]} \
-shape with one entry. submit_explorations, submit_synthesis, and abstain are \
-always sent ALONE as a single action object, never inside a batch.
+shape with one entry. deliver_world and abstain are always sent ALONE as a \
+single action object, never inside a batch.
 
 - "action" (required): one research tool call, OR one terminal action.
 - "message" (optional): natural text you choose to leave in your own research
@@ -440,59 +463,42 @@ always sent ALONE as a single action object, never inside a batch.
   NOT a substitute for acting; if you have nothing to add, omit it. It is
   communication that future-you will see, not a report you must file.
 
-A ResearchState is your revisable working model of the current world, not a
-Harness fact and not a form to complete. Register it when it is useful to make
-the understanding behind an experiment explicit — including when you exit
-empty: the memo is the record that your angle was actually investigated. Your
-proposal needs a reason it deserves an answer, not a proof; do not pad it
-with a second mechanism.
+A ResearchState is your lease's ONE evolving understanding, not a Harness
+fact and not a form to complete. update_research_state writes it to the
+ledger IMMEDIATELY — revise it after every work cycle and whenever your
+model materially changes, including on your way to an empty conclusion.
+Your research state must carry ≥1 revision before any exit: an exit with
+nothing on file is a protocol violation (the investigation evaporates).
 
-Terminal actions (choose exactly one research operation):
-- EXPLORE expands the tested mechanism space:
-  {"action":"submit_explorations","proposals":[
-    {"research_state_id":"rs-...","instruction":"...",
-     "expectation":"observable outcome expected from the experiment",
-     "research_target":{"mode":"existing","finding_id":"F-NNN"}
-                      | {"mode":"new","question":"...",
-                         "mechanisms":[...],"code_regions":[...]},
-     "evidence_refs":["source:src/foo.cc:FunctionName"],
-     "material_difference":"..."}]}
-  This carries YOUR proposal — the direction your lens found worth its cost.
-  State in the proposal (in material_difference or the instruction) how the
-  direction embodies your lens; your lens's 提交自检 is the bar it must clear.
-  An unverified but well-motivated direction is legitimate — finding out is
-  what the experiment is for. The proposal is an independent branch: it costs
-  exactly one evaluation, and a gate rejection becomes ledger evidence, not
-  damage. A direct port of an already validated implementation is not
-  EXPLORE — that is SYNTHESIZE's job, not your lens's.
+Terminal actions (exactly one concludes the lease):
+- DELIVER your world — the one world your seat built and self-verified:
+  {"action":"deliver_world","handover":{
+    "dead_ends":["axis tried, evidence it is spent"],
+    "open_questions":["what remains open — including mechanisms you built
+      but did NOT deliver, with their self-tested numbers, so a successor
+      or a re-purchase can fetch them"],
+    "warning":"your strongest signed warning to a successor with a
+      different lens"}}
+  The delivered world is your laboratory's current state — the harness
+  snapshots it mechanically; you do not (and cannot) choose a different
+  SHA. Self-verify BEFORE delivering: the harness re-measures everything,
+  but a world that fails your own verification is a wasted adjudication.
+  The handover is the ONLY thing a successor receives from you: ≤400 words,
+  written to a successor wearing a DIFFERENT lens — a map of spent ground
+  and open doors, not your worldview (they can pull the full record when
+  they want it). Delivery is singular: one seat, one world, one handover.
+  You may try many mechanisms inside the lease; the un-delivered ones go
+  into open_questions and your experiment_log, not into extra deliveries.
 
-- SYNTHESIZE brings inspected, validated branch results into this world:
-  {"action":"submit_synthesis","proposal":
-    {"research_state_id":"rs-...","instruction":"...",
-     "expectation":"...","research_target":{...},
-     "evidence_refs":["experiment:..."],
-     "material_difference":"..."},
-   "donor_experiment_ids":["exp-..."]}
-  Your proposal names every donor Experiment the combination rests on.
-  Necessary glue and compatibility adaptation are allowed; an unrelated new
-  optimization mechanism is not. If the donors are not compatible, abstain
-  rather than forcing a combination.
+- ABSTAIN — the empty-seat exit, when your lens provably has no ore here:
+  {"action":"abstain","reason":"...","axes_checked":["axis: why empty"]}
+  Requires your research state on file first — the memo naming what you
+  checked along your lens's axes and why they are all empty. An abstain
+  with no registered state is a protocol violation.
 
-- {"action":"abstain","reason":"...","blocking_unknown":"...optional..."}
-  The empty-seat exit: your angle provably has nothing here. It requires a
-  registered ResearchState first — register the memo naming what you checked
-  along your lens's axes and why they are all empty, then abstain. An
-  abstain with no registered state is a protocol violation: the
-  investigation evaporates and the program learns nothing from your seat.
-
-You are one seat in a research program spanning many worlds; the branch that
-grows from your proposal carries your school's view forward. Proposal
-instructions state WHAT to try and WHY it may move the goal; the executor
-reads the real code and decides the concrete implementation. evidence_refs
-and material_difference are optional; research_state_id and expectation are
-required for your Proposal. expectation is your honest pre-registered
-prior — a quantitative prediction when you have grounds for one, otherwise
-the discriminating question the experiment would answer.
+If the budget runs out before you conclude, the harness concludes the
+lease as cut_off — whatever is on file survives, but the conclusion is not
+yours. Concluding well is part of the work.
 """
 
 _RUNTIME_BOUNDARIES = """Runtime boundaries:
@@ -1052,6 +1058,7 @@ def _build_system_prompt(
         _seat_identity_block(lens, node_id),
         charter.rstrip(),
         world,
+        _STARTUP_SKILLS_BLOCK,
         _TOOL_BLOCK,
         _SKILL_BLOCK,
         _PROTOCOL_BLOCK,
@@ -1718,7 +1725,10 @@ def _dispatch(action: dict, proposal_slots: int) -> dict:
             {"action", "working_model"},
             {
                 "evidence_refs",
-                "derived_from_research_state_id",
+                "evidence",
+                "experiment_log",
+                "deliverables",
+                "conclusion",
             },
         )
         working_model = action["working_model"]
@@ -1734,17 +1744,71 @@ def _dispatch(action: dict, proposal_slots: int) -> dict:
             "working_model": working_model.strip(),
             "evidence_refs": evidence_refs,
         }
-        for key in ("derived_from_research_state_id",):
+        for key in ("evidence", "experiment_log", "deliverables"):
             value = action.get(key)
             if value is not None:
-                if not isinstance(value, str) or not value.strip():
-                    raise ProposerError(f"{key} must be a non-empty string")
-                parsed[key] = value.strip()
+                if not isinstance(value, list):
+                    raise ProposerError(f"{key} must be a list of entries")
+                parsed[key] = value
+        conclusion = action.get("conclusion")
+        if conclusion is not None:
+            if not isinstance(conclusion, dict):
+                raise ProposerError("conclusion must be an object")
+            parsed["conclusion"] = conclusion
         return parsed
 
-    # --- terminal action ---
+    # --- terminal actions (complete research: deliver / abstain) ---
+    if name == "deliver_world":
+        _require_keys(
+            action, {"action", "handover"}, {"handover_compliant"},
+        )
+        handover = action["handover"]
+        if not isinstance(handover, dict):
+            raise ProposerError("handover must be an object")
+        for key in ("dead_ends", "open_questions"):
+            value = handover.get(key)
+            if not isinstance(value, list) or not all(
+                isinstance(item, str) and item.strip() for item in value
+            ) or not value:
+                raise ProposerError(
+                    f"handover.{key} must be a non-empty list of strings"
+                )
+        warning = handover.get("warning")
+        if not isinstance(warning, str) or not warning.strip():
+            raise ProposerError("handover.warning must be non-empty")
+        words = sum(
+            len(str(item).split())
+            for item in (
+                handover["dead_ends"] + handover["open_questions"]
+                + [warning],
+            )
+        )
+        if words > _HANDOVER_HARD_WORD_CAP and action.get(
+                "handover_compliant") is not False:
+            raise ProposerError(
+                f"handover exceeds the hard cap of {_HANDOVER_HARD_WORD_CAP} "
+                f"words (got {words}): rewrite it as a map, not a memoir — "
+                "or, if you have already retried twice, deliver with "
+                "\"handover_compliant\": false to deliver degraded"
+            )
+        out = {
+            "action": "deliver_world",
+            "handover": {
+                "dead_ends": [s.strip() for s in handover["dead_ends"]],
+                "open_questions": [
+                    s.strip() for s in handover["open_questions"]
+                ],
+                "warning": warning.strip(),
+            },
+        }
+        if action.get("handover_compliant") is False:
+            out["handover_compliant"] = False
+        return out
+
     if name == "abstain":
-        _require_keys(action, {"action", "reason"}, {"blocking_unknown"})
+        _require_keys(
+            action, {"action", "reason"}, {"blocking_unknown", "axes_checked"},
+        )
         reason = action["reason"]
         if not isinstance(reason, str) or not reason.strip():
             raise ProposerError("abstain.reason must be non-empty")
@@ -1755,47 +1819,19 @@ def _dispatch(action: dict, proposal_slots: int) -> dict:
             raise ProposerError(
                 "abstain.blocking_unknown must be non-empty when present"
             )
+        axes = action.get("axes_checked")
+        if not isinstance(axes, list) or not axes:
+            raise ProposerError(
+                "abstain requires axes_checked: name each lens axis you "
+                "verified empty and why"
+            )
         return {
-            "action": "submit_proposals",
-            "operation": None,
-            "proposals": [],
+            "action": "abstain",
             "abstain_reason": reason.strip(),
+            "axes_checked": [str(a).strip() for a in axes],
             "blocking_unknown": (
                 blocking.strip() if isinstance(blocking, str) else None
             ),
-        }
-
-    if name == "submit_synthesis":
-        _require_keys(action, {"action", "proposal", "donor_experiment_ids"})
-        donors = tuple(_require_string_list(
-            action["donor_experiment_ids"], name="donor_experiment_ids",
-            allow_empty=False,
-        ))
-        return {
-            "action": "submit_proposals",
-            "operation": "synthesize",
-            "proposals": [_parse_proposal(action["proposal"])],
-            "donor_experiment_ids": donors,
-        }
-
-    if name in {"submit_proposals", "submit_explorations"}:
-        _require_keys(action, {"action", "proposals"})
-        proposals = action["proposals"]
-        if not isinstance(proposals, list):
-            raise ProposerError("proposals must be a list")
-        if len(proposals) > proposal_slots:
-            raise ProposerError(
-                f"at most {proposal_slots} proposal(s) allowed; "
-                f"got {len(proposals)}"
-            )
-        if name == "submit_explorations" and not proposals:
-            raise ProposerError("submit_explorations requires a proposal")
-        # submit_proposals keeps its historical empty-list abstention.
-        parsed = [_parse_proposal(item) for item in proposals]
-        return {
-            "action": "submit_proposals",
-            "operation": "explore" if name == "submit_explorations" else None,
-            "proposals": parsed,
         }
 
     # --- terminal action: self-review decision (RSI S3c) ---
@@ -2037,29 +2073,18 @@ def _validate_action_guard(
     with the pipeline."""
     previous = state.last_tool_fingerprint
     for action in actions:
-        if action["action"] == "submit_proposals":
-            state_ids = {
-                proposal.research_state_id for proposal in action["proposals"]
-            }
-            if not state_ids.issubset(state.research_states):
-                return "unknown_research_state"
-            state.counts["proposed_research_states"] = len(state_ids)
-            if not action["proposals"] and action.get("operation") is None:
-                # Empty-seat exit contract (seat design §7.6): an abstain
-                # must first register its memo — the investigation does not
-                # evaporate.  The scheduler re-checks this on ingest.
-                if not state.research_states:
-                    return (
-                        "empty_seat_memo_missing: register your research "
-                        "state first (what you checked along your lens's "
-                        "axes and why they are all empty), then abstain — "
-                        "an empty exit without a memo erases your seat's "
-                        "investigation"
-                    )
-            if action.get("operation") == "synthesize":
-                donors = set(action["donor_experiment_ids"])
-                if not donors.issubset(state.inspected_experiment_ids):
-                    return "uninspected_donor"
+        if action["action"] in {"deliver_world", "abstain"}:
+            # Generalized exit contract (科学家完整研究制 §2.3): EVERY exit
+            # requires the lease's research state on file — the v5
+            # evaporative-exit guard, promoted from the abstain corner to
+            # all three exits.  The scheduler re-checks on ingest.
+            if not state.research_states:
+                return (
+                    "exit_without_registered_state: update_research_state "
+                    "first (your working model, evidence, experiment log), "
+                    "then conclude — an exit with nothing on file erases "
+                    "your seat's investigation"
+                )
         if action["action"] not in _RESEARCH_TOOL_ACTIONS:
             continue
         fingerprint = _fingerprint(action)
@@ -2165,6 +2190,10 @@ class ScientistAgent(ResearchAgent):
         lens: dict | None = None,
         node_id: str | None = None,
         episode_id: str | None = None,
+        hands=None,
+        db_path=None,
+        lease_id: str | None = None,
+        adjudication_feedback: dict | None = None,
     ) -> ScientistRound:
         """Run one round of this seat's research, persisting its lived
         trajectory and notebook into ``session`` as it goes.
@@ -2287,6 +2316,27 @@ class ScientistAgent(ResearchAgent):
         # task-specific; the agentic step-loop below is mode-agnostic and shared
         # with self_review() via _deliberate. tools_factory / make_result carry
         # the task-specific construction (workspace-bound tools; ScientistRound).
+        if adjudication_feedback:
+            gate = adjudication_feedback.get("gate") or {}
+            failures = "; ".join(
+                f"{name}: {row.get('detail') or ('pass' if row.get('passed') else 'FAIL')}"
+                for name, row in gate.items()
+                if not row.get("passed")
+            ) or "unknown gate failure"
+            feedback_msg = (
+                "ADJUDICATION WRITE-BACK — your lease was reopened: the "
+                "world you delivered was gate-rejected by the harness.\n"
+                f"Rejected gates: {failures}\n"
+                "Your laboratory and research state survived — fix the "
+                "world and deliver again, or switch to a mechanism from "
+                "your experiment_log that you judge more promising. The "
+                "reopen budget is finite; judge what deserves it."
+            )
+            messages.append({"role": "user", "content": feedback_msg})
+            session.append_message(
+                "user", feedback_msg, round_id=current_round,
+            )
+
         def tools_factory(scratch, home):
             return ResearchTools(
                 runtime=self.runtime,
@@ -2303,44 +2353,60 @@ class ScientistAgent(ResearchAgent):
                 node_id=resolved_node_id,
                 episode_id=resolved_episode_id,
                 inherited_research_states=inherited_research_states,
+                hands=hands,
+                db_path=db_path,
+                lease_id=lease_id,
             )
 
         def make_result(action, state, usages, step, outcome):
-            if outcome == "submit":
-                proposals = action["proposals"]
-                abstained = len(proposals) == 0
+            if outcome == "submit" and action is not None:
+                name = action.get("action")
+                if name == "deliver_world":
+                    conclusion = {
+                        "kind": "deliver",
+                        "handover": action["handover"],
+                    }
+                    if action.get("handover_compliant") is False:
+                        conclusion["handover_compliant"] = False
+                    return ScientistRound(
+                        conclusion=conclusion,
+                        usage=usages,
+                        deliberation_telemetry=_build_telemetry(
+                            state, steps=step, outcome="deliver"),
+                        trace=_build_trace(
+                            state, round_id=current_round,
+                            outcome="deliver"),
+                        research_states=tuple(
+                            state.research_states.values()),
+                    )
+                # abstain terminal
                 return ScientistRound(
-                    proposals=proposals,
-                    research_operation=action.get("operation"),
-                    donor_experiment_ids=tuple(
-                        action.get("donor_experiment_ids", ())
-                    ),
-                    abstained=abstained,
-                    abstain_reason=(
-                        action.get("abstain_reason")
-                        or "submitted no directions this round"
-                        if abstained else None
-                    ),
+                    conclusion={
+                        "kind": "abstain",
+                        "reason": action.get("abstain_reason"),
+                        "axes_checked": action.get("axes_checked", []),
+                    },
+                    abstained=True,
+                    abstain_reason=action.get("abstain_reason"),
                     usage=usages,
                     deliberation_telemetry=_build_telemetry(
-                        state, steps=step, outcome="submit"),
+                        state, steps=step, outcome="abstain"),
                     trace=_build_trace(
-                        state, round_id=current_round, outcome="submit"),
+                        state, round_id=current_round, outcome="abstain"),
                     research_states=tuple(state.research_states.values()),
                 )
-            abstain_reason = (
-                "research budget exhausted before the Scientist submitted "
-                "directions"
-            )
+            # Budget expiry: the harness concludes cut_off — whatever is on
+            # file survives, but the conclusion is not the seat's own.
             return ScientistRound(
-                proposals=[],
+                conclusion={"kind": "cut_off",
+                            "reason": "lease budget exhausted"},
                 abstained=True,
-                abstain_reason=abstain_reason,
+                abstain_reason="lease budget exhausted before a conclusion",
                 usage=usages,
                 deliberation_telemetry=_build_telemetry(
-                    state, steps=step, outcome="abstain"),
+                    state, steps=step, outcome="cut_off"),
                 trace=_build_trace(
-                    state, round_id=current_round, outcome="abstain"),
+                    state, round_id=current_round, outcome="cut_off"),
                 research_states=tuple(state.research_states.values()),
             )
 
@@ -2352,7 +2418,7 @@ class ScientistAgent(ResearchAgent):
             max_steps=max_steps,
             source_root=source_path,
             tools_factory=tools_factory,
-            terminal_name="submit_proposals",
+            terminal_name=("deliver_world", "abstain"),
             budget_nudge=_BUDGET_NUDGE,
             capture_expectations=True,
             make_result=make_result,
