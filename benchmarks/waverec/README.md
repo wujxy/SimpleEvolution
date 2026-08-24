@@ -43,7 +43,27 @@ baselines/
   threshold_integrator.py    COTI-like reference reconstructor
 data/                        frozen datasets (see MANIFEST)
 runs/                        baseline outputs + scores (not truth)
+figures/                     explanatory figures (see below)
+blind_task/                  self-contained task package given to agents (see below)
+blind_truth/                 PRIVATE: held-out test truth + meta + reference scores
 ```
+
+## Figures
+
+`python3 scripts/make_figures.py` regenerates three views of the forward
+model (drawn from `wavegen` itself, so they always match the generator):
+
+- `fig1_spe_and_pulse.png` — the single photoelectron: sampled SPE charge
+  spectrum vs its analytic model (Gaussian core + exponential tail), and the
+  fixed log-normal pulse shape (7 mV peak, ~12 ns FWHM, vs the 0.35 mV noise
+  floor).
+- `fig2_forward_model.png` — one event, step by step: true hit times →
+  individual pulse copies → their sum (pile-up appears here) → the digitized,
+  polarity-flipped, noisy waveform the solver actually sees.
+- `fig3_pileup.png` — three real nominal-dataset events (well separated /
+  moderate / severe pile-up) with true hit times and the baseline
+  reconstructor's output overlaid; red markers are true PEs the threshold
+  integrator loses to pile-up.
 
 ## Datasets (v1)
 
@@ -105,6 +125,65 @@ window and are counted once (visible as the +0.34 charge bias on the
 nominal set: matched "pulses" are often 2-pe merges). A better solver
 separates pile-up (deconvolution / template fit / ML) — that is the headroom
 this benchmark measures.
+
+## Blind task package (`blind_task/`)
+
+The self-contained package a solver/agent under test receives — and nothing
+else. Design principle: give the physical meaning of the data and the
+reconstruction goal, then leave the method fully open (thresholding,
+deconvolution, template fits, ML, literature — anything). The forward model,
+its parameters, and the baseline are deliberately **withheld**; characterizing
+the detector response from the data is part of the task.
+
+```
+blind_task/
+  TASK.md                    one page: physics, goal, format, scoring, rules
+  data/waverec_train.npz     400 events, truth visible (seeds 20260901)
+  data/waverec_val.npz       100 events, truth visible (seed 20260902)
+  data/waverec_test.npz      300 events, adc only — meta & truth stripped (seed 20260903)
+  evaluate.py                standalone scorer (numpy only)
+```
+
+Note the npz `meta` key (which embeds the full generator config) is stripped
+from all three files; test truth lives only in `../blind_truth/`, which is
+**not** part of the package. Score submissions against the private copy:
+
+```bash
+python3 blind_task/evaluate.py \
+    --data blind_truth/waverec_test_full.npz --pred prediction.npz
+```
+
+Ranking: efficiency subject to purity ≥ 0.98, then time RMSE, then charge
+relative RMSE. Reference to beat (threshold integrator on the blind test
+set): efficiency 0.671, purity 0.999, time RMSE 1.25 ns, charge bias +0.31
+(`blind_truth/baseline_test_score.json`).
+
+## What is simplified relative to JUNO ElecSimV3
+
+The generator reproduces the **single-channel forward physics** — SPE spectrum →
+fixed pulse shape → linear superposition → FADC digitization — with defaults
+taken from ElecSimV3. JUNOSW's electronics simulation, however, is a
+trigger-driven full-detector system; the following are deliberately absent:
+
+| JUNOSW ElecSimV3 | wavegen |
+|---|---|
+| input = optical-sim `SimPMTHit` (nPE, hit time, incidence angle θ, TOF) | truth given directly as (t_j, a_j) |
+| per-PE charge: measured per-PMT SPE histogram / MCP gamma model / parameterized model with θ-dependent exponential-tail fraction (`PulseGen_NNVT::calculateAmplitude`) | one parameterized spectrum, fixed tail fraction |
+| per-PMT gain / TTS / time-offset calibration from DB (`get_gain(pmtid)` …) | single channel, per-event gain spread only |
+| dark noise: per-PMT DCR from DB, Poisson-sampled (`generateDarkPulse`) | `dark_rate_hz` hook, default 0 |
+| after-pulses per PE (MCP AP model, `generateAfterPulses`) | absent |
+| measured waveform-template library per run/PMT (120 samples each) | analytic log-normal fitted to those templates |
+| **trigger chain**: sliding over-threshold on FADC samples (4 consecutive) → per-PMT TQ → global trigger defines the readout window; event mixing folds several physics events into one window (`TriggerSimAlg`, `EvtMixingSvc`) | none: fixed 1000 ns window, unconditional readout; pile-up controlled directly by mean_pe |
+| dual-gain FADC (auto high/low switch), overvoltage clamp, sliding FPGA baseline, overshoot tail | single range, clip, fixed baseline |
+| white or frequency-dependent per-PMT noise (FFT) | white Gaussian |
+| SPMT CATIROC / TT digitization boards | one generic chain |
+
+Consequence: the statistics of a single waveform are JUNO-like (same
+parameter provenance), but the *organization* of the readout (trigger-defined
+events) and most detector imperfections are not simulated. The dropped effects
+are also the natural difficulty tiers if the benchmark is hardened later:
+TTS + dark noise (config-only, `tts_sigma_ns` / `dark_rate_hz`) → after-pulses
+→ correlated noise / dual gain (needs synthesizer work).
 
 ## Provenance notes
 

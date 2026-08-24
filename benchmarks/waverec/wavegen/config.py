@@ -22,8 +22,10 @@ class SPEParams:
     """Single-photoelectron charge spectrum (in pe units).
 
     The physical model: a PE avalanche has a Gaussian gain fluctuation with
-    probability (1 - p_tail), and an exponential low-charge tail (unfocused
-    photoelectrons / pre-pulses) with probability p_tail.
+    probability (1 - p_tail), and an exponential high-charge tail
+    (pre-pulses / late avalanches) with probability p_tail. Note the tail is
+    sampled as Exponential(scale=tail_decay) — i.e. tail_decay acts as the
+    mean (2.2 pe), so tail PEs are on average *larger* than core PEs.
 
     Defaults follow the NNVT MCP PMT model in ElecSimV3 PulseGen_NNVT
     (exp decay 2.2, cutoff 0.1) but scaled to a narrow, generic spectrum.
