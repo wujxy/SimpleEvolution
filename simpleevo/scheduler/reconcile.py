@@ -95,10 +95,18 @@ class Reconciler:
     def _reconcile_proposers(self) -> list[ReconcileAction]:
         actions: list[ReconcileAction] = []
         with self.store.transaction() as tx:
+            # A lease parked in awaiting_adjudication has no running
+            # proposer attempt by design — its adjudication experiment is
+            # the live work.  Offering it here would re-launch the
+            # scientist mid-adjudication (the exact double-resubmit the
+            # lease state machine exists to prevent).  Reopen-state leases
+            # stay eligible: that is the crash-recovery path for "the
+            # write-back transition committed but the resubmit never ran".
             rows = tx._conn.execute(
                 """
                 SELECT allocation_id FROM proposer_allocations
                 WHERE finished_at IS NULL
+                  AND COALESCE(state, 'researching') != 'awaiting_adjudication'
                 """
             ).fetchall()
             for row in rows:

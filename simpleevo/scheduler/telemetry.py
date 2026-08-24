@@ -147,6 +147,27 @@ def spend_usd(run_dir: Path, pricing: dict) -> float:
     Shared by the driver (cap policy) and the growth gate's budget view so
     both compute the same number from the same token ledger.
     """
+    return _sum_usage(run_dir, pricing, work_ids=None)
+
+
+def lease_spend_usd(
+    run_dir: Path, pricing: dict, allocation_id: str,
+    attempt_ids: list[str] | None = None,
+) -> float:
+    """Spend attributed to one lease, via the records' ``work_id``.
+
+    ``attempt_ids`` (all proposer attempts under the allocation) lets the
+    caller pass the join explicitly; records without a matching
+    ``work_id`` are simply not lease-attributable.
+    """
+    if attempt_ids is None:
+        return _sum_usage(run_dir, pricing, work_ids={allocation_id})
+    return _sum_usage(run_dir, pricing, work_ids=set(attempt_ids))
+
+
+def _sum_usage(
+    run_dir: Path, pricing: dict, *, work_ids: set[str] | None,
+) -> float:
     path = Path(run_dir) / "telemetry" / "usage.jsonl"
     if not path.exists():
         return 0.0
@@ -164,6 +185,9 @@ def spend_usd(run_dir: Path, pricing: dict) -> float:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if work_ids is not None:
+            if record.get("work_id") not in work_ids:
+                continue
         total += (
             int(record.get("input_tokens", 0)) * input_p
             + int(record.get("output_tokens", 0)) * output_p

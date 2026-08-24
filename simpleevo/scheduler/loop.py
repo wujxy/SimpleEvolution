@@ -30,7 +30,7 @@ from .frontier import (
 )
 from .queue import ExecutorQueue, QueueConfig
 from .reconcile import Reconciler
-from .telemetry import TelemetryRecorder, spend_usd
+from .telemetry import TelemetryRecorder, lease_spend_usd, spend_usd
 
 
 @dataclass(frozen=True)
@@ -49,6 +49,18 @@ class SchedulerConfig:
     # installed limit emits a durable ``budget_changed`` event.
     max_terminal_evals: int | None = None
     budget_usd: float | None = None
+    # Complete-research lease policy (科学家完整研究制 §2.3/2.4): a gate
+    # rejection reopens the author's lease at most this many times before
+    # the lease concludes rejected; the handover hard cap is enforced at
+    # delivery ingest (the worker's protocol-repair rounds are the soft
+    # layer); lease budgets are enforced at the reopen decision point; and
+    # an adjudication experiment that keeps infra-failing must not block
+    # quiescence forever.
+    max_lease_reopens: int = 2
+    handover_word_cap: int = 600
+    lease_wall_budget_seconds: float | None = None
+    lease_budget_usd: float | None = None
+    max_adjudication_attempts: int = 3
 
 
 # Scientific terminal outcomes produced by the experiment worker.  These are
@@ -221,6 +233,12 @@ class Scheduler:
         ingested = self._poll_experiments()
         self._resolve_integration_outcomes()
 
+        # 6b. Launch seats whose leases were reopened by adjudication
+        # write-back.  End-of-step single point: it covers reopens from
+        # both the reconcile-ingest path and the experiment poll, and the
+        # durable cap gates it (a capped run parks its reopens).
+        self._submit_pending_reopens()
+
         # 7. Record telemetry.
         self._telemetry.record(
             step=self._step_count,
@@ -318,7 +336,16 @@ class Scheduler:
     # ------------------------------------------------------------------
 
     def _proposer_capacity(self) -> int:
-        return self.config.max_proposer_inflight - self.store.count_running_attempts("proposer")
+        # Durable lease-state accounting, not attempt counting: a lease
+        # parked in awaiting_adjudication has no running proposer attempt
+        # but its seat is not free (the adjudication experiment is the live
+        # work); an infra-failed researching seat still holds its seat.
+        # The supervisor facts read the same query — capacity and facts
+        # must not fork (the burned_lenses precedent).
+        return (
+            self.config.max_proposer_inflight
+            - self._queries.researching_open_allocation_count()
+        )
 
     def _allocate_proposers(self, frontier):
         """Create proposer leases from the Supervisor growth gate, or from
@@ -1193,14 +1220,14 @@ class Scheduler:
     # ------------------------------------------------------------------
 
     def _poll_proposers(self) -> list[str]:
-        """Poll result files for running proposer attempts and publish proposals."""
+        """Poll result files for running proposer attempts and ingest conclusions."""
         published: list[str] = []
         for attempt in self.store.running_attempts("proposer"):
             allocation_id = attempt.logical_work_id
             result_path = self.run_dir / "proposer_allocations" / allocation_id / "result.json"
             if not result_path.exists():
                 continue
-            if self._ingest_proposer_result(allocation_id, result_path):
+            if self._ingest_seat_conclusion(allocation_id, result_path):
                 published.append(allocation_id)
         return published
 
@@ -1216,16 +1243,20 @@ class Scheduler:
                 ingested.append(experiment_id)
         return ingested
 
-    def _ingest_proposer_result(
+    def _ingest_seat_conclusion(
         self,
         allocation_id: str,
         result_path: Path,
     ) -> bool:
-        """Publish proposals from a completed proposer result file.
+        """Ingest a seat's terminal conclusion from its result file.
 
-        Returns True when the result was a scientific completion (proposals
-        published or an abstention); an infra failure keeps the allocation
-        open for retry and returns False.
+        The complete-research contract (科学家完整研究制 §2.3): a lease ends
+        in exactly one of three conclusions — deliver (one world SHA +
+        handover, adjudicated by an eval-only experiment), abstain (empty
+        memo), cut_off (budget) — and every exit requires a registered
+        research state (enforced inside the store's ingest).  Returns True
+        for a scientific completion; an invalid conclusion gets one
+        correction round-trip and returns False like an infra failure.
         """
         try:
             raw = json.loads(result_path.read_text(encoding="utf-8"))
@@ -1245,65 +1276,104 @@ class Scheduler:
             return False
 
         result = raw.get("result", {})
-        node_id = result.get("node_id")
-        episode_id = result.get("episode_id")
-        research_states = result.get("research_states", [])
-        proposals = result.get("proposals", [])
-        allocation = self.store.get_allocation(allocation_id)
-        reserved = allocation.reserved_proposal_ids if allocation else ()
+        conclusion = result.get("conclusion")
+        if not isinstance(conclusion, dict):
+            conclusion = None
         try:
-            if allocation is None:
-                raise ValueError(f"unknown proposer allocation: {allocation_id}")
-            if node_id != allocation.node_id or episode_id != allocation.episode_id:
-                raise ValueError("proposer result belongs to another node or episode")
-            if not proposals and not research_states:
-                # Empty-seat exit contract (seat design §7.6): an abstain
-                # must leave its memo behind — at least one registered
-                # research_state — or the whole investigation evaporates
-                # (v5 study-3: 37 steps, zero states, hallucinated stop).
-                # Give the seat exactly one correction round-trip to file
-                # its memo; a second empty exit is accepted as the seat's
-                # honest final word rather than looping forever.
-                attempts = self.store.attempts_for_work(
-                    allocation_id, "proposer")
-                if len(attempts) <= 1:
-                    raise ValueError(
-                        "empty-seat exit without a registered research "
-                        "state: an abstaining seat must first register its "
-                        "memo (what it checked along its lens axes and why "
-                        "they are empty) so the investigation does not "
-                        "evaporate"
-                    )
-            self.store.publish_research_batch(
-                node_id=node_id,
-                episode_id=episode_id,
-                research_states=research_states,
-                proposals=proposals,
-                reserved_proposal_ids=reserved,
+            if conclusion is None:
+                raise ValueError(
+                    "seat result carries no conclusion: expected "
+                    "{kind: deliver|abstain|cut_off, ...} (complete-research "
+                    "contract)"
+                )
+            with_attempt = (
+                self._experiment_capacity() > 0
+                and not self._allocation_disabled()
+            )
+            ingest = self.store.ingest_lease_conclusion(
+                allocation_id=allocation_id,
+                conclusion=conclusion,
+                attempt_id=attempt.attempt_id if attempt else None,
+                with_attempt=with_attempt,
+                handover_word_cap=self.config.handover_word_cap,
             )
         except Exception as exc:
             print(
-                f"[scheduler] invalid proposer result {allocation_id}: {exc}",
+                f"[scheduler] invalid seat conclusion {allocation_id}: {exc}",
                 flush=True,
             )
-            if attempt is not None:
+            # Bounded correction, not a hard fail: the vacuous-exit /
+            # malformed-conclusion bound counts recorded rejections (an
+            # attempt-count bound would mis-fire on legitimately reopened
+            # leases).  After one rejection the next exit is accepted as
+            # the seat's honest final word rather than looping forever.
+            rejections = self._queries.lease_conclusion_rejection_count(
+                allocation_id)
+            self.store.record_scheduler_event(
+                "lease_conclusion_rejected", {
+                    "allocation_id": allocation_id,
+                    "error": str(exc),
+                })
+            if rejections < 1 and attempt is not None:
                 self.store.mark_proposer_infra_failed(
                     allocation_id=allocation_id,
                     attempt_id=attempt.attempt_id,
                 )
-            self._archive_result(
-                result_path, attempt.attempt_id if attempt else None,
+                self._archive_result(
+                    result_path, attempt.attempt_id if attempt else None)
+                return False
+            # Second invalid exit: conclude honestly as cut_off so the run
+            # cannot wedge on a seat that cannot format a conclusion.
+            self.store.conclude_lease(
+                allocation_id=allocation_id, outcome="cut_off",
+                reason=f"unparseable conclusion after retry: {exc}",
             )
-            return False
-        self.store.deallocate_proposer(
-            allocation_id=allocation_id,
-            proposals_produced=len(proposals),
-        )
-        if attempt is not None:
-            self.store.mark_attempt_succeeded(attempt.attempt_id)
+            if attempt is not None:
+                self.store.mark_attempt_succeeded(attempt.attempt_id)
+            self._archive_result(
+                result_path, attempt.attempt_id if attempt else None)
+            return True
+
+        if ingest.kind == "deliver" and not ingest.replayed:
+            self._launch_adjudication(ingest)
         self._archive_result(
             result_path, attempt.attempt_id if attempt else None)
         return True
+
+    def _launch_adjudication(self, ingest) -> None:
+        """Submit the eval-only adjudication experiment for a delivery."""
+        experiment = self._queries.get_experiment(ingest.experiment_id)
+        proposal = self._queries.get_proposal(ingest.proposal_id)
+        if experiment is None or proposal is None:
+            return
+        delivery = dict(proposal.rationale.get("delivery", {}))
+        world_sha = delivery.get("world_sha", "")
+        payload = {
+            "experiment_id": ingest.experiment_id,
+            "proposal_id": ingest.proposal_id,
+            "parent_node_id": experiment.parent_node_id,
+            "parent_sha": world_sha,
+            "proposal": proposal.instruction,
+            "attempt_id": ingest.attempt_id or "",
+            "attempt": 1,
+            "eval_only": True,
+        }
+        if ingest.attempt_id:
+            payload["attempt"] = len(self.store.attempts_for_work(
+                ingest.experiment_id, "experiment"))
+            self.store.mark_experiment_running(ingest.experiment_id)
+            self.submit_experiment(ingest.experiment_id, payload)
+        # Without capacity the experiment stays pending with no attempt —
+        # the reconciler's attempt-less pending-experiment path submits it
+        # later (its lack of a capacity gate is pinned behavior).
+
+    def _delivery_world_sha(self, experiment) -> str | None:
+        """The delivered SHA a delivery experiment adjudicates, if any."""
+        proposal = self._queries.get_proposal(experiment.proposal_id)
+        if proposal is None:
+            return None
+        delivery = proposal.rationale.get("delivery")
+        return delivery.get("world_sha") if isinstance(delivery, dict) else None
 
     def _ingest_experiment_result(
         self,
@@ -1319,6 +1389,16 @@ class Scheduler:
 
         attempt = self._latest_attempt(experiment_id, "experiment")
         if raw.get("status") == "failed":
+            # An adjudication experiment that keeps infra-failing would
+            # block quiescence forever (experiment retries are unbounded).
+            # Past the attempt cap the delivery is closed honestly —
+            # EVAL_COMMANDS failed: the world was never verified — and the
+            # lease concludes cut_off.  No scientific result is invented.
+            if self._adjudication_exhausted(experiment_id):
+                self._close_exhausted_adjudication(experiment_id, attempt)
+                self._archive_result(
+                    result_path, attempt.attempt_id if attempt else None)
+                return True
             # Infrastructure failure: reopen the experiment, keep its
             # scientific status untouched (§16/§17).
             if attempt is not None:
@@ -1367,9 +1447,151 @@ class Scheduler:
         )
         if attempt is not None:
             self.store.mark_attempt_succeeded(attempt.attempt_id)
+        self._resolve_delivery_experiment(experiment_id, status, gate)
         self._archive_result(
             result_path, attempt.attempt_id if attempt else None)
         return True
+
+    def _adjudication_exhausted(self, experiment_id: str) -> bool:
+        experiment = self._queries.get_experiment(experiment_id)
+        if experiment is None or self._delivery_world_sha(experiment) is None:
+            return False
+        failures = [
+            a for a in self.store.attempts_for_work(experiment_id, "experiment")
+            if a.status in {"failed", "lost"}
+        ]
+        return len(failures) >= self.config.max_adjudication_attempts
+
+    def _close_exhausted_adjudication(self, experiment_id: str, attempt) -> None:
+        gate = GateDecision(
+            results={"EVAL_COMMANDS": GateResult(
+                False, "adjudication attempts exhausted (infrastructure)")},
+            passed=False,
+        )
+        self.store.ingest_experiment_result(
+            experiment_id=experiment_id,
+            result_sha=None,
+            metrics={},
+            gate_result=gate,
+            status="gate_rejected",
+            changed_paths=[],
+            frontier_config=self._frontier_config(),
+        )
+        if attempt is not None:
+            self.store.mark_attempt_succeeded(attempt.attempt_id)
+        experiment = self._queries.get_experiment(experiment_id)
+        allocation = None
+        if experiment is not None:
+            allocation = self._queries.open_allocation_for_episode(
+                self._proposal_episode_id(experiment.proposal_id) or "")
+        if allocation is not None:
+            self.store.conclude_lease(
+                allocation_id=allocation.allocation_id,
+                outcome="cut_off",
+                reason="adjudication infra-exhausted: the delivered world "
+                       "could never be evaluated",
+            )
+
+    def _resolve_delivery_experiment(
+        self,
+        experiment_id: str,
+        status: str,
+        gate: GateDecision,
+    ) -> None:
+        """Route an adjudicated delivery back to its lease (§2.4 回写).
+
+        A pass concludes the lease as delivered (the child node was created
+        by the experiment ingest itself); a rejection reopens the author —
+        bounded by the reopen budget and the lease budget — or concludes
+        the lease so the supervisor can price the outcome.
+        """
+        experiment = self._queries.get_experiment(experiment_id)
+        if experiment is None:
+            return
+        if self._delivery_world_sha(experiment) is None:
+            return  # not a delivery experiment (classic / integrator lane)
+        allocation = self._queries.open_allocation_for_episode(
+            self._proposal_episode_id(experiment.proposal_id) or "")
+        if allocation is None:
+            return
+        if status == "completed" and gate.passed:
+            self.store.conclude_lease(
+                allocation_id=allocation.allocation_id,
+                outcome="delivered",
+                world_sha=self._delivery_world_sha(experiment),
+            )
+            return
+        if status in {"gate_rejected", "no_change"}:
+            self._reopen_or_conclude(allocation, experiment_id, gate)
+
+    def _proposal_episode_id(self, proposal_id: str) -> str | None:
+        proposal = self._queries.get_proposal(proposal_id)
+        return proposal.episode_id if proposal else None
+
+    def _reopen_or_conclude(
+        self,
+        allocation,
+        experiment_id: str,
+        gate: GateDecision,
+    ) -> None:
+        if self._allocation_disabled():
+            # Capped run: park the lease (state stays awaiting_adjudication)
+            # — the write-back transition is pure bookkeeping, but starting
+            # the reopened seat's new attempt is new work under a stale cap.
+            return
+        if self._lease_budget_exhausted(allocation):
+            self.store.conclude_lease(
+                allocation_id=allocation.allocation_id,
+                outcome="cut_off",
+                reason="lease budget exhausted at adjudication write-back",
+            )
+            return
+        reopened = self.store.record_lease_adjudication(
+            allocation_id=allocation.allocation_id,
+            experiment_id=experiment_id,
+            gate_result=gate,
+            max_reopens=self.config.max_lease_reopens,
+        )
+        if not reopened:
+            self.store.conclude_lease(
+                allocation_id=allocation.allocation_id,
+                outcome="rejected",
+                reason="reopen budget exhausted",
+            )
+        # state is now 'reopen'; _submit_pending_reopens launches the seat.
+
+    def _lease_budget_exhausted(self, allocation) -> bool:
+        wall = self.config.lease_wall_budget_seconds
+        if wall is not None and self._queries.lease_wall_seconds(
+                allocation.allocation_id) >= wall:
+            return True
+        if self.config.lease_budget_usd is not None:
+            spend = lease_spend_usd(
+                self.run_dir, self._pricing(), allocation.allocation_id,
+                attempt_ids=self._queries.lease_attempt_ids(
+                    allocation.allocation_id),
+            )
+            if spend >= self.config.lease_budget_usd:
+                return True
+        return False
+
+    def _pricing(self) -> dict[str, Any]:
+        if self.evolution_config is None:
+            return {}
+        return dict(getattr(self.evolution_config, "pricing", {}) or {})
+
+    def _submit_pending_reopens(self) -> None:
+        """Launch seats whose leases were reopened by adjudication write-back.
+
+        One call at the end of step(): covers reopens recorded by both the
+        reconcile-ingest path and the experiment poll, stays parked under a
+        durable cap, and never double-launches (the running-attempt guard
+        inside _resubmit_proposer).
+        """
+        if self._allocation_disabled():
+            return
+        for allocation in self._queries.reopen_allocations():
+            self._resubmit_proposer(allocation.allocation_id)
 
     def _latest_attempt(self, logical_work_id: str, kind: str):
         attempts = self.store.attempts_for_work(logical_work_id, kind)
@@ -1409,7 +1631,7 @@ class Scheduler:
                         / action.logical_work_id
                         / "result.json"
                     )
-                    if self._ingest_proposer_result(action.logical_work_id, result_path):
+                    if self._ingest_seat_conclusion(action.logical_work_id, result_path):
                         published.append(action.logical_work_id)
                 elif action.work_kind == "experiment":
                     result_path = (
@@ -1496,6 +1718,11 @@ class Scheduler:
         allocation = self.store.get_allocation(allocation_id)
         if allocation is None:
             return
+        # Never launch a seat whose lease is parked for adjudication — its
+        # experiment is the live work (double-resubmit guard for every
+        # caller: reconciler, reopen path, crash recovery).
+        if (allocation.state or "researching") == "awaiting_adjudication":
+            return
         if any(
             a.status == "running"
             for a in self.store.attempts_for_work(allocation_id, "proposer")
@@ -1505,6 +1732,12 @@ class Scheduler:
         episode = self._queries.get_episode(allocation.episode_id)
         if node is None or episode is None:
             return
+        if allocation.state == "reopen":
+            # Flip back to researching before the attempt starts so the
+            # capacity accounting and the work start in the same breath.  A
+            # crash between the two leaves researching-with-no-attempt —
+            # exactly the state the reconciler already recovers from.
+            self.store.reactivate_lease(allocation_id)
         attempt = self.store.record_attempt(
             logical_work_id=allocation_id,
             kind="proposer",
@@ -1530,6 +1763,10 @@ class Scheduler:
         node = self._queries.get_node(experiment.parent_node_id)
         if node is None:
             return
+        # A delivery experiment adjudicates its delivered world SHA, not
+        # the parent node's tree: eval-only checks out parent_sha directly.
+        world_sha = self._delivery_world_sha(experiment)
+        is_delivery = world_sha is not None
         attempt = self.store.record_attempt(
             logical_work_id=experiment_id,
             kind="experiment",
@@ -1544,10 +1781,11 @@ class Scheduler:
                 "experiment_id": experiment_id,
                 "proposal_id": experiment.proposal_id,
                 "parent_node_id": experiment.parent_node_id,
-                "parent_sha": node.sha,
+                "parent_sha": world_sha if is_delivery else node.sha,
                 "proposal": self._proposal_instruction(experiment.proposal_id),
                 "attempt_id": attempt.attempt_id,
                 "attempt": ordinal,
+                "eval_only": is_delivery,
             },
         )
 

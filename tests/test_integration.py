@@ -104,8 +104,27 @@ def test_scheduler_closes_proposer_experiment_loop(env):
 
     scheduler = Scheduler(store, run_dir, config, submitter=submitter)
 
-    def write_proposer_result(allocation_id: str, payload: dict) -> None:
-        state_id = f"rs-{episode.episode_id}-001"
+    world_sha = "c1" * 20
+
+    def write_seat_delivery(allocation_id: str) -> None:
+        # The seat registered its understanding incrementally (worker-side
+        # lease_writer), then delivered its one world.
+        from simpleevo.db.lease_writer import upsert_lease_research_state
+
+        upsert_lease_research_state(
+            store.path, lease_id=allocation_id,
+            episode_id=episode.episode_id, node_id=root.node_id,
+            working_model="Repeated setup crosses the call boundary.",
+            evidence=[{
+                "claim": "setup dominates", "how": "self-run bench",
+                "numbers": {"total_ms": 100.0}, "source": "experiment",
+                "status": "belief",
+            }],
+            experiment_log=[{
+                "intent": "hoist setup", "sha": world_sha,
+                "numbers": {"total_ms": 90.0}, "verdict": "faster",
+            }],
+        )
         _write_json(
             run_dir / "proposer_allocations" / allocation_id / "result.json",
             {
@@ -116,29 +135,22 @@ def test_scheduler_closes_proposer_experiment_loop(env):
                 "result": {
                     "episode_id": episode.episode_id,
                     "node_id": root.node_id,
-                    "outcome": "submit",
-                    "research_states": [{
-                        "research_state_id": state_id,
+                    "conclusion": {
+                        "kind": "deliver",
                         "node_id": root.node_id,
                         "episode_id": episode.episode_id,
-                        "derived_from_research_state_id": None,
-                        "working_model": "Repeated setup crosses the call boundary.",
-                        "evidence_refs": ["source:src/fcn.cc:FCN"],
-                        "created_at": 1.0,
-                    }],
-                    "proposals": [
-                        {
-                            "proposal_id": payload["proposal_ids"][0],
-                            "research_state_id": state_id,
-                            "instruction": "inline a small helper to reduce total_ms",
-                            "rationale": {"expectation": "total_ms decreases"},
-                        },
-                    ],
+                        "world_sha": world_sha,
+                        "handover": (
+                            "dead ends: none. open questions: none. "
+                            "warning: measure twice."
+                        ),
+                    },
                 },
             },
         )
 
-    def write_experiment_result(experiment_id: str) -> None:
+    def write_adjudication_result(experiment_id: str) -> None:
+        # An eval-only adjudication measures the delivered world itself.
         _write_json(
             run_dir / "experiments" / experiment_id / "result.json",
             {
@@ -149,8 +161,8 @@ def test_scheduler_closes_proposer_experiment_loop(env):
                 "result": {
                     "experiment_id": experiment_id,
                     "child_node_id": None,
-                    "parent_sha": "sha-root",
-                    "sha": "sha-child",
+                    "parent_sha": world_sha,
+                    "sha": world_sha,
                     "metrics": {"total_ms": 90.0},
                     "gate": {
                         "passed": True,
@@ -171,7 +183,7 @@ def test_scheduler_closes_proposer_experiment_loop(env):
         rationale="root deserves growth through inversion.",
         decision_id="decision-1")
 
-    # Step 2: the decision commits and the proposer lease is launched.
+    # Step 2: the decision commits and the seat lease is launched.
     t2 = scheduler.step()
     assert t2["proposer_jobs"] == 1
     allocation_id, proposer_payload = submitter.scientist[0]
@@ -179,33 +191,35 @@ def test_scheduler_closes_proposer_experiment_loop(env):
     (allocation,) = store.open_allocations()
     assert allocation.decision_id == "decision-1"
 
-    write_proposer_result(allocation_id, proposer_payload)
+    write_seat_delivery(allocation_id)
 
-    # Step 3: the proposer result publishes (reconcile or poll ingests it)
-    # and the queue drains into an experiment.
+    # Step 3: the conclusion ingests — the delivery mints its adjudication
+    # experiment (eval-only, submitted with capacity) — and the terminal
+    # gate result concludes the lease delivered with a child node.
     t3 = scheduler.step()
-    assert t3["experiment_jobs"] == 1
     assert submitter.experiments
-    experiment_id = submitter.experiments[0][0]
-    write_experiment_result(experiment_id)
-    # Ingest the terminal experiment directly so the second queued proposal
-    # is not drained into another experiment before the assertions below.
+    experiment_id, experiment_payload = submitter.experiments[0]
+    assert experiment_payload["eval_only"] is True
+    assert experiment_payload["parent_sha"] == world_sha
+    # The synthetic delivery proposal uses the seat's reserved id.
+    assert experiment_payload["proposal_id"] in (
+        allocation.reserved_proposal_ids)
+    write_adjudication_result(experiment_id)
     assert scheduler._poll_experiments() == [experiment_id]
 
-    # Verify child node was created.
+    # Verify child node was created at the delivered world.
     with store.transaction() as tx:
         children = tx._conn.execute(
             "SELECT * FROM nodes WHERE parent_node_id = ?", (root.node_id,)
         ).fetchall()
     assert len(children) == 1
-    assert children[0]["sha"] == "sha-child"
+    assert children[0]["sha"] == world_sha
     assert children[0]["metrics"] == '{"total_ms": 90.0}'
     queries = ResearchQueries(store.path)
     states = queries.research_states_for_episode(episode.episode_id)
     assert len(states) == 1
     assert queries.queued_proposals() == []
-    experiment_proposal = queries.get_proposal(
-        submitter.experiments[0][1]["proposal_id"])
+    experiment_proposal = queries.get_proposal(experiment_payload["proposal_id"])
     assert experiment_proposal.research_state_id == states[0].research_state_id
     seed = research_state_seed(
         ResearchQueries(store.path),
@@ -218,9 +232,16 @@ def test_scheduler_closes_proposer_experiment_loop(env):
     assert seed["originating_lens"] == "G5"
     assert seed["experiment"]["metrics"] == {"total_ms": 90.0}
 
-    # The terminal experiment event re-wakes the gate for the next judgment.
+    # The lease concluded delivered (state machine, not just the event).
+    concluded = store.get_allocation(allocation_id)
+    assert concluded.finished_at is not None
+    assert (concluded.state or "").startswith("concluded_")
+    assert queries.researching_open_allocation_count() == 0
+
+    # The terminal events re-wake the gate for the next judgment: the
+    # experiment's own terminal plus the lease's conclusion.
     t5 = scheduler.step()
-    assert t5["supervisor_pending"] == 1  # evidence awaits judgment
+    assert t5["supervisor_pending"] == 2  # both events await judgment
     assert len(submitter.supervisor) == 2
     _, wake_payload = submitter.supervisor[1]
     wake = wake_payload["event_batch_bounds"]
@@ -228,7 +249,7 @@ def test_scheduler_closes_proposer_experiment_loop(env):
     assert [
         e.type for e in ResearchQueries(store.path).supervisor_events_between(
             wake["cursor_from"], wake["cursor_to"])
-    ] == ["experiment_terminal"]
+    ] == ["experiment_terminal", "lease_terminal"]
 
 
 def test_group_workflow_allocates_divergent_branch_and_promotes_shared_epoch(env):

@@ -55,6 +55,13 @@ def seat_ledger_facts(queries: ResearchQueries) -> list[dict[str, Any]]:
             "lens": row["lens"],
             "episode_id": row["episode_id"],
             "state": "open" if row["open_leases"] else "finished",
+            # Lease state machine detail for open seats: a lease parked in
+            # adjudication or reopen is visible as such (the gate prices
+            # "this seat's world is being judged / reworked" differently
+            # from "this seat is researching").
+            "lease_state": row["lease_state"],
+            "reopen_count": row["reopen_count"],
+            "conclusion_type": row["conclusion_type"],
             "proposals": row["proposals"],
         })
     return [
@@ -251,12 +258,15 @@ def build_runtime_facts(
         # Seat semantics: a purchase is one seat; there are no
         # proposal slots to manage and no per-node research/proposal
         # caps — the budget is the boundary (seat design §2.1/§4).
-        "seats_inflight": queries.count_running_attempts("proposer"),
+        # Researching leases hold seats (the same shared query the
+        # scheduler's capacity enforcement reads); a lease parked on
+        # adjudication does not.
+        "seats_inflight": queries.researching_open_allocation_count(),
         "max_terminal_evals": max_terminal_evals,
         "budget_usd": budget_usd,
     }
     runtime_facts["free_proposer_capacity"] = (
-        max_proposer_inflight - queries.count_running_attempts("proposer"))
+        max_proposer_inflight - queries.researching_open_allocation_count())
     terminal_used = queries.terminal_experiment_count()
     runtime_facts["terminal_evals_used"] = terminal_used
     if max_terminal_evals is not None:
