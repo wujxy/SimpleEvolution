@@ -1772,7 +1772,7 @@ def _dispatch(action: dict, proposal_slots: int) -> dict:
         if budget is not None:
             parsed["budget_minutes"] = budget
         return parsed
-    if name == "register_research_state":
+    if name in {"register_research_state", "update_research_state"}:
         _require_keys(
             action,
             {"action", "working_model"},
@@ -2257,6 +2257,19 @@ class ScientistAgent(ResearchAgent):
         """
         self._proposal_slots = proposal_slots
         resolved_node_id = node_id or base_sha
+        # Attempt 2+ of a reopened/continued lease resumes against its own
+        # registered state row (written incrementally via lease_writer).
+        # Seeding it into the session WorkingState keeps the exit guard from
+        # demanding a re-registration it already satisfied last attempt.
+        seed_rows: tuple = ()
+        if db_path and lease_id:
+            from simpleevo.db.queries import Queries
+            try:
+                head = Queries(db_path).research_state_head(resolved_node_id)
+                if head is not None:
+                    seed_rows = (head,)
+            except Exception as exc:
+                print(f"[scientist] lease state seed skipped: {exc}", flush=True)
         resolved_episode_id = episode_id or (
             f"{session.scientist_id}-r{current_round}"
         )
@@ -2476,6 +2489,7 @@ class ScientistAgent(ResearchAgent):
             time_nudge=_TIME_NUDGE,
             capture_expectations=True,
             make_result=make_result,
+            seed_research_states=seed_rows,
         )
 
     def self_review(
@@ -2715,6 +2729,7 @@ class ScientistAgent(ResearchAgent):
         make_result,
         capture_expectations: bool = False,
         time_nudge: str | None = None,
+        seed_research_states: tuple = (),
     ):
         """The shared agentic step-loop for one deliberation (task research OR
         self-review). The caller builds the mode-specific system prompt, initial
@@ -2733,6 +2748,14 @@ class ScientistAgent(ResearchAgent):
         """
         steps_budget = max_steps or self.max_steps
         state = WorkingState()
+        # Cross-attempt continuity for the exit guard: a resumed/reopened
+        # lease already has its evolving state row in the ledger (written
+        # incrementally by the previous attempt); without seeding it here,
+        # the in-session guard would demand a fresh registration before
+        # every exit on attempt 2+ (probe A round 3 burned five protocol
+        # repairs on exactly that cascade).
+        for record in seed_research_states:
+            state.research_states[record.research_state_id] = record
 
         try:
             return AgentRuntime(
