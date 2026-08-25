@@ -233,4 +233,4 @@ def test_integrator_uses_request_scoped_worker_artifact(tmp_path, monkeypatch):
     work_dir = tmp_path / "integration_requests" / "request-1"
     assert result_path == str(work_dir / "result.json")
     assert json.loads((work_dir / "manifest.json").read_text())["kind"] == "integrator"
-    assert "-m scientist.integrator_cli" in (work_dir / "job.sh").read_text()
+    assert "-m scientist.host.integrator_cli" in (work_dir / "job.sh").read_text()

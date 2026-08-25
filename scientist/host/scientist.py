@@ -35,12 +35,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .model import ChatModel
+from ..model import ChatModel
 from .agent_runtime import AgentRuntime
-from .context import build_first_layer_pack
+from ..context import build_first_layer_pack
 from simpleevo.research_state import ResearchState
 
-from .memory.reflection_views import (
+from ..memory.reflection_views import (
     NOT_PERFORMED_STATUSES,
     classify_improvement,
     commitment_watchlist,
@@ -51,7 +51,7 @@ from .research_tools import (
     ResearchTools,
     render_research_tool_prompt,
 )
-from .research_skills import (
+from ..research_skills import (
     render_research_skill_catalog, render_startup_skills,
 )
 from .research_agent import (
@@ -64,16 +64,16 @@ from .research_agent import (
     _fingerprint,
     _source_path_exists,
 )
-from .scientist_session import ScientistSession, read_expectations
+from ..scientist_session import ScientistSession, read_expectations
 from .runtime import ApptainerRuntime, MountMap
-from .memory.context import build_generation_context
-from .memory.service import read_reflection_records
-from .memory.models import (
+from ..memory.context import build_generation_context
+from ..memory.service import read_reflection_records
+from ..memory.models import (
     ExistingFindingTarget,
     NewFindingTarget,
     ResearchProposal,
 )
-from .prompts import load_semantic
+from ..prompts import load_semantic
 
 
 class ProposerError(AgentError):
@@ -222,7 +222,7 @@ _TAIL_TURNS = 8
 
 # Prompt-version stamp recorded in meta.json so a prompt change is observable
 # per Scientist across rounds.
-SCIENTIST_PROMPT_VERSION = "seat-v1"
+SCIENTIST_PROMPT_VERSION = "seat-v2"
 
 
 # --- Live-context compaction (Option A: deterministic shedding) -----------
@@ -425,8 +425,10 @@ def _compact_live_messages(
 # --- Prompt scaffolding ----------------------------------------------------
 
 _TOOL_BLOCK = (
-    "Research tools (your lab and your library — use them freely to "
-    "investigate, verify, and understand):\n" + render_research_tool_prompt()
+    "Your instruments, in the order you should reach for them (your "
+    "assistant first — it is your default limb; your own eyes and hands "
+    "after; the record when you need what is already known):\n"
+    + render_research_tool_prompt()
 )
 
 _SKILL_BLOCK = (
@@ -442,99 +444,83 @@ _STARTUP_SKILLS_BLOCK = (
     "step):\n" + render_startup_skills()
 )
 
-_PROTOCOL_BLOCK = """Output protocol (immutable): every response is exactly one \
-JSON object, in one of two shapes. A single action object — its "action" field \
-names the action and the action's own fields sit alongside it, exactly as the \
-tool schemas above show. Or a batch envelope of up to 8 tool actions:
+_PROTOCOL_BLOCK = """Output protocol (immutable): every response is exactly one JSON object, in one of two shapes:
 
   {"action": "...", ...the action's fields..., "message": "...optional..."}
   {"actions": [<action object>, ...], "message": "...optional..."}
 
-A batch's actions run sequentially in one step and all their results return \
-together as one {"tool_results": [...]} message — reach for it when you have \
-several independent lookups (reads, greps, globs) so each costs no turn of \
-its own. A single action's result arrives in the same {"tool_results": [...]} \
-shape with one entry. deliver_world and abstain are always sent ALONE as a \
-single action object, never inside a batch.
+A batch (at most 8 tool actions) runs sequentially in one step and its
+results return together as one {"tool_results": [...]} message — use it
+for several independent lookups. deliver_world and abstain are always
+sent ALONE as a single action object, never inside a batch.
 
 - "action" (required): one research tool call, OR one terminal action.
-- "message" (optional): natural text you choose to leave in your own research
-  trajectory — what you might say aloud while working. It is NOT required and
-  NOT a substitute for acting; if you have nothing to add, omit it. It is
-  communication that future-you will see, not a report you must file.
+- "message" (optional): natural text you leave in your own trajectory —
+  what you might say aloud while working. Not required, not a substitute
+  for acting.
 
-A ResearchState is your lease's ONE evolving understanding, not a Harness
-fact and not a form to complete. update_research_state writes it to the
-ledger IMMEDIATELY — revise it after every work cycle and whenever your
-model materially changes, including on your way to an empty conclusion.
-Your research state must carry ≥1 revision before any exit: an exit with
-nothing on file is a protocol violation (the investigation evaporates).
+A ResearchState is your lease's ONE evolving understanding. Revisit it
+with update_research_state after every work cycle and whenever your model
+materially changes; it must carry ≥1 revision before any exit — an exit
+with nothing on file is a protocol violation.
 
 Terminal actions (exactly one concludes the lease):
 - DELIVER your world — the one world your seat built and self-verified:
   {"action":"deliver_world","handover":{
     "dead_ends":["axis tried, evidence it is spent"],
     "open_questions":["what remains open — including mechanisms you built
-      but did NOT deliver, with their self-tested numbers, so a successor
-      or a re-purchase can fetch them"],
+      but did NOT deliver, with their self-tested numbers"],
     "warning":"your strongest signed warning to a successor with a
       different lens"}}
   The delivered world is your laboratory's current state — the harness
-  snapshots it mechanically; you do not (and cannot) choose a different
-  SHA. Self-verify BEFORE delivering: the harness re-measures everything,
-  but a world that fails your own verification is a wasted adjudication.
-  The handover is the ONLY thing a successor receives from you: ≤400 words,
-  written to a successor wearing a DIFFERENT lens — a map of spent ground
-  and open doors, not your worldview (they can pull the full record when
-  they want it). Delivery is singular: one seat, one world, one handover.
-  You may try many mechanisms inside the lease; the un-delivered ones go
-  into open_questions and your experiment_log, not into extra deliveries.
-
+  snapshots it mechanically. Self-verify BEFORE delivering: a world that
+  fails your own verification is a wasted adjudication. The handover is
+  the ONLY thing a successor receives: ≤400 words, a map of spent ground
+  and open doors, not your worldview. One seat, one world, one handover;
+  un-delivered mechanisms go into open_questions, not extra deliveries.
 - ABSTAIN — the empty-seat exit, when your lens provably has no ore here:
   {"action":"abstain","reason":"...","axes_checked":["axis: why empty"]}
-  Requires your research state on file first — the memo naming what you
-  checked along your lens's axes and why they are all empty. An abstain
-  with no registered state is a protocol violation.
+  Requires your research state on file first. An abstain with no
+  registered state is a protocol violation.
 
 If the budget runs out before you conclude, the harness concludes the
-lease as cut_off — whatever is on file survives, but the conclusion is not
+lease as cut_off — what is on file survives, but the conclusion is not
 yours. Concluding well is part of the work.
 """
 
 _RUNTIME_BOUNDARIES = """Runtime boundaries:
-- /work is your writable lab: the accepted source tree's editable paths,
-  materialized read-write. Read it, write scratch code, compile, run toy
-  experiments to understand the code and the task. It is disposable — nothing
-  you write here becomes an artifact. Other source files are visible read-only.
-- /repo is the read-only Git repository. Use `git show <sha>`, `git diff`,
-  `git log` to inspect any prior experiment's source (the history is shared).
-  You CANNOT commit, branch, or reset — creating artifacts is the executor's
-  job, and the read-only /repo structurally prevents it.
-- /scratch is temporary writable space.
-- read_file, grep_files, and glob_files see the same /work, /repo, and
-  /scratch paths as your shell but answer without entering the container —
-  your navigation duty routes through them first. write_scratch_file writes
-  only under /scratch; building and running stay with run_research_command.
-- Anything you measure in your lab (a toy build, a probe) is for YOUR
-  understanding only. It is never a merit fact: whether a change is faster or
-  correct is the Harness's verdict, not yours. You may predict, judge, and bet
-  boldly — but distinguish your scientific judgment from what has actually been
-  established by experiment. Use the lab to understand and to design better
-  questions; it is not a pre-gate your proposals must survive — finding out
-  is what the experiment is for.
-- You cannot call the executor or Harness, edit candidates, choose a parent,
-  or declare evaluation and Gate facts. Only Harness records are authoritative.
+- /work is your writable lab (the accepted source tree's editable paths,
+  read-write; disposable — nothing you write here becomes an artifact).
+  Other source files are visible read-only. /scratch is temporary
+  writable space. /repo is the read-only Git repository: `git
+  show/diff/log` over any prior experiment's source; you cannot commit —
+  creating artifacts is the executor's job.
+- read_file, grep_files, and glob_files see the same paths as your shell
+  but answer without entering the container — your navigation duty routes
+  through them first. write_scratch_file writes only under /scratch;
+  building and running stay with run_research_command.
+- Anything you measure in your lab is for YOUR understanding —
+  navigation, not verdicts. Whether a change is faster or correct is the
+  Harness's verdict, not yours. Use the lab to understand and to design
+  better questions.
+- You cannot call the executor or Harness, edit candidates, choose a
+  parent, or declare evaluation and Gate facts. Only Harness records are
+  authoritative.
 """.strip()
 
 _COLD_START = (
     "You are beginning this research. The goal, the gates, and the current "
     "accepted revision are in your standing context above; your lens names "
-    "the angle this seat was hired for. Begin working on the research "
-    "problem from that angle. Use the laboratory as your judgment requires "
-    "— investigate, probe, and form your own understanding. When you find "
-    "the direction your lens judges worth an experiment, submit your "
-    "proposal. There is no phase you must rush through; take the time your "
-    "judgment needs."
+    "the angle this seat was hired for. Begin as a scientist begins: form "
+    "your own understanding of this world — read it, question it, talk it "
+    "through with your assistant — until you hold a working model of why "
+    "it behaves as it does. When your model is sharp enough to bet on, "
+    "design the change or measurement that would discriminate it, brief "
+    "your assistant to execute, and register what you learn in your "
+    "research state. The lease ends when your understanding has produced "
+    "a world worth delivering — or an honest memo that this lens has no "
+    "ore here. There is no phase you must rush through; take the time "
+    "your judgment needs."
 )
 
 def _build_research_start_messages(
@@ -817,7 +803,7 @@ def _build_self_progress_pack(run_dir: Path, objective_key: str | None,
     the authoritative 'am I progressing fast enough?' evidence (semantics §5.2).
     Reports outcomes only (objective trajectory, selection, gates), never
     proposal/eval text (the S2c coverage-free principle). '' when no history."""
-    from .memory.history import read_history
+    from ..memory.history import read_history
     try:
         rows = read_history(Path(run_dir) / "history.jsonl")
     except (OSError, ValueError):
@@ -900,7 +886,7 @@ def _build_self_progress_pack(run_dir: Path, objective_key: str | None,
         records = read_reflection_records(run_dir)
         if memory_service is not None:
             experiments = memory_service.load_experiments()
-            from .scientist_session import read_expectations
+            from ..scientist_session import read_expectations
             # Outcome classification is direction-sensitive — take it from
             # the metrics schema, not from the caller's objective_key alone.
             objective = (memory_service.metrics_schema or {}).get(
@@ -1014,6 +1000,18 @@ def _build_self_review_prompt(
     return "\n\n".join(parts)
 
 
+# The seat's mode of existence, appended after the lens identity (the
+# probe-tested seat-v2 identity layer): the scientist's work is
+# understanding; execution belongs to the assistant, judgment to the
+# scientist.  One voice with the charter's "Your assistant" section.
+_SCIENTIST_MODE = (
+    "You are a scientist. Your work is understanding — a model of this "
+    "world that evidence keeps correcting, carried in your research "
+    "state. You advance it by reading, thinking, and directing; "
+    "execution is your assistant's, judgment is yours."
+)
+
+
 def _seat_identity_block(lens: dict | None, node_id: str | None) -> str:
     """The seat's identity: system-prompt line one (seat design §7.3).
 
@@ -1040,6 +1038,7 @@ def _seat_identity_block(lens: dict | None, node_id: str | None) -> str:
         parts.append(f"透镜禁令：{lens['forbidden']}")
     if lens.get("self_check"):
         parts.append(f"提交自检：{lens['self_check']}")
+    parts.append(_SCIENTIST_MODE)
     return "\n\n".join(parts)
 
 
@@ -1094,6 +1093,191 @@ def _build_system_prompt(
             "the records):\n" + notebook.strip()
         )
     return "\n\n".join(parts)
+
+
+def assemble_research_context(
+    *,
+    session: ScientistSession,
+    goal: str,
+    editable: list[str],
+    base_sha: str,
+    gate_block: str,
+    prompt_dir: Path | None,
+    proposal_slots: int,
+    current_round: int,
+    memory_service,
+    run_dir: Path,
+    world_transition: str | None = None,
+    first_layer_seed: dict | None = None,
+    lens: dict | None = None,
+    node_id: str | None = None,
+    episode_id: str | None = None,
+    hints: list[str] | None = None,
+    adjudication_feedback: dict | None = None,
+    db_path=None,
+    lease_id: str | None = None,
+) -> dict:
+    """Assemble the seat's standing context for one research round: the
+    system prompt (identity + charter + world + skills) and the opening
+    messages (cold start / resume / reopen feedback), plus the derived
+    facts the tool layer needs (episode/node ids, inherited research
+    states, lease state seed rows).
+
+    Shared by the host-side loop (``research``) and the package-side
+    assembly (``agent.build_system_prompt``) so both put the seat into the
+    SAME standing context — the body's location must not change what the
+    seat knows. The session's
+    opening messages (cold start, seed pack, world event, reflection
+    replay, write-back) are archived HERE; whoever runs the loop appends
+    only what it witnesses."""
+    resolved_node_id = node_id or base_sha
+    # Attempt 2+ of a reopened/continued lease resumes against its own
+    # registered state row (written incrementally via lease_writer).
+    # Seeding it into the session WorkingState keeps the exit guard from
+    # demanding a re-registration it already satisfied last attempt.
+    seed_rows: tuple = ()
+    if db_path and lease_id:
+        from simpleevo.db.queries import Queries
+        try:
+            head = Queries(db_path).research_state_head(resolved_node_id)
+            if head is not None:
+                seed_rows = (head,)
+        except Exception as exc:
+            print(f"[scientist] lease state seed skipped: {exc}", flush=True)
+    resolved_episode_id = episode_id or (
+        f"{session.scientist_id}-r{current_round}"
+    )
+    seed = first_layer_seed or {}
+    seed_pack = build_first_layer_pack(seed) or None
+    world_context = seed_pack or world_transition
+    originating_state = seed.get("originating_research_state") or {}
+    inherited_research_states = {}
+    inherited_id = originating_state.get("research_state_id")
+    inherited_model = originating_state.get("working_model")
+    if inherited_id and inherited_model:
+        inherited_research_states[inherited_id] = inherited_model
+    charter = load_semantic("proposer", prompt_dir)
+    system_prompt = _build_system_prompt(
+        charter=charter, goal=goal, editable=editable, base_sha=base_sha,
+        gate_block=gate_block, proposal_slots=proposal_slots,
+        hints=hints,
+        notebook=session.notebook,
+        lens=lens, node_id=resolved_node_id,
+    )
+    coverage_pack = None
+    if memory_service is not None:
+        try:
+            coverage_pack = memory_service.build_coverage_pack(
+                current_round=current_round,
+            )
+        except Exception as exc:
+            print(
+                f"[scientist] coverage pack build failed: {exc}",
+                flush=True,
+            )
+    first_round = session.is_first_round()
+    messages = _build_research_start_messages(
+        first_round=first_round,
+        seed_pack=seed_pack,
+        coverage_pack=coverage_pack,
+    )
+    if first_round:
+        if seed_pack:
+            session.append_message(
+                "user", seed_pack, round_id=current_round,
+            )
+        print("[scientist] cold start — first round of this Scientist",
+              flush=True)
+    else:
+        # Resume from aggregate coverage plus authoritative world outcomes;
+        # raw prior trajectories and old seeds stay out of hot context.
+        world_event = _build_world_event(
+            memory_service, current_round, base_sha,
+            expectations=read_expectations(run_dir),
+            injected_transition=world_context,
+        )
+        if world_event is None:
+            world_event = (
+                "Your research is resuming. No experiments were run from "
+                "your last round (you submitted no directions, or the "
+                "round abstained). The accepted revision remains "
+                f"{base_sha[:10]}."
+            )
+        messages.append({"role": "user", "content": world_event})
+        # Archive the world event into the Scientist's lived history — it is
+        # something this Scientist was told (observed), so the immutable
+        # archive must record it. (The coverage map is ephemeral —
+        # recomputed each round — so it is not archived.)
+        session.append_message(
+            "user", world_event, round_id=current_round,
+        )
+        # Replay the latest not-yet-replayed reflection handoff — the
+        # continuity design makes it the primary anchor of the round
+        # AFTER a reflection, with an explicit epistemic status: it is
+        # one judgment, not a fact and not an instruction. The guarantee
+        # is demotion (unfinished plans no longer carry by default), not
+        # promotion (the criticism does not become truth).
+        try:
+            replayed_through = int(
+                session.meta.get("last_reflection_replayed", -1))
+        except (TypeError, ValueError):
+            replayed_through = -1
+        pending = [
+            record for record in read_reflection_records(run_dir)
+            if isinstance(record.get("round_id"), int)
+            and record["round_id"] > replayed_through
+            and record.get("handoff")
+            and not record.get("abstained")
+        ]
+        if pending:
+            record = pending[-1]
+            handoff_msg = (
+                f"Reflection handoff from round {record['round_id']} — "
+                "one judgment your past self made after deliberately "
+                "auditing its own trajectory. It is not a fact and not an "
+                "instruction; weigh it against the current evidence, then "
+                "decide for yourself:\n\n" + str(record["handoff"])
+            )
+            messages.append({"role": "user", "content": handoff_msg})
+            session.append_message(
+                "user", handoff_msg, round_id=current_round)
+            session.note_replayed_reflection(record["round_id"])
+        print(
+            f"[scientist] resume — scientist_id={session.scientist_id[:8]} "
+            f"cold context (raw tail not re-injected); coverage map + "
+            f"world-transition injected"
+            + ("; reflection handoff replayed" if pending else ""),
+            flush=True,
+        )
+    if adjudication_feedback:
+        gate = adjudication_feedback.get("gate") or {}
+        failures = "; ".join(
+            f"{name}: {row.get('detail') or ('pass' if row.get('passed') else 'FAIL')}"
+            for name, row in gate.items()
+            if not row.get("passed")
+        ) or "unknown gate failure"
+        feedback_msg = (
+            "ADJUDICATION WRITE-BACK — your lease was reopened: the "
+            "world you delivered was gate-rejected by the harness.\n"
+            f"Rejected gates: {failures}\n"
+            "Your laboratory and research state survived — fix the "
+            "world and deliver again, or switch to a mechanism from "
+            "your experiment_log that you judge more promising. The "
+            "reopen budget is finite; judge what deserves it."
+        )
+        messages.append({"role": "user", "content": feedback_msg})
+        session.append_message(
+            "user", feedback_msg, round_id=current_round,
+        )
+    return {
+        "system_prompt": system_prompt,
+        "messages": messages,
+        "node_id": resolved_node_id,
+        "episode_id": resolved_episode_id,
+        "inherited_research_states": inherited_research_states,
+        "seed_rows": seed_rows,
+        "charter": charter,
+    }
 
 
 def _fmt_metrics(metrics: dict) -> str:
@@ -1170,7 +1354,7 @@ def _build_world_event(
     # Reports the OUTCOMES of the most recent experiment round (what reality
     # returned) and states the world that now exists. The directions themselves
     # are NOT echoed here — they live in the Scientist's notebook, and one
-    # experiment's detail is available via inspect_episode. Authoritative
+    # experiment's detail is available via inspect_experiment. Authoritative
     # harness facts only — no interpretation ("this direction is exhausted",
     # etc.); the Scientist produces the meaning.
     #
@@ -1647,12 +1831,6 @@ def _dispatch(action: dict, proposal_slots: int) -> dict:
         return {
             "action": name, "path": path, "content": action["content"],
         }
-    if name == "inspect_episode":
-        _require_keys(action, {"action", "ref"})
-        ref = action["ref"]
-        if not isinstance(ref, str) or not ref.strip():
-            raise ProposerError("episode ref must be non-empty")
-        return {"action": name, "ref": ref.strip()}
     if name in {
         "inspect_experiment", "inspect_originating_research_state",
     }:
@@ -1662,35 +1840,6 @@ def _dispatch(action: dict, proposal_slots: int) -> dict:
             raise ProposerError(f"{name}.experiment_id must be non-empty")
         return {"action": name, "experiment_id": experiment_id.strip()}
 
-    if name == "list_findings":
-        _require_keys(action, {"action"}, {"state", "limit"})
-        state = action.get("state", "active")
-        if state not in {"active", "open", "dormant", "archived", "all"}:
-            raise ProposerError(
-                "list_findings.state must be one of active/open/dormant/"
-                "archived/all"
-            )
-        limit = action.get("limit", 20)
-        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
-            raise ProposerError("list_findings.limit must be a positive integer")
-        return {"action": name, "state": state, "limit": limit}
-    if name == "search_findings":
-        _require_keys(action, {"action", "query"}, {"limit"})
-        query = action["query"]
-        if not isinstance(query, str) or not query.strip():
-            raise ProposerError("search_findings.query must be non-empty")
-        limit = action.get("limit", 5)
-        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
-            raise ProposerError(
-                "search_findings.limit must be a positive integer"
-            )
-        return {"action": name, "query": query.strip(), "limit": limit}
-    if name == "inspect_finding":
-        _require_keys(action, {"action", "finding_id"})
-        fid = action["finding_id"]
-        if not isinstance(fid, str) or not fid.strip():
-            raise ProposerError("inspect_finding.finding_id must be non-empty")
-        return {"action": name, "finding_id": fid.strip()}
     if name == "search_experiments":
         _require_keys(
             action, {"action", "query"},
@@ -1709,10 +1858,9 @@ def _dispatch(action: dict, proposal_slots: int) -> dict:
         if filters:
             unknown = set(filters) - allowed_filters
             if unknown:
-                # Tolerate unknown filter keys (the model often conflates
-                # list_findings' `state` into search_experiments.filters).
-                # Drop them rather than burn a protocol-repair round-trip on a
-                # harmless extra key — a meaningful filter set still applies.
+                # Tolerate unknown filter keys rather than burn a
+                # protocol-repair round-trip on a harmless extra key — a
+                # meaningful filter set still applies.
                 filters = {k: v for k, v in filters.items()
                            if k in allowed_filters}
         limit = action.get("limit", 10)
@@ -2256,152 +2404,27 @@ class ScientistAgent(ResearchAgent):
         degrades to the plain control identity.
         """
         self._proposal_slots = proposal_slots
-        resolved_node_id = node_id or base_sha
-        # Attempt 2+ of a reopened/continued lease resumes against its own
-        # registered state row (written incrementally via lease_writer).
-        # Seeding it into the session WorkingState keeps the exit guard from
-        # demanding a re-registration it already satisfied last attempt.
-        seed_rows: tuple = ()
-        if db_path and lease_id:
-            from simpleevo.db.queries import Queries
-            try:
-                head = Queries(db_path).research_state_head(resolved_node_id)
-                if head is not None:
-                    seed_rows = (head,)
-            except Exception as exc:
-                print(f"[scientist] lease state seed skipped: {exc}", flush=True)
-        resolved_episode_id = episode_id or (
-            f"{session.scientist_id}-r{current_round}"
+        # The standing-context assembly (identity, charter, cold start vs
+        # resume, reopen write-back) is shared with the in-world wrapper —
+        # the body's location must not change what the seat knows.
+        context = assemble_research_context(
+            session=session, goal=goal, editable=editable,
+            base_sha=base_sha, gate_block=gate_block,
+            prompt_dir=prompt_dir, proposal_slots=proposal_slots,
+            current_round=current_round,
+            memory_service=memory_service, run_dir=run_dir,
+            world_transition=world_transition,
+            first_layer_seed=first_layer_seed, lens=lens,
+            node_id=node_id, episode_id=episode_id, hints=hints,
+            adjudication_feedback=adjudication_feedback,
+            db_path=db_path, lease_id=lease_id,
         )
-        seed = first_layer_seed or {}
-        seed_pack = build_first_layer_pack(seed) or None
-        world_context = seed_pack or world_transition
-        originating_state = seed.get("originating_research_state") or {}
-        inherited_research_states = {}
-        inherited_id = originating_state.get("research_state_id")
-        inherited_model = originating_state.get("working_model")
-        if inherited_id and inherited_model:
-            inherited_research_states[inherited_id] = inherited_model
-        charter = load_semantic("proposer", prompt_dir)
-        system_prompt = _build_system_prompt(
-            charter=charter, goal=goal, editable=editable, base_sha=base_sha,
-            gate_block=gate_block, proposal_slots=proposal_slots,
-            hints=hints,
-            notebook=session.notebook,
-            lens=lens, node_id=resolved_node_id,
-        )
-
-        # --- assemble the live context (cold start vs resume) ---
-        coverage_pack = None
-        if memory_service is not None:
-            try:
-                coverage_pack = memory_service.build_coverage_pack(
-                    current_round=current_round,
-                )
-            except Exception as exc:
-                print(
-                    f"[scientist] coverage pack build failed: {exc}",
-                    flush=True,
-                )
-        first_round = session.is_first_round()
-        messages = _build_research_start_messages(
-            first_round=first_round,
-            seed_pack=seed_pack,
-            coverage_pack=coverage_pack,
-        )
-        if first_round:
-            if seed_pack:
-                session.append_message(
-                    "user", seed_pack, round_id=current_round,
-                )
-            print("[scientist] cold start — first round of this Scientist",
-                  flush=True)
-        else:
-            # Resume from aggregate coverage plus authoritative world outcomes;
-            # raw prior trajectories and old seeds stay out of hot context.
-            world_event = _build_world_event(
-                memory_service, current_round, base_sha,
-                expectations=read_expectations(run_dir),
-                injected_transition=world_context,
-            )
-            if world_event is None:
-                world_event = (
-                    "Your research is resuming. No experiments were run from "
-                    "your last round (you submitted no directions, or the "
-                    "round abstained). The accepted revision remains "
-                    f"{base_sha[:10]}."
-                )
-            messages.append({"role": "user", "content": world_event})
-            # Archive the world event into the Scientist's lived history — it is
-            # something this Scientist was told (observed), so the immutable
-            # archive must record it. (The coverage map is ephemeral —
-            # recomputed each round — so it is not archived.)
-            session.append_message(
-                "user", world_event, round_id=current_round,
-            )
-            # Replay the latest not-yet-replayed reflection handoff — the
-            # continuity design makes it the primary anchor of the round
-            # AFTER a reflection, with an explicit epistemic status: it is
-            # one judgment, not a fact and not an instruction. The guarantee
-            # is demotion (unfinished plans no longer carry by default), not
-            # promotion (the criticism does not become truth).
-            try:
-                replayed_through = int(
-                    session.meta.get("last_reflection_replayed", -1))
-            except (TypeError, ValueError):
-                replayed_through = -1
-            pending = [
-                record for record in read_reflection_records(run_dir)
-                if isinstance(record.get("round_id"), int)
-                and record["round_id"] > replayed_through
-                and record.get("handoff")
-                and not record.get("abstained")
-            ]
-            if pending:
-                record = pending[-1]
-                handoff_msg = (
-                    f"Reflection handoff from round {record['round_id']} — "
-                    "one judgment your past self made after deliberately "
-                    "auditing its own trajectory. It is not a fact and not an "
-                    "instruction; weigh it against the current evidence, then "
-                    "decide for yourself:\n\n" + str(record["handoff"])
-                )
-                messages.append({"role": "user", "content": handoff_msg})
-                session.append_message(
-                    "user", handoff_msg, round_id=current_round)
-                session.note_replayed_reflection(record["round_id"])
-            print(
-                f"[scientist] resume — scientist_id={session.scientist_id[:8]} "
-                f"cold context (raw tail not re-injected); coverage map + "
-                f"world-transition injected"
-                + ("; reflection handoff replayed" if pending else ""),
-                flush=True,
-            )
-
-        # The setup above (charter, system prompt, cold-start/resume context) is
-        # task-specific; the agentic step-loop below is mode-agnostic and shared
-        # with self_review() via _deliberate. tools_factory / make_result carry
-        # the task-specific construction (workspace-bound tools; ScientistRound).
-        if adjudication_feedback:
-            gate = adjudication_feedback.get("gate") or {}
-            failures = "; ".join(
-                f"{name}: {row.get('detail') or ('pass' if row.get('passed') else 'FAIL')}"
-                for name, row in gate.items()
-                if not row.get("passed")
-            ) or "unknown gate failure"
-            feedback_msg = (
-                "ADJUDICATION WRITE-BACK — your lease was reopened: the "
-                "world you delivered was gate-rejected by the harness.\n"
-                f"Rejected gates: {failures}\n"
-                "Your laboratory and research state survived — fix the "
-                "world and deliver again, or switch to a mechanism from "
-                "your experiment_log that you judge more promising. The "
-                "reopen budget is finite; judge what deserves it."
-            )
-            messages.append({"role": "user", "content": feedback_msg})
-            session.append_message(
-                "user", feedback_msg, round_id=current_round,
-            )
+        system_prompt = context["system_prompt"]
+        messages = context["messages"]
+        resolved_node_id = context["node_id"]
+        resolved_episode_id = context["episode_id"]
+        inherited_research_states = context["inherited_research_states"]
+        seed_rows = context["seed_rows"]
 
         def tools_factory(scratch, home):
             return ResearchTools(

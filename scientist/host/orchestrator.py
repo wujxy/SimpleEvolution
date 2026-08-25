@@ -19,8 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .runtime import ApptainerRuntime, MountMap
-from .model import ChatModel
-from .context import build_world_transition_pack
+from ..model import ChatModel
+from ..context import build_world_transition_pack
 from .scientist import (
     ContextPolicy,
     ProposerError,
@@ -31,7 +31,7 @@ from .scientist import (
     ScientistAgent,
     _SELF_REVIEW_DEFAULT_DEFER,
 )
-from .scientist_session import ScientistSession
+from ..scientist_session import ScientistSession
 from simpleevo.research_state import ResearchState
 
 

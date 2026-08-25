@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from scientist.agent_runtime import AgentRuntime
-from scientist.research_agent import WorkingState
+from scientist.host.agent_runtime import AgentRuntime
+from scientist.host.research_agent import WorkingState
 
 
 class FakeAgent:

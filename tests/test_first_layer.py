@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from scientist.context import build_first_layer_pack
-from scientist.wake import build_wake_view, first_layer
+from scientist.host.wake import build_wake_view, first_layer
 from simpleevo.db.lease_writer import upsert_lease_research_state
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.db.store import GateDecision, ResearchStore

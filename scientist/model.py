@@ -7,6 +7,7 @@ environment variable authenticates it.
 """
 from __future__ import annotations
 
+import json
 import os
 import random
 import time
@@ -51,9 +52,25 @@ class EmptyReplyError(ModelError):
 
 
 @dataclass(frozen=True)
+class ToolCall:
+    """One provider-native tool call, arguments kept BOTH ways.
+
+    ``arguments`` is the parsed dict when the provider's JSON parsed (the
+    normal case — the provider emits tool arguments as a JSON string); it is
+    None when parsing failed, and ``arguments_raw`` then carries the bytes so
+    the caller's repair path can quote them back to the model."""
+
+    id: str = ""
+    name: str = ""
+    arguments: dict | None = None
+    arguments_raw: str = ""
+
+
+@dataclass(frozen=True)
 class ModelReply:
     text: str
     usage: object = None
+    tool_calls: tuple[ToolCall, ...] = ()
 
 
 class ChatModel(Protocol):
@@ -64,6 +81,7 @@ class ChatModel(Protocol):
         messages: list[dict],
         timeout_seconds: float,
         json_object: bool = True,
+        tools: list[dict] | None = None,
     ) -> ModelReply:
         """Return one assistant message.
 
@@ -74,6 +92,14 @@ class ChatModel(Protocol):
         json_object calls whose prompt lacks the word 'json', and its
         json_object mode is the fragile one that has returned empty/missing
         content before.
+
+        ``tools`` switches the call to provider-native tool calling: the
+        OpenAI-compatible ``tools`` parameter is sent instead of
+        ``response_format``, and the reply may carry ``tool_calls``
+        (structured calls — no JSON-in-prose protocol to repair). Messages
+        may then contain the wire forms ``{"role": "assistant", ...,
+        "tool_calls": [...]}`` and ``{"role": "tool", "tool_call_id": ...,
+        "content": ...}``; they pass through untouched.
         """
 
 
@@ -132,7 +158,8 @@ class _RetryChatModel:
         return delay * random.uniform(0.75, 1.25)
 
     def _create(self, *, system: str, messages: list[dict],
-                remaining: float, json_object: bool = True):
+                remaining: float, json_object: bool = True,
+                tools: list[dict] | None = None):
         raise NotImplementedError
 
     def _to_reply(self, response) -> ModelReply:
@@ -145,6 +172,7 @@ class _RetryChatModel:
         messages: list[dict],
         timeout_seconds: float,
         json_object: bool = True,
+        tools: list[dict] | None = None,
     ) -> ModelReply:
         deadline = time.monotonic() + max(timeout_seconds, 0.0)
         last_exc: Exception | None = None
@@ -162,7 +190,7 @@ class _RetryChatModel:
                 # retry like any other transient failure.
                 response = self._create(
                     system=system, messages=messages, remaining=remaining,
-                    json_object=json_object,
+                    json_object=json_object, tools=tools,
                 )
                 return self._to_reply(response)
             except Exception as exc:
@@ -230,7 +258,8 @@ class OpenAICompatChatModel(_RetryChatModel):
         self._stream_usage = True
 
     def _create(self, *, system: str, messages: list[dict],
-                remaining: float, json_object: bool = True):
+                remaining: float, json_object: bool = True,
+                tools: list[dict] | None = None):
         kwargs: dict = dict(
             model=self.model,
             messages=[{"role": "system", "content": system}, *messages],
@@ -239,7 +268,14 @@ class OpenAICompatChatModel(_RetryChatModel):
         )
         if self.max_output_tokens:
             kwargs["max_tokens"] = self.max_output_tokens
-        if json_object:
+        if tools:
+            # Native tool calling: the structured channel replaces the
+            # json_object guard entirely (sending both is a 400 on most
+            # gateways). The model emits tool_calls instead of JSON prose —
+            # the whole JSON-in-prose protocol-repair class disappears.
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+        elif json_object:
             # The Scientist protocol needs strict JSON. Free-text consumers
             # (cognitive transformer) pass json_object=False: DeepSeek 400s
             # json_object calls whose prompt lacks 'json', and json mode is
@@ -267,6 +303,10 @@ class OpenAICompatChatModel(_RetryChatModel):
         parts: list[str] = []
         usage = None
         finish_reason = None
+        # Native tool calls arrive as per-index fragments across stream
+        # chunks: the first fragment carries id + function name, later ones
+        # append argument bytes. Assemble by index, then parse.
+        tool_fragments: dict[int, dict] = {}
         for chunk in response:
             chunk_usage = getattr(chunk, "usage", None)
             if chunk_usage is not None:
@@ -280,23 +320,77 @@ class OpenAICompatChatModel(_RetryChatModel):
             content = getattr(delta, "content", None) if delta else None
             if content:
                 parts.append(content)
-        text = "".join(parts)
-        if usage is not None and hasattr(usage, "model_dump"):
-            usage = usage.model_dump()
-        if not text.strip():
-            # Carry the evidence: finish_reason=length points at the
-            # thinking budget eating the reply (lower reasoning_effort);
-            # a null finish_reason points at a truncated stream.
-            completion_tokens = (
-                usage.get("completion_tokens") if isinstance(usage, dict)
-                else None
-            )
-            raise EmptyReplyError(
-                "chat model returned an empty assistant message "
-                f"(finish_reason={finish_reason}, "
-                f"completion_tokens={completion_tokens})"
-            )
-        return ModelReply(text=text, usage=usage)
+            if delta is not None:
+                for tc in getattr(delta, "tool_calls", None) or ():
+                    index = getattr(tc, "index", None)
+                    index = 0 if index is None else int(index)
+                    slot = tool_fragments.setdefault(
+                        index, {"id": "", "name": "", "arguments": ""},
+                    )
+                    if getattr(tc, "id", None):
+                        slot["id"] = tc.id
+                    function = getattr(tc, "function", None)
+                    if function is None:
+                        continue
+                    if getattr(function, "name", None):
+                        slot["name"] += function.name
+                    if getattr(function, "arguments", None):
+                        slot["arguments"] += function.arguments
+        return _assemble_stream_reply(parts, usage, finish_reason,
+                                      tool_fragments)
+
+
+def _assemble_stream_reply(
+    parts: list[str], usage, finish_reason, tool_fragments: dict[int, dict],
+) -> ModelReply:
+    """The shared tail of every streaming Chat Completions decoder: join
+    content, normalize usage to a dict, assemble tool calls by index, and
+    fail loudly on an empty reply (finish_reason/completion_tokens carried
+    as evidence). Both the SDK transport and the pure-stdlib transport
+    (model_stdlib) reduce to this — one wire contract, one assembly."""
+    text = "".join(parts)
+    if usage is not None and hasattr(usage, "model_dump"):
+        usage = usage.model_dump()
+    tool_calls = tuple(
+        _tool_call_from_fragment(tool_fragments[index])
+        for index in sorted(tool_fragments)
+        if tool_fragments[index]["name"]
+    )
+    if not text.strip() and not tool_calls:
+        # Carry the evidence: finish_reason=length points at the
+        # thinking budget eating the reply (lower reasoning_effort);
+        # a null finish_reason points at a truncated stream.
+        completion_tokens = (
+            usage.get("completion_tokens") if isinstance(usage, dict)
+            else None
+        )
+        raise EmptyReplyError(
+            "chat model returned an empty assistant message "
+            f"(finish_reason={finish_reason}, "
+            f"completion_tokens={completion_tokens})"
+        )
+    return ModelReply(text=text, usage=usage, tool_calls=tool_calls)
+
+
+def _tool_call_from_fragment(slot: dict) -> ToolCall:
+    """Assemble one ToolCall from its accumulated stream fragments.
+
+    Arguments arrive as a JSON STRING on the wire; parse to a dict so the
+    loop gets structured data (the entire point of the native channel). A
+    parse failure keeps ``arguments=None`` with the raw bytes — the caller
+    decides whether to repair or reject; silently guessing a schema here
+    would hide provider bugs."""
+    raw = slot["arguments"]
+    try:
+        arguments = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError:
+        arguments = None
+    if not isinstance(arguments, dict):
+        arguments = None
+    return ToolCall(
+        id=slot["id"], name=slot["name"],
+        arguments=arguments, arguments_raw=raw,
+    )
 
 
 _EFFORT_LEVELS = ("low", "medium", "high")
@@ -436,9 +530,17 @@ class AnthropicChatModel(_RetryChatModel):
         )
 
     def _create(self, *, system: str, messages: list[dict],
-                remaining: float, json_object: bool = True):
+                remaining: float, json_object: bool = True,
+                tools: list[dict] | None = None):
         # The Messages API has no json_object response mode; the flag is
-        # accepted for interface symmetry and ignored.
+        # accepted for interface symmetry and ignored. Native tool calling
+        # is NOT implemented on this transport — fail fast rather than
+        # silently degrading to prose where a caller expects structure.
+        if tools:
+            raise ModelError(
+                "native tool calls are not supported on the "
+                "anthropic transport"
+            )
         return self.client.messages.create(
             model=self.model,
             system=system,

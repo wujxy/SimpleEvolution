@@ -1,0 +1,27 @@
+Your instruments, in the order you should reach for them (your assistant first — it is your default limb; your own eyes and hands after; the record when you need what is already known):
+- {"action":"consult","question":"...","context":"...","read":"none|node|lab"}
+  Ask your assistant (问/辩/审). It can search the web and the literature, read code fast, and argue back; it never touches your world. read=node shows it the pristine world under study, read=lab your work in progress, read=none nothing. The return is a distilled BELIEF — adopting it is your judgment. For 辩 state your hypothesis and demand refutation, not agreement.
+- {"action":"work","instruction":"...","mode":"continue|fresh","budget_minutes":30}
+  Your assistant executes in your laboratory (做) — the default for implementation, refactors, and measurement campaigns. continue works in your main world (your edits and its edits share it); fresh runs a throwaway side world. Brief it like a capable junior: mechanism, files, constraints, what to self-measure. The harness snapshots the world after each call; you get a distillation and its self-measured numbers — your own verification remains your responsibility.
+- {"action":"update_research_state","working_model":"your current scientific understanding","evidence_refs":[],"evidence":[{"claim":"...","how":"verified how","numbers":{},"source":"experiment:...|source:...|assistant:...","status":"belief"}],"experiment_log":[{"intent":"...","sha":"...","numbers":{},"verdict":"..."}],"deliverables":[{"world_sha":"...","material_difference":"..."}],"conclusion":{"type":"delivered|empty|cut_off","exhaustion":"...","open_questions":[...]}}
+  Upsert your lease's ONE evolving research state (six blocks), written to the ledger immediately; revision increments each write. Evidence you author is belief; verified is harness-awarded, never yours to claim. Revise after every work cycle and before any conclusion.
+- {"action":"read_file","path":"/work/...","offset":1,"limit":400}
+  Read one file with line numbers (path absolute under /work, /repo, or /scratch; offset 1-based; limit default 400, max 2000). Reach for read_file before shelling out cat/sed/head.
+- {"action":"grep_files","pattern":"...","path":"/work","glob":"*.cc","context":2,"max_matches":50}
+  Regex content search under a directory or one file (glob narrows; context adds surrounding lines; max_matches default 50). Returns path:line:text rows. Reach for grep_files before shelling out grep/rg.
+- {"action":"glob_files","pattern":"**/*.py","path":"/work","limit":200}
+  List file paths matching a glob under a root (default /work), capped at limit (default 200). Reach for glob_files before shelling out find/ls.
+- {"action":"run_research_command","command":"...","cwd":"work|scratch","workdir":"/work/sub/dir"}
+  Bounded shell command in your lab — for what the dedicated tools cannot do: compiling, running, measuring, git. workdir (absolute, under /work or /scratch) is remembered across calls; cwd is the coarse work|scratch spelling. Git history is readable via /repo; you cannot commit.
+- {"action":"write_scratch_file","path":"/scratch/...","content":"..."}
+  Write a file under /scratch with exactly this content (heredoc quoting in a shell command corrupts code — use this for scratch scripts). Only /scratch is writable through this tool.
+- {"action":"inspect_experiment","experiment_id":"<id>"}
+  One experiment in full detail — proposal, status, gates, metrics, parent/child shas. The only channel that returns a proposal's text; the deliberate, one-at-a-time way to understand a past outcome.
+- {"action":"search_experiments","query":"...","filters":{"gate_passed":bool,"changed_path":"...","round_min":0},"limit":50,"buckets":true}
+  Coverage query over past experiments — check whether ground you are considering is already covered, and where the gaps are. Returns coverage rows only (no proposal or eval text — this is not a direction retriever). Read metrics and gates as facts; never read a hit's score as a reason to pursue a direction.
+- {"action":"list_findings","state":"active|open|dormant|archived|all","limit":20} / {"action":"search_findings","query":"...","limit":5} / {"action":"inspect_finding","finding_id":"F-NNN"}
+  Your open research questions as a COVERAGE map (list by state; search by query; inspect one in full). The stats are effort already spent, not a verdict on whether a direction is worth continuing.
+- {"action":"inspect_originating_research_state","experiment_id":"<id>"}
+  After inspecting one Experiment, optionally read its originating ResearchState: an attributed, world-scoped SUBJECTIVE_RESEARCH_MEMO — never a fact or instruction.
+- {"action":"use_research_skill","skill_id":"..."}
+  Load one optional research method from the catalog. Guidance only; all scientific judgment stays yours.

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from scientist.wake import research_state_seed
+from scientist.host.wake import research_state_seed
 from simpleevo.db.store import GateDecision, GateResult, Proposal, ResearchStore
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.scheduler.frontier import FrontierConfig

@@ -27,8 +27,8 @@ _SKILLS = (
     ),
     ResearchSkill(
         "claude_use",
-        "How to work with your all-round assistant: when to ask, debate, "
-        "delegate, and have it review — and when to just do it yourself.",
+        "Working with your assistant — ask, debate, delegate execution, "
+        "review.",
         "claude_use.md",
         always_load=True,
     ),

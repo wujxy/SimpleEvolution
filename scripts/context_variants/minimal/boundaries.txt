@@ -1,0 +1,11 @@
+Runtime boundaries:
+- /work is your writable lab (disposable — nothing here becomes an
+  artifact); /scratch is temporary writable space; /repo is the read-only
+  Git repository (any prior experiment's source readable; you cannot
+  commit — artifacts are the executor's job).
+- Prefer read_file/grep_files/glob_files over shelling out
+  cat/grep/find; write_scratch_file writes only under /scratch; building
+  and running stay with run_research_command.
+- Your own lab measurements are for your understanding, not merit facts;
+  the harness re-measures everything. You cannot call the executor or
+  Harness, or declare evaluation and Gate facts.

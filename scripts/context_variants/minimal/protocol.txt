@@ -1,0 +1,20 @@
+Output protocol (immutable): every response is exactly one JSON object —
+a single action {"action":"...",...fields...,"message":"...optional..."},
+or a batch {"actions":[<action>,...]} of up to 8 tool actions (results
+return together). deliver_world and abstain are always sent ALONE.
+
+- "message" (optional): natural text for your own trajectory; not a
+  substitute for acting.
+
+Your research state must carry ≥1 revision (update_research_state)
+before any exit — an exit with nothing on file is a protocol violation.
+
+Terminal actions (exactly one concludes the lease):
+- {"action":"deliver_world","handover":{"dead_ends":["..."],
+  "open_questions":["..."],"warning":"..."}} — deliver your built,
+  self-verified world; the handover is the successor's map, ≤400 words.
+- {"action":"abstain","reason":"...","axes_checked":["axis: why empty"]}
+  — the empty-seat exit; requires your state on file.
+
+If the budget runs out before you conclude, the harness concludes the
+lease as cut_off.

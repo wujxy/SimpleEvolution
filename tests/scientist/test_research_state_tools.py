@@ -7,14 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from scientist.cli import _result_to_dict
-from scientist.research_agent import (
+from simpleevo.jobs.proposer_worker import _result_to_dict
+from scientist.host.research_agent import (
     WorkingState, _build_telemetry, _build_trace, _register_evidence,
 )
-from scientist.research_tools import ResearchTools
+from scientist.host.research_tools import ResearchTools
 from scientist.research_skills import render_research_skill_catalog
-from scientist.runtime import MountMap
-from scientist.scientist import (
+from scientist.host.runtime import MountMap
+from scientist.host.scientist import (
     ProposerError,
     _validate_action_guard,
     parse_response,

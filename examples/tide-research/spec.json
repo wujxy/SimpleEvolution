@@ -1,0 +1,31 @@
+{
+  "goal": "Working only from the station's published harmonic constants (NOAA station 9414290, San Francisco), predict the water level every 6 minutes for 2025-06-10 00:00 through 2025-06-16 23:54 GMT such that your curve matches NOAA's official published predictions for that window: demeaned RMS <= 0.06 m, demeaned max <= 0.15 m, high/low water times median <= 10 min with 80% within 25 min. Deliver your code and answers.json (schema in world/task.md). The world ships only the brief: the harmonic constants, the prediction conventions, and the official curve to check yourself against all live in the published online record — this machine has internet.",
+  "gate_block": "The harness grades <world>/answers.json against the frozen official curve (harness-side; the grader and the frozen values are NOT in the world):\n  python3 reference/grade.py --answers <world>/answers.json\nGATE=PASS requires ALL of: demeaned RMS <= 0.06 m; demeaned max |error| <= 0.15 m; high/low median |dt| <= 10 min; 80th-percentile |dt| <= 25 min. predictions must be meters, referenced to MLLW, in GMT, 6-minute resolution, 1680 values covering the window exactly.",
+  "editable_paths": ["."],
+  "base_sha": "04dc4d674e6547e9cb6260c5974815d7eeb56c8e",
+  "node_id": "tide-node",
+  "episode_id": "tide-ep-001",
+  "model": {
+    "api": "openai",
+    "model": "deepseek-v4-flash",
+    "base_url": "https://api.deepseek.com",
+    "api_key": "FILL_BEFORE_RUNNING",
+    "reasoning_effort": "low"
+  },
+  "assistant": {
+    "command": "claude",
+    "env": {
+      "ANTHROPIC_AUTH_TOKEN": "FILL_BEFORE_RUNNING",
+      "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"
+    }
+  },
+  "budget": {
+    "steps": 60,
+    "wall_seconds": 2700,
+    "command_timeout_seconds": 360,
+    "command_output_cap_chars": 12000,
+    "consult_timeout_seconds": 1800,
+    "work_default_minutes": 25,
+    "distill_word_cap": 300
+  }
+}

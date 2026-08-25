@@ -1,342 +1,227 @@
-"""Worker CLI for one SimpleEvolution proposer episode.
+"""The scientist CLI — one agent, one world.
 
-Usage:
-    python -m scientist.cli --manifest path/to/manifest.json
+    python -m scientist.cli --spec spec.json --world DIR
+
+Standalone, the way claude code is standalone: give it a directory (the
+world) and a spec (goal, gates, lens, model, budget); the scientist
+reads, deliberates, calls its claude assistant, runs experiments, and
+walks itself to one of the two exits. Everything it produces — session,
+research state, assistant transcripts, usage, and the final
+``conclusion.json`` — lands inside the world under ``.scientist/``.
+
+simpleevo uses the same one line: open a world container, write the
+spec, run this command, read the world back at close. It never sits in
+the loop; the spec is the whole opening handshake and
+``conclusion.json`` the whole exit contract.
+
+Spec shape (see docs/design; all keys optional unless marked):
+    goal, gate_block, editable_paths[], base_sha, lens{}, node_id,
+    hints[], charter (overrides prompts/proposer.md),
+    model{api?|model, base_url, api_key, reasoning_effort},
+    assistant{command, model, effort, node_world, env{}},
+    budget{steps, wall_seconds, command_timeout_seconds,
+           command_output_cap_chars, consult_timeout_seconds,
+           work_default_minutes, distill_word_cap},
+    opening_messages[{role, content}] (default: the cold start),
+    paths{work, repo, scratch} — container namespace, when running in
+    the world container (standalone defaults: --world everywhere).
 """
 from __future__ import annotations
 
 import argparse
 import json
-import shutil
-import socket
+import time
 from pathlib import Path
 
-from simpleevo.db.queries import ResearchQueries
-from simpleevo.generator import load_generator_basis
-from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
+from .agent import _COLD_START, build_system_prompt, run_episode
+from .assistant_tools import AssistantConfig, InWorldAssistant
+from .ledger import LocalLedger
+from .model import ModelError
+from .model_stdlib import build_stdlib_chat_model
+from .scientist_session import ScientistSession
+from .world import LocalWorld
 
-from .assistant.git_worktree import GitWorkspaceProvider
-
-from .memory.l2 import L2MemoryService
-from .wake import build_wake_view
-from .model import build_chat_model
-from .orchestrator import ProposerOrchestrator
-from .runtime import ApptainerRuntime, world_mount_map
-from .scientist import ContextPolicy
+PROMPT_VERSION = "oneworld-v1"
 
 
-def _load_manifest(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))
+def _resolve_roots(args, spec: dict) -> dict:
+    """Map the namespace onto this machine.
 
-
-def _inherit_parent_session(
-    run_dir: Path,
-    inherited_from_episode_id: str | None,
-    session_dir: Path,
-    *,
-    first_layer_seed: dict | None = None,
-) -> None:
-    """Copy the parent episode's final cognition into this episode's session.
-
-    Same-Node reseeds may start from the parent episode's persisted session.
-    Delivery-produced Child Nodes instead use ``first_layer_seed`` and skip
-    this copy so sibling trajectory cannot leak in. Only run on first entry —
-    a crash retry resumes the current Episode (Resume ≠ Evolution).
-    """
-    if not inherited_from_episode_id or first_layer_seed:
-        return
-    parent_session_dir = run_dir / "episodes" / inherited_from_episode_id / "session"
-    if not parent_session_dir.is_dir():
-        return
-    session_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(parent_session_dir, session_dir, dirs_exist_ok=True)
-
-
-def _write_l1_trace(
-    run_dir: Path,
-    invocation_id: str,
-    *,
-    role: str,
-    identity: dict[str, str | None],
-    trace: dict | None,
-    error: str | None,
-) -> None:
-    """Write the proposer's deliberation trace into the L1 store."""
-    try:
-        from simpleevo.trace.store import TraceStore
-
-        store = TraceStore(run_dir)
-        store.start_invocation(invocation_id, role=role, identity=identity)
-        store.append_event(
-            invocation_id,
-            "proposer_result",
-            {"trace": trace or {}, "error": error},
-            identity=identity,
-        )
-    except Exception as exc:
-        print(f"[trace] proposer L1 write failed: {exc}", flush=True)
-
-
-def _result_to_dict(result, *, world_sha: str | None = None) -> dict:
-    conclusion = dict(getattr(result, "conclusion", None) or {})
-    # The worker result carries the seat's conclusion; the delivery's
-    # world_sha is snapshotted HERE by the harness (the seat cannot choose
-    # a different SHA than its laboratory's current state).
-    if conclusion.get("kind") == "deliver":
-        conclusion["world_sha"] = world_sha
-        conclusion.setdefault("node_id", result.node_id)
-        conclusion.setdefault("episode_id", result.episode_id)
-    else:
-        conclusion.setdefault("node_id", result.node_id)
-        conclusion.setdefault("episode_id", result.episode_id)
+    In-container the spec's ``paths`` are the container's own mounts
+    (identity); standalone, ``--world`` is the /work root and repo
+    defaults to it (a plain clone serves as its own /repo)."""
+    paths = dict(spec.get("paths") or {})
+    work = Path(args.world)
     return {
-        "episode_id": result.episode_id,
-        "node_id": result.node_id,
-        "outcome": result.outcome,
-        "conclusion": conclusion,
-        "abstain_reason": result.abstain_reason,
-        "telemetry": result.deliberation_telemetry,
-        "trace": result.trace,
+        "work": work,
+        "repo": Path(args.repo) if args.repo else Path(
+            paths.get("repo") or work),
+        "scratch": (
+            Path(args.scratch) if args.scratch else Path(
+                paths.get("scratch") or work / ".scientist" / "scratch")
+        ),
     }
+
+
+def _opening_messages(spec: dict) -> list[dict]:
+    messages = [
+        {"role": str(m.get("role") or "user"),
+         "content": str(m.get("content") or "")}
+        for m in spec.get("opening_messages") or []
+        if isinstance(m, dict) and str(m.get("content") or "").strip()
+    ]
+    return messages or [{"role": "user", "content": _COLD_START}]
+
+
+def _write_conclusion(ledger_root: Path, result: dict) -> Path:
+    """The exit contract file: what the harness reads when it recovers
+    the world. Mechanical record — the conclusion as validated at the
+    door, plus the step count and the action log."""
+    path = ledger_root / "conclusion.json"
+    path.write_text(
+        json.dumps(
+            {
+                "conclusion": result["conclusion"],
+                "outcome": result["outcome"],
+                "steps": result["steps"],
+                "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "actions": result["actions"],
+            },
+            ensure_ascii=False, indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _run_probe(spec: dict, args) -> int:
+    """One model call against the assembled context: the cheap check
+    that a spec produces the standing context and the first actions we
+    expect (grounding first, coverage query first)."""
+    roots = _resolve_roots(args, spec)
+    budget = dict(spec.get("budget") or {})
+    world = LocalWorld(
+        work=roots["work"], repo=roots["repo"], scratch=roots["scratch"],
+        timeout_seconds=int(budget.get("command_timeout_seconds", 360)),
+        cap_chars=int(budget.get("command_output_cap_chars", 12000)),
+    )
+    ledger = LocalLedger(world.work / ".scientist")
+    assistant = InWorldAssistant(
+        world=world, config=AssistantConfig.from_spec(spec),
+        ledger=ledger, episode_id=spec.get("episode_id") or "probe",
+        has_benchmark=bool(spec.get("editable_paths")),
+    )
+    model = build_stdlib_chat_model(dict(spec.get("model") or {}))
+    from .native_tools import NATIVE_TOOLS, native_actions
+
+    system_prompt = build_system_prompt(spec, roots=roots)
+    messages = _opening_messages(spec)
+    reply = model.complete(
+        system=system_prompt, messages=messages,
+        timeout_seconds=float(budget.get("wall_seconds", 3600)),
+        tools=list(NATIVE_TOOLS),
+    )
+
+    actions = native_actions(reply)
+    print("=" * 70)
+    print(f"PROBE: {len(actions)} actions, "
+          f"{len(reply.tool_calls)} tool calls, "
+          f"text {len(reply.text)} chars")
+    for action in actions:
+        shown = dict(action)
+        if "_arguments_raw" in shown:
+            shown.pop("_arguments_raw", None)
+        print(json.dumps(shown, ensure_ascii=False, indent=2))
+    if not actions:
+        print(f"TEXT: {reply.text[:600]}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="proposer")
-    parser.add_argument("--manifest", required=True, type=Path)
-    parser.add_argument("--job-id", default=None,
-                        help="backend job id (condor cluster.proc); None for local")
-    parser.add_argument("--backend", default="local",
-                        help="scheduler backend: local | condor")
+    parser = argparse.ArgumentParser(
+        prog="scientist",
+        description="One scientist, one world: research to an exit.",
+    )
+    parser.add_argument("--spec", required=True, type=Path,
+                        help="spec.json (the whole opening handshake)")
+    parser.add_argument("--world", required=True, type=Path,
+                        help="the world directory (the /work root here)")
+    parser.add_argument("--repo", type=Path, default=None,
+                        help="read-only repo root (default: the world)")
+    parser.add_argument("--scratch", type=Path, default=None,
+                        help="scratch root (default: world/.scientist/scratch)")
+    parser.add_argument("--session", type=Path, default=None,
+                        help="session dir (default: world/.scientist/session)")
+    parser.add_argument("--probe", action="store_true",
+                        help="one model call against the assembled context, "
+                             "print the chosen actions, exit")
     args = parser.parse_args(argv)
 
-    manifest = _load_manifest(args.manifest)
-    payload = manifest.get("payload", manifest)
+    spec = json.loads(args.spec.read_text(encoding="utf-8"))
+    if args.probe:
+        return _run_probe(spec, args)
 
-    run_dir = Path(payload["run_dir"])
-    episode_id = payload["episode_id"]
-    node_id = payload["node_id"]
-    proposal_ids = list(payload.get("proposal_ids", []))
-    attempt_id = str(payload.get("attempt_id", ""))
-    attempt = int(payload.get("attempt", 1))
-    goal = payload["goal"]
-    editable = list(payload.get("editable_paths", []))
-    gate_block = payload.get("gate_block", "")
-    proposal_slots = int(payload.get("proposal_slots", 1))
-    scientist_steps = int(payload.get("scientist_steps", 200))
-    runtime_image = Path(payload["runtime_image"])
-    repo_path = Path(payload["repo_path"])
+    budget = dict(spec.get("budget") or {})
+    roots = _resolve_roots(args, spec)
+    episode_id = str(spec.get("episode_id") or "ep")
 
-    # Wake-time worldview assembly (module contract §3): the envelope
-    # carried IDs; every dynamic fact below is read from the store NOW.
-    wake_view = build_wake_view(
-        ResearchQueries(run_dir / "simpleevo.db"),
-        load_generator_basis(),
-        node_id=node_id,
-        episode_id=episode_id,
+    world = LocalWorld(
+        work=roots["work"], repo=roots["repo"], scratch=roots["scratch"],
+        timeout_seconds=int(budget.get("command_timeout_seconds", 360)),
+        cap_chars=int(budget.get("command_output_cap_chars", 12000)),
     )
-    node_sha = wake_view["node_sha"]
-    inherited_from_episode_id = (
-        wake_view["inherited_from_episode_id"] or None)
-    seat = wake_view["seat"]
-    first_layer_seed = wake_view.get("first_layer") or {}
-    world_transition = wake_view.get("world_transition") or {}
-    adjudication_feedback = wake_view.get("adjudication_feedback")
-
-    # Materialize the lease's LABORATORY at the exact node SHA (§9): one
-    # persistent writable world for the whole lease.  The seat's own shell
-    # and every work() call share it; a reopen resumes it.  Unlike the old
-    # read-only proposer workspace, the lab is NEVER dropped here — the
-    # delivered side-chain SHAs live in the clone's object store precisely
-    # so the adjudication worker can evaluate them.
-    provider = GitWorkspaceProvider(run_dir, repo_path)
-    provider.initialize()
-    from .assistant.lab import Laboratory
-
-    lab = Laboratory(
-        provider=provider, episode_id=episode_id, node_sha=node_sha,
-        editable_paths=tuple(editable),
+    ledger_root = world.work / ".scientist"
+    ledger_root.mkdir(parents=True, exist_ok=True)
+    roots["scratch"].mkdir(parents=True, exist_ok=True)
+    ledger = LocalLedger(ledger_root)
+    assistant = InWorldAssistant(
+        world=world, config=AssistantConfig.from_spec(spec),
+        ledger=ledger, episode_id=episode_id,
+        has_benchmark=bool(spec.get("editable_paths")),
     )
-    workspace = lab.main()
-
-    # Session handling: inherit the parent episode's final cognition only on
-    # FIRST entry (no lived trajectory yet).  A crash-retry of the same episode
-    # resumes the already-persisted session instead of re-inheriting (Resume ≠
-    # Evolution).
-    session_dir = run_dir / "episodes" / episode_id / "session"
+    session_dir = (
+        args.session or ledger_root / "session"
+    )
     session_dir.mkdir(parents=True, exist_ok=True)
-    if not (session_dir / "session.jsonl").exists():
-        _inherit_parent_session(
-            run_dir,
-            inherited_from_episode_id,
-            session_dir,
-            first_layer_seed=first_layer_seed,
-        )
-
-    memory_service = L2MemoryService(run_dir)
-    runtime = ApptainerRuntime(
-        image=runtime_image,
-        binds=payload.get("runtime_binds", []),
-        run_dir=run_dir,
+    session = ScientistSession._load_from_dir(
+        session_dir, PROMPT_VERSION, episode_id=episode_id,
     )
-    researcher_cfg = payload.get("researcher", {})
-    from simpleevo.trace.usage import UsageRecorder
+    system_prompt = build_system_prompt(
+        spec, notebook=session.notebook, notes=ledger.read_notes(),
+        roots=roots)
+    model = build_stdlib_chat_model(dict(spec.get("model") or {}))
 
-    usage_recorder = UsageRecorder(run_dir)
-    db_path = run_dir / "simpleevo.db"
-    lease_id = str(payload.get("allocation_id") or "")
-
-    # Guarantee the lease's research-state head row exists from the first
-    # breath: the generalized exit guard (≥1 state before ANY conclusion)
-    # then always has something on file, and a crash mid-attempt cannot
-    # evaporate the investigation.
-    from simpleevo.db.lease_writer import upsert_lease_research_state
-
-    if lease_id:
-        try:
-            upsert_lease_research_state(
-                db_path, lease_id=lease_id, episode_id=episode_id,
-                node_id=node_id,
-                working_model="(lease opened; no model registered yet)",
-            )
-        except Exception as exc:
-            print(f"[proposer] initial state upsert failed: {exc}",
-                  flush=True)
-
-    # The seat's claude assistant (consult/work) — the two hands.
-    from .assistant.hands import AssistantHands, HandTally
-
-    hands = AssistantHands(
-        run_dir=run_dir, db_path=db_path, lease_id=lease_id,
-        episode_id=episode_id, node_id=node_id, node_sha=node_sha,
-        lens=(seat or {}).get("lens_id"),
-        lab=lab, runtime_image=runtime_image,
-        executor_cfg=dict(payload.get("executor", {})),
-        editable_paths=tuple(editable),
-        read_only_binds=tuple(payload.get("read_only_binds", [])),
-        tally=HandTally(
-            max_consult_calls=payload.get("lease_max_consult_calls"),
-            max_work_calls=payload.get("lease_max_work_calls"),
-        ),
-        usage_observer=lambda usage, call_id: usage_recorder.record(
-            "assistant", usage, work_id=call_id),
-        attempt_id=attempt_id or None,
-    )
-
-    orchestrator = ProposerOrchestrator(
-        model=build_chat_model(researcher_cfg),
-        runtime=runtime,
-        timeout_seconds=int(payload.get("agent_timeout_seconds", 3600)),
-        command_timeout_seconds=int(researcher_cfg.get("command_timeout_seconds", 120)),
-        command_output_cap_chars=int(researcher_cfg.get("command_output_cap_chars", 12000)),
-        usage_observer=lambda usage: usage_recorder.record(
-            "proposer", usage, work_id=attempt_id or None,
-            lease_id=lease_id or None),
-        context_policy=ContextPolicy.from_config(payload.get("context")),
-        hands=hands,
-    )
-
-    status = "completed"
-    error = None
-    world_sha: str | None = None
     try:
-        result = orchestrator.run_episode(
-            episode_id=episode_id,
-            node_id=node_id,
-            node_sha=node_sha,
-            workspace=workspace.path,
-            goal=goal,
-            editable=editable,
-            frozen=[],
-            world_mount=world_mount_map({
-                "editable_paths": editable,
-                "read_only_binds": payload.get("read_only_binds", []),
-            }),
-            memory_service=memory_service,
-            # The Scientist's research commands validate the workspace's
-            # worktree gitdir against this repo's ``.git/worktrees``. That
-            # metadata lives in the CLONE GitWorkspaceProvider made
-            # (``run_dir/repo``), not the source repo — pass the clone, the
-            # way the experiment worker does via ``.repo``.
-            repo_path=provider.repo,
-            run_dir=run_dir,
-            gate_block=gate_block,
-            prompt_dir=Path(payload["prompt_dir"]) if payload.get("prompt_dir") else None,
-            first_layer_seed=first_layer_seed,
-            world_transition=world_transition,
-            lens=seat,
-            proposal_slots=proposal_slots,
-            scientist_steps=scientist_steps,
-            adjudication_feedback=adjudication_feedback,
+        result = run_episode(
+            model=model,
+            system_prompt=system_prompt,
+            messages=_opening_messages(spec),
+            world=world,
+            assistant=assistant,
+            ledger=ledger,
+            steps_budget=int(budget.get("steps", 200)),
+            wall_seconds=float(budget.get("wall_seconds", 3600)),
+            session=session,
         )
-        if result.outcome == "error":
-            # The orchestrator converts a research crash (API/network/protocol
-            # failure) into outcome="error" rather than raising.  Treat it as
-            # infra: report status="failed" so the Scheduler marks the Attempt
-            # failed and keeps the allocation open for retry (§16/§17) — never
-            # as a clean "completed" abstention that would close the allocation.
-            raise RuntimeError(
-                result.abstain_reason or "proposer episode errored")
-        if (result.conclusion or {}).get("kind") == "deliver":
-            # The delivery IS the laboratory's current state: the harness
-            # snapshots it mechanically at the moment of delivery.
-            world_sha = lab.snapshot("deliver")
-            if world_sha is None:
-                # No editable-path change since the node — an empty
-                # delivery is not a world.  Refuse like the scheduler
-                # would, with the reason.
-                raise RuntimeError(
-                    "deliver_world with an unchanged laboratory: the "
-                    "delivered world must differ from the purchased node"
-                )
-    except Exception as exc:
-        status = "failed"
-        error = str(exc)
-        result = type("R", (), {
-            "episode_id": episode_id,
-            "node_id": node_id,
-            "outcome": "error",
-            "conclusion": None,
-            "abstain_reason": str(exc),
-            "deliberation_telemetry": {},
-            "trace": {},
-        })()
-    # NOTE: the lab worktree is deliberately NOT removed — it is the
-    # lease's persistent world; a reopen or adjudication resumes it.
+    except ModelError as exc:
+        # Infra death (transport/model failure): fail loudly so a
+        # scheduler retries the attempt rather than reading a silent
+        # clean exit.
+        print(f"[scientist] model failure: {exc}", flush=True)
+        return 1
 
-    _write_l1_trace(
-        run_dir,
-        f"proposer-{attempt_id}" if attempt_id else f"proposer-{episode_id}",
-        role="proposer",
-        identity={
-            "episode_id": episode_id,
-            "node_id": node_id,
-            "attempt_id": attempt_id or None,
-            "attempt": str(attempt),
-        },
-        trace=result.trace,
-        error=error,
+    path = _write_conclusion(ledger_root, result)
+    conclusion = result["conclusion"] or {}
+    print(
+        f"[scientist] concluded: {result['outcome']} after "
+        f"{result['steps']} steps -> {path}",
+        flush=True,
     )
-
-    result_path = Path(manifest.get("result_path", "result.json"))
-    execution = {
-        "scheduler": args.backend,
-        "job_id": args.job_id,
-        "attempt": attempt,
-        "host": socket.gethostname(),
-    }
-    write_result(
-        result_path,
-        WorkerResult(
-            kind="proposer",
-            request_id=manifest.get("request_id", episode_id),
-            status=WorkerStatus.COMPLETED if status == "completed" else WorkerStatus.FAILED,
-            result=_result_to_dict(result, world_sha=world_sha),
-            usage=(),
-            error=error,
-            execution=execution,
-        ),
-    )
-    return 0 if status == "completed" else 1
+    if conclusion.get("kind") == "deliver":
+        handover = conclusion.get("handover") or {}
+        print(f"[scientist] warning: "
+              f"{str(handover.get('warning') or '')[:400]}", flush=True)
+    return 0
 
 
 if __name__ == "__main__":

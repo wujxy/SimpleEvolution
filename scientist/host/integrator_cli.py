@@ -7,10 +7,10 @@ import socket
 from pathlib import Path
 
 from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
-from .assistant.git_worktree import GitWorkspaceProvider, WorkspaceSpec
+from ..assistant.git_worktree import GitWorkspaceProvider, WorkspaceSpec
 
 from .integrator import IntegratorAgent
-from .model import build_chat_model
+from ..model import build_chat_model
 
 
 def main(argv: list[str] | None = None) -> int:

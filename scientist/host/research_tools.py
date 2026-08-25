@@ -25,8 +25,8 @@ from simpleevo.research_state import ResearchState
 from .research_agent import WorkingState
 from .runtime import MountMap
 from .child_processes import CHILD_PROCESSES
-from .research_files import PathBoundary, ResearchFiles
-from .research_skills import load_research_skill
+from ..research_files import PathBoundary, ResearchFiles
+from ..research_skills import load_research_skill
 
 
 @dataclass(frozen=True)
@@ -39,196 +39,6 @@ class ResearchToolSpec:
 
 
 RESEARCH_TOOL_SPECS = (
-    ResearchToolSpec(
-        action="run_research_command",
-        schema=(
-            '{"action":"run_research_command","command":"...",'
-            '"cwd":"work|scratch","workdir":"/work/sub/dir"}'
-        ),
-        description=(
-            "Run a bounded shell command in your writable lab (/work) or "
-            "scratch (/scratch). /work is the accepted source tree "
-            "materialized read-write: read it, write scratch code, compile, "
-            "run toys to understand the code. Git history (any prior "
-            "experiment SHA) is readable via /repo; you cannot commit. "
-            "workdir (absolute, under /work or /scratch) sets where the "
-            "command runs and is remembered — later commands land in the "
-            "same directory until you move; cwd is the coarse work|scratch "
-            "spelling of the same choice. Reserve this tool for what the "
-            "dedicated tools cannot do: compiling, running, measuring, git."
-        ),
-    ),
-    ResearchToolSpec(
-        action="read_file",
-        schema=(
-            '{"action":"read_file","path":"/work/...",'
-            '"offset":1,"limit":400}'
-        ),
-        description=(
-            "Read one file with line numbers. path is absolute under "
-            "/work, /repo, or /scratch; offset is the 1-based first line "
-            "(default 1); limit caps the lines returned (default 400, max "
-            "2000) and the result flags when the file continues. Your duty "
-            "for reading code: reach for read_file before shelling out "
-            "cat/sed/head."
-        ),
-    ),
-    ResearchToolSpec(
-        action="grep_files",
-        schema=(
-            '{"action":"grep_files","pattern":"...","path":"/work",'
-            '"glob":"*.cc","context":2,"max_matches":50}'
-        ),
-        description=(
-            "Search file contents for a regex under a directory or in one "
-            "file. glob narrows which files are searched; context adds "
-            "lines around each match (default 0); max_matches caps hits "
-            "(default 50). Returns path:line:text rows. Your duty for "
-            "locating where things live: reach for grep_files before "
-            "shelling out grep/rg."
-        ),
-    ),
-    ResearchToolSpec(
-        action="glob_files",
-        schema=(
-            '{"action":"glob_files","pattern":"**/*.py","path":"/work",'
-            '"limit":200}'
-        ),
-        description=(
-            "List file paths matching a glob under a root (default /work), "
-            "capped at limit (default 200). Your duty for finding files by "
-            "name: reach for glob_files before shelling out find/ls."
-        ),
-    ),
-    ResearchToolSpec(
-        action="write_scratch_file",
-        schema=(
-            '{"action":"write_scratch_file","path":"/scratch/...",'
-            '"content":"..."}'
-        ),
-        description=(
-            "Write a file under /scratch with exactly this content — the "
-            "way to create scratch scripts, since heredoc quoting in a "
-            "shell command corrupts code. Content is size-capped; only "
-            "/scratch is writable through this tool."
-        ),
-    ),
-    ResearchToolSpec(
-        action="inspect_experiment",
-        schema='{"action":"inspect_experiment","experiment_id":"<id>"}',
-        description=(
-            "Resolve ONE experiment by its experiment_id in full detail — "
-            "proposal, status, gates, metrics, parent/child node shas. This "
-            "is the deliberate, one-at-a-time way to understand a specific "
-            "past outcome; it is the only channel that returns a proposal's "
-            "text. Pair with run_research_command + "
-            "'git diff parent_sha..child_sha' to see the code change."
-        ),
-    ),
-    ResearchToolSpec(
-        action="inspect_originating_research_state",
-        schema=(
-            '{"action":"inspect_originating_research_state",'
-            '"experiment_id":"<id>"}'
-        ),
-        description=(
-            "After explicitly inspecting one Experiment, optionally read its "
-            "originating ResearchState. The result is an attributed, world-"
-            "scoped SUBJECTIVE_RESEARCH_MEMO, never a fact or instruction."
-        ),
-    ),
-    ResearchToolSpec(
-        action="list_findings",
-        schema=(
-            '{"action":"list_findings","state":"active|open|dormant|'
-            'archived|all","limit":1-20}'
-        ),
-        description=(
-            "List Findings (your open research questions) by operational "
-            "state — a COVERAGE map, not a direction menu. Returns id, "
-            "mechanisms, code_regions, and derived stats (effort already "
-            "spent). The question text is NOT included (surfacing it would "
-            "anchor you to keep drilling the same questions); use "
-            "inspect_finding to recall one question deliberately. Read the "
-            "stats as what is covered, not as a recommendation of what to do "
-            "next."
-        ),
-    ),
-    ResearchToolSpec(
-        action="search_findings",
-        schema='{"action":"search_findings","query":"...","limit":1-20}',
-        description=(
-            "Rank existing Findings by BM25+MMR against the query. Use to "
-            "check whether your candidate research question is already open."
-        ),
-    ),
-    ResearchToolSpec(
-        action="inspect_finding",
-        schema='{"action":"inspect_finding","finding_id":"F-NNN"}',
-        description=(
-            "Return the full record for one Finding: question, scope, "
-            "operational state, experiment_refs, and derived stats. Treat the "
-            "stats as coverage (effort already spent), not as a verdict on "
-            "whether the direction is worth continuing. Never contains an "
-            "LLM-authored conclusion."
-        ),
-    ),
-    ResearchToolSpec(
-        action="search_experiments",
-        schema=(
-            '{"action":"search_experiments","query":"...",'
-            '"filters":{"gate_passed":bool,'
-            '"changed_path":"path/prefix","status":"..."},'
-            '"limit":1-50,"buckets":true|false}'
-        ),
-        description=(
-            "A COVERAGE query over past experiments — use it to check whether "
-            "ground you are considering is already covered, and to see where "
-            "the gaps (uncovered regions) are. Returns coverage rows only "
-            "(experiment_id, outcome, changed region, metrics) — "
-            "NO proposal or eval text, because this is not a direction "
-            "retriever. Default buckets=true returns {relevant, contrasting, "
-            "diverse}; the contrasting/diverse buckets point at un- or "
-            "differently-explored regions. To understand one experiment's "
-            "actual change and result in detail, inspect_experiment it "
-            "deliberately. Filters stack as AND. Read the metrics and gates as "
-            "facts; never read a hit's score or similarity as a reason to "
-            "pursue or continue a direction."
-        ),
-    ),
-    ResearchToolSpec(
-        action="use_research_skill",
-        schema='{"action":"use_research_skill","skill_id":"..."}',
-        description=(
-            "Load one optional research method from the catalog. It returns "
-            "guidance only: you retain all scientific judgment and decide "
-            "whether to register a ResearchState or submit a Proposal."
-        ),
-    ),
-    ResearchToolSpec(
-        action="update_research_state",
-        schema=(
-            '{"action":"update_research_state",'
-            '"working_model":"your current scientific understanding",'
-            '"evidence_refs":[],'
-            '"evidence":[{"claim":"...","how":"verified how",'
-            '"numbers":{},"source":"experiment:...|source:...|assistant:...",'
-            '"status":"belief"}],'
-            '"experiment_log":[{"intent":"...","sha":"...","numbers":{},'
-            '"verdict":"..."}],'
-            '"deliverables":[{"world_sha":"...","material_difference":"..."}],'
-            '"conclusion":{"type":"delivered|empty|cut_off",'
-            '"exhaustion":"...","open_questions":[...]}}'
-        ),
-        description=(
-            "Upsert your lease's ONE evolving research state (six blocks). "
-            "It is written to the ledger immediately — a crash no longer "
-            "evaporates your investigation — and revision increments each "
-            "write. Evidence entries you author are belief; verified is "
-            "harness-awarded at graduation, never yours to claim. Register "
-            "after every work cycle, and before any conclusion."
-        ),
-    ),
     ResearchToolSpec(
         action="consult",
         schema=(
@@ -251,7 +61,8 @@ RESEARCH_TOOL_SPECS = (
             '"budget_minutes":30}'
         ),
         description=(
-            "Have your assistant do heavy lifting in your laboratory (做). "
+            "Your assistant executes in your laboratory (做) — the default "
+            "for implementation, refactors, and measurement campaigns. "
             "continue works in your main world (your edits and its edits "
             "share it); fresh runs a throwaway side world. Brief it like a "
             "capable junior: mechanism, files, constraints, what to "
@@ -260,15 +71,146 @@ RESEARCH_TOOL_SPECS = (
             "own verification remains your responsibility."
         ),
     ),
+    ResearchToolSpec(
+        action="update_research_state",
+        schema=(
+            '{"action":"update_research_state",'
+            '"working_model":"your current scientific understanding",'
+            '"evidence_refs":[],'
+            '"evidence":[{"claim":"...","how":"verified how",'
+            '"numbers":{},"source":"experiment:...|source:...|assistant:...",'
+            '"status":"belief"}],'
+            '"experiment_log":[{"intent":"...","sha":"...","numbers":{},'
+            '"verdict":"..."}],'
+            '"deliverables":[{"world_sha":"...","material_difference":"..."}],'
+            '"conclusion":{"type":"delivered|empty|cut_off",'
+            '"exhaustion":"...","open_questions":[...]}}'
+        ),
+        description=(
+            "Upsert your lease's ONE evolving research state (six blocks), "
+            "written to the ledger immediately; revision increments each "
+            "write. Evidence you author is belief; verified is "
+            "harness-awarded, never yours to claim. Revise after every work "
+            "cycle and before any conclusion."
+        ),
+    ),
+    ResearchToolSpec(
+        action="read_file",
+        schema=(
+            '{"action":"read_file","path":"/work/...",'
+            '"offset":1,"limit":400}'
+        ),
+        description=(
+            "Read one file with line numbers (path absolute under /work, "
+            "/repo, or /scratch; offset 1-based; limit default 400, max "
+            "2000). Reach for read_file before shelling out cat/sed/head."
+        ),
+    ),
+    ResearchToolSpec(
+        action="grep_files",
+        schema=(
+            '{"action":"grep_files","pattern":"...","path":"/work",'
+            '"glob":"*.cc","context":2,"max_matches":50}'
+        ),
+        description=(
+            "Regex content search under a directory or one file (glob "
+            "narrows; context adds surrounding lines; max_matches default "
+            "50). Returns path:line:text rows. Reach for grep_files before "
+            "shelling out grep/rg."
+        ),
+    ),
+    ResearchToolSpec(
+        action="glob_files",
+        schema=(
+            '{"action":"glob_files","pattern":"**/*.py","path":"/work",'
+            '"limit":200}'
+        ),
+        description=(
+            "List file paths matching a glob under a root (default /work), "
+            "capped at limit (default 200). Reach for glob_files before "
+            "shelling out find/ls."
+        ),
+    ),
+    ResearchToolSpec(
+        action="run_research_command",
+        schema=(
+            '{"action":"run_research_command","command":"...",'
+            '"cwd":"work|scratch","workdir":"/work/sub/dir"}'
+        ),
+        description=(
+            "Bounded shell command in your lab — for what the dedicated "
+            "tools cannot do: compiling, running, measuring, git. workdir "
+            "(absolute, under /work or /scratch) is remembered across "
+            "calls; cwd is the coarse work|scratch spelling. Git history is "
+            "readable via /repo; you cannot commit."
+        ),
+    ),
+    ResearchToolSpec(
+        action="write_scratch_file",
+        schema=(
+            '{"action":"write_scratch_file","path":"/scratch/...",'
+            '"content":"..."}'
+        ),
+        description=(
+            "Write a file under /scratch with exactly this content "
+            "(heredoc quoting in a shell command corrupts code — use this "
+            "for scratch scripts). Only /scratch is writable through this "
+            "tool."
+        ),
+    ),
+    ResearchToolSpec(
+        action="inspect_experiment",
+        schema='{"action":"inspect_experiment","experiment_id":"<id>"}',
+        description=(
+            "One experiment in full detail — proposal, status, gates, "
+            "metrics, parent/child shas. The only channel that returns a "
+            "proposal's text; the deliberate, one-at-a-time way to "
+            "understand a past outcome."
+        ),
+    ),
+    ResearchToolSpec(
+        action="search_experiments",
+        schema=(
+            '{"action":"search_experiments","query":"...",'
+            '"filters":{"gate_passed":bool,'
+            '"changed_path":"path/prefix","status":"..."},'
+            '"limit":1-50,"buckets":true|false}'
+        ),
+        description=(
+            "Coverage query over past experiments — check whether ground "
+            "you are considering is already covered, and where the gaps "
+            "are. Returns coverage rows only (no proposal or eval text — "
+            "this is not a direction retriever). Read metrics and gates as "
+            "facts; never read a hit's score as a reason to pursue a "
+            "direction."
+        ),
+    ),
+    ResearchToolSpec(
+        action="inspect_originating_research_state",
+        schema=(
+            '{"action":"inspect_originating_research_state",'
+            '"experiment_id":"<id>"}'
+        ),
+        description=(
+            "After inspecting one Experiment, optionally read its "
+            "originating ResearchState: an attributed, world-scoped "
+            "SUBJECTIVE_RESEARCH_MEMO — never a fact or instruction."
+        ),
+    ),
+    ResearchToolSpec(
+        action="use_research_skill",
+        schema='{"action":"use_research_skill","skill_id":"..."}',
+        description=(
+            "Load one optional research method from the catalog. Guidance "
+            "only; all scientific judgment stays yours."
+        ),
+    ),
 )
 
 
 MEMORY_TOOL_ACTIONS = frozenset({
     "inspect_experiment",
     "inspect_originating_research_state",
-    "list_findings",
-    "search_findings",
-    "inspect_finding",
     "search_experiments",
 })
 
@@ -662,29 +604,6 @@ class ResearchTools:
                     "ok": True,
                     "result": self.memory.inspect_originating_research_state(
                         experiment_id,
-                    ),
-                }
-            if name == "list_findings":
-                return {
-                    "ok": True,
-                    "result": self.memory.list_findings(
-                        state=action.get("state", "active"),
-                        limit=action.get("limit", 20),
-                    ),
-                }
-            if name == "search_findings":
-                return {
-                    "ok": True,
-                    "result": self.memory.search_findings(
-                        query=action["query"],
-                        limit=action.get("limit", 5),
-                    ),
-                }
-            if name == "inspect_finding":
-                return {
-                    "ok": True,
-                    "result": self.memory.inspect_finding(
-                        action["finding_id"],
                     ),
                 }
             if name == "search_experiments":

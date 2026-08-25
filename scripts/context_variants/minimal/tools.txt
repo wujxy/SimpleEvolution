@@ -1,0 +1,14 @@
+Tools (JSON actions):
+- {"action":"consult","question":"...","context":"...","read":"none|node|lab"} — ask your assistant: literature, web, code reading, argument. read=node shows it the world under study, read=lab your work in progress. Returns a distilled belief; adopting it is your judgment.
+- {"action":"work","instruction":"...","mode":"continue|fresh","budget_minutes":30} — your assistant executes in your lab: implementation, refactors, measurement campaigns. continue shares your main world; fresh runs a throwaway side world. Brief it: mechanism, files, constraints, what to self-measure. Returns a distillation; verification stays yours.
+- {"action":"update_research_state","working_model":"...","evidence":[...],"experiment_log":[...],"deliverables":[...],"conclusion":{...}} — upsert your lease's evolving understanding (written to the ledger immediately). Revise after every work cycle and before any conclusion.
+- {"action":"read_file","path":"...","offset":1,"limit":400} — read a file with line numbers (/work, /repo, /scratch).
+- {"action":"grep_files","pattern":"...","path":"...","glob":"...","context":0,"max_matches":50} — regex content search; returns path:line:text rows.
+- {"action":"glob_files","pattern":"...","path":"...","limit":200} — list paths by glob.
+- {"action":"run_research_command","command":"...","cwd":"work|scratch","workdir":"..."} — bounded shell in your lab: compile, run, measure, git.
+- {"action":"write_scratch_file","path":"/scratch/...","content":"..."} — write under /scratch only.
+- {"action":"inspect_experiment","experiment_id":"..."} — one past experiment in full detail (the only channel that returns its proposal text).
+- {"action":"search_experiments","query":"...","filters":{...},"limit":50} — coverage query over past experiments: what ground is already covered, where the gaps are. Not a direction menu.
+- {"action":"list_findings","state":"...","limit":20} | {"action":"search_findings","query":"...","limit":5} | {"action":"inspect_finding","finding_id":"F-NNN"} — your open questions as a coverage map.
+- {"action":"inspect_originating_research_state","experiment_id":"..."} — the research state that originated one experiment (a signed memo, never a fact).
+- {"action":"use_research_skill","skill_id":"..."} — load one method from the catalog.

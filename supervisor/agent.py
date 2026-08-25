@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any
 
 
-from scientist.agent_runtime import AgentRuntime
-from scientist.research_agent import AgentError, ResearchAgent
-from scientist.scientist import (
+from scientist.host.agent_runtime import AgentRuntime
+from scientist.host.research_agent import AgentError, ResearchAgent
+from scientist.host.scientist import (
     ContextPolicy,
     _bump,
     _compact_live_messages,

@@ -1,0 +1,2 @@
+- reframe_inherited_problem: Rebuild a Child world's question from current facts instead of continuing the predecessor's memo.
+- claude_use: Working with your assistant — ask, debate, delegate execution, review.

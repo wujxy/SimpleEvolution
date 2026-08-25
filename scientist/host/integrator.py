@@ -9,7 +9,7 @@ from typing import Any
 
 from .agent_runtime import AgentRuntime
 from .research_agent import AgentError, ResearchAgent, WorkingState
-from .research_files import ResearchFiles
+from ..research_files import ResearchFiles
 
 
 class IntegratorError(AgentError):
@@ -183,7 +183,7 @@ class IntegratorAgent(ResearchAgent):
                 self,
                 source_read_actions=("read_file", "grep_files", "glob_files"),
             ).run(
-                system_prompt=(Path(__file__).parent / "prompts" / "integrator.md").read_text(),
+                system_prompt=(Path(__file__).parent.parent / "prompts" / "integrator.md").read_text(),
                 messages=messages,
                 session=session, current_round=0,
                 steps_budget=self.max_steps, source_root=source_root,

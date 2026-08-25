@@ -168,9 +168,9 @@ class BaseSubmitter(ABC):
         """Worker argv (before python / job.sh).  --backend is transport
         metadata the worker reports into ``execution.scheduler``."""
         modules = {
-            "proposer": "scientist.cli",
+            "proposer": "simpleevo.jobs.proposer_worker",
             "supervisor": "supervisor.cli",
-            "integrator": "scientist.integrator_cli",
+            "integrator": "scientist.host.integrator_cli",
             "experiment": "scientist.assistant.cli",
         }
         module = modules[kind]

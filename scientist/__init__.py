@@ -1,23 +1,18 @@
-"""The proposer (Scientist): a standalone, relocatable research agent.
+"""The scientist: a standalone, in-world research agent (one world, one agent).
 
-This package is the "self" that the Host loads only inside a unified worker
-subprocess and — in the RSI design — the
-unit that gets snapshotted into a run-local self-repo and self-modified. It
-owns the Scientist control loop, its research tools, its model client, and its
-own research memory (findings/experiments/retrieval). The Host owns only the
-evaluator, gates, and the authoritative task ledger (``history.jsonl``), which
-this package reads.
+The package proper is the oneworld path — ``python -m scientist.cli
+--spec spec.json --world DIR`` drops a scientist into a directory-world
+with its claude assistant beside it (one container, one filesystem, equal
+capabilities) and walks itself to an exit (deliver_world / abstain),
+leaving session, research state, assistant transcripts, usage, and
+conclusion.json under the world's ``.scientist/``. Zero simpleevo
+imports; the model travels over a pure-stdlib transport.
 
-Fully standalone: zero ``simpleloop`` imports. The shared infrastructure it
-once depended on (container.runtime, processes, harness.memory) is vendored
-into this package as ``runtime.py``, ``child_processes.py``, and
-``memory/history.py`` — so a snapshot of ``proposer/`` into
-``run_dir/self/repo/`` is self-sufficient and is what the run executes.
+``scientist/host/`` holds the host-side workers (the old JSON-protocol
+machinery: frozen proposer path + live supervisor/integrator) — the
+deletion boundary for the oneworld migration.
 """
 
-# A self-declared version string. Purely informational — emitted in self-review
-# results for observability and free for the self to change. Nothing enforces it:
-# viability is a behavior-level smoke test (can the self still emit a proposal?),
-# NOT a contract-version gate, so the self may evolve its own protocol freely as
-# long as it keeps functioning in the loop.
+# A self-declared version string, carried over from the proposer era.
+# Informational only, emitted for observability; nothing enforces it.
 CONTRACT_VERSION = "proposer-cli-v0"

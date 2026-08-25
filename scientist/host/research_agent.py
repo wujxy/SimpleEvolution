@@ -22,7 +22,7 @@ from tempfile import TemporaryDirectory
 
 from simpleevo.research_state import ResearchState
 
-from .model import ChatModel
+from ..model import ChatModel
 from .runtime import ApptainerRuntime
 
 
@@ -122,12 +122,8 @@ def _fingerprint(action: dict) -> str:
     if name == "write_scratch_file":
         digest = hashlib.sha1(action["content"].encode()).hexdigest()[:12]
         return f"{name}:{action['path']}:{digest}"
-    if name == "inspect_episode":
-        return f"{name}:{action['ref']}"
     if name in {"inspect_experiment", "inspect_originating_research_state"}:
         return f"{name}:{action['experiment_id']}"
-    if name == "inspect_finding":
-        return f"{name}:{action['finding_id']}"
     if name in ("register_research_state", "update_research_state"):
         digest = hashlib.sha1(action["working_model"].encode()).hexdigest()[:12]
         return f"{name}:{digest}"
@@ -135,10 +131,8 @@ def _fingerprint(action: dict) -> str:
         key = "question" if name == "consult" else "instruction"
         digest = hashlib.sha1(action[key].encode()).hexdigest()[:12]
         return f"{name}:{digest}"
-    if name in ("search_findings", "search_experiments"):
+    if name == "search_experiments":
         return f"{name}:{action.get('query')}"
-    if name == "list_findings":
-        return f"{name}:{action.get('state')}:{action.get('limit')}"
     return name
 
 
@@ -165,26 +159,7 @@ def _register_evidence(state: WorkingState, action: dict, observation: dict) -> 
         state.new_evidence.add("__source_examined__")
         return
     result = observation.get("result")
-    if name == "inspect_episode":
-        eid = (result or {}).get("experiment_id")
-        if eid:
-            ref = f"experiment:{eid}"
-            state.session_evidence.add(ref)
-            state.new_evidence.add(ref)
-    elif name == "inspect_finding":
-        fid = (result or {}).get("id")
-        if fid:
-            ref = f"finding:{fid}"
-            state.session_evidence.add(ref)
-            state.new_evidence.add(ref)
-    elif name in ("search_findings", "list_findings"):
-        for item in result or []:
-            fid = item.get("id") if isinstance(item, dict) else None
-            if fid:
-                ref = f"finding:{fid}"
-                state.session_evidence.add(ref)
-                state.new_evidence.add(ref)
-    elif name == "inspect_experiment":
+    if name == "inspect_experiment":
         eid = (result or {}).get("experiment_id")
         if eid:
             ref = f"experiment:{eid}"
@@ -266,17 +241,12 @@ def _action_summary(action: dict) -> str:
             f"action={name} path_chars={len(action['path'])} "
             f"content_chars={len(action['content'])}"
         )
-    if name == "inspect_episode":
-        return f"action={name} ref_chars={len(action['ref'])}"
     if name in {"inspect_experiment", "inspect_originating_research_state"}:
         return f"action={name} experiment_id={action.get('experiment_id', '')}"
-    if name in ("list_findings", "search_findings", "inspect_finding",
-                "search_experiments"):
+    if name == "search_experiments":
         extra = ""
         if "query" in action:
             extra = f" query_chars={len(action.get('query', ''))}"
-        elif "finding_id" in action:
-            extra = f" finding_id={action.get('finding_id', '')}"
         return f"action={name}{extra}"
     if name in ("register_research_state", "update_research_state"):
         return f"action={name} working_model_chars={len(action['working_model'])}"

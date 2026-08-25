@@ -14,7 +14,7 @@ from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
 from scientist.memory.l2 import L2MemoryService
 from supervisor.facts import build_batch, build_runtime_facts
 from scientist.model import build_chat_model
-from scientist.scientist import ContextPolicy
+from scientist.host.scientist import ContextPolicy
 from supervisor.agent import SupervisorAgent, SupervisorTools, load_supervisor_session
 
 

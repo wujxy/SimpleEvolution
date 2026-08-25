@@ -4,7 +4,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from scientist.cli import _inherit_parent_session
+from simpleevo.jobs.proposer_worker import _inherit_parent_session
 from scientist.scientist_session import ScientistSession
 
 
