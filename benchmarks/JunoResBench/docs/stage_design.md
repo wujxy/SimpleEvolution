@@ -47,7 +47,7 @@ juno_res_bench/
 | E_true | float, MeV | 动能 |
 | t0 | float, ns | 事例时刻 |
 | direction | (3,) unit vec | **粒子初始方向**（v0 e-like 下各向同性抽样即可，字段必须存在） |
-| particle_type | enum | v0 仅 `electron`；v1: gamma / positron |
+| particle_type | enum | `electron` / `gamma` / `positron`（v1 起全支持） |
 
 ### RNG 管理
 
@@ -59,34 +59,56 @@ rngs = [np.random.default_rng(s) for s in root.spawn(6)]
 
 - 每 stage 独立流：stage 内加效应不影响其它 stage 的随机序列；
 - stage 级单元测试可固定本 stage seed 独立复现；
-- Cherenkov 单独成流：开关它不改变闪烁光序列。
+- Cherenkov 单独成流：开关它不改变闪烁光序列；
+- v1：γ 链/o-Ps 抽样用 `s1_response` 流（v0 闲置；e⁻ 路径仍零消耗，
+  流被烧掉也不影响 e⁻ 输出——有回归测试锁定）。
 
-### Truth schema（三层）
+### Truth schema（四层）
 
 ```
 event 级:  x,y,z,E_true,E_dep,E_vis,dir(3),t0,
+           particle_type, e_escape,               # v1
            n_gamma_scint, n_gamma_cher,          # 产生
            n_arrived, n_pe_produced, n_pe_total  # 到达/探测/入窗
+step 级 (v1, ragged): pos(3), e_dep, e_vis, t, dir(3), kind
+           （e⁻ = 单步特例；γ/e⁺ = Compton/湮灭链）
 per-PMT:  pmt_ids, n_arrived_i, n_pe_i,
           pe_offsets
-per-PE:   type(scint|cher), t_emit, t_tof, t_rel, q_pe
+per-PE:   type(scint|cher), t_emit, t_tof, t_rel, q_pe,
+          step_idx                                # v1, 指向 step 层
 calibration truth (detector 级, 与事件无关):
           per-PMT pde_delta_i, gain_i, time_offset_i, tts_i
 ```
 
-calibration truth 存于数据集（验证/标定研究用），**blind 包剥离**。
+calibration truth 存于数据集（验证/标定研究用），**blind 包剥离**
+（盲测 meta 中 seed 置 null）。
 
 ---
 
-## Stage 1 — Particle response（A1, B3, B7）
+## Stage 1 — Particle response（A1, B3, B7；v1 起 A3/A4/A5）
 
-- v0 e-like：`E_dep = E_true`（点沉积，全包含）；
+- e⁻：`E_dep = E_true`（点沉积，全包含）；
   `E_vis = E_dep / (1 + kB·dE/dx)`，kB·dE/dx = 0.0241（默认开）。
-- 低能非线性 B7：`E_vis ×= nl_corr(E_vis)` 修正曲线（默认开，MeV 区 ~1%）。
-- `particle_type` 分派表：v0 只有 electron 分支；gamma/positron 分支 v1
-  （A3/A4/A5：指数作用长度+散射近似 / o-Ps+湮灭）。
+  低能非线性 B7：`E_vis ×= nl_corr(E_vis)` 修正曲线（默认开，MeV 区 ~1%）。
+  不消耗随机数。
+- γ（v1，`stages/s1_particles.py`）：KN 链逐事件顺序模拟——
+  λ(E)=1/(n_e·σ_KN(E)·(1+pe)) 自由程抽样，出球（R=nonuniform_radius_m）
+  即逃逸；PE 分支概率 pe/(1+pe)、pe=(E_x/E)³；E<20 keV 就地吸收；
+  Compton 散射角 KN 拒绝采样，沉积 ΔE 于作用点，反冲电子方向 =
+  动量转移方向；γ 飞行时间按 c 累积（~2.5 ns/链）。
+- e⁺（v1）：初级动能按 e⁻ 公式点沉积；一支均匀随机数定
+  3γ(2.2%, o-Ps 延迟)/2γ-oPs(52.5%, 延迟 Exp(3.08ns))/2γ-prompt(45.5%)；
+  2γ 背对背随机轴、3γ 单纯形均匀分裂；湮灭 γ 各自进 γ 链。
+- 输出 `S1Output(e_dep, e_vis, steps=DepositionSteps, e_escape, particle_type)`；
+  per-step `e_vis = quench(e_dep_step) × nl_corr(e_dep_step)`——e⁻ 单步
+  与 v0 逐位一致，γ/e⁺ 低能步压制更强。
+- RNG：γ/e⁺ 链用 `rngs["s1_response"]` 流（此前闲置，未新增 STAGE_KEYS，
+  不扰动其他流）。抽取顺序固定：exponential(自由程) → uniform(PE 分支) →
+  KN 拒绝对 → uniform(方位角)。
 
-**锚点**：E_vis/E_true = 0.9764 ± 0（确定性）；nl_corr 连续性。
+**锚点**：E_vis/E_true = 0.9764 ± 0（e⁻，确定性）；nl_corr 连续性；
+能量守恒 Σstep_e_dep + e_escape = E_true(+1.022) ≤1e-6；
+λ(1 MeV) ≈ 17 cm；e⁺/e⁻ 能标差 ≈0.5%；o-Ps 延迟分量 54.5%×Exp(3.08ns)。
 
 ---
 
@@ -180,7 +202,7 @@ w_i·eff_i 一致（χ² 检验）；δ_i 可从大样本标定恢复。
 
 ---
 
-## Stage 5 — PMT electronics（E1-E6, E8, E9 接口, E3）
+## Stage 5 — PMT electronics（E1-E6, E8, E9 接口, E3, E10 触发）
 
 复用 `_vendor/wavegen_v1`（SPE 谱、log-normal 脉冲、FADC、白噪声）：
 
@@ -189,9 +211,10 @@ w_i·eff_i 一致（χ² 检验）；δ_i 可从大样本标定恢复。
 | E1 SPE 谱 | waverec `_sample_amplitudes`（Gauss 核心+Exp 尾） |
 | E2 增益离散 | per-PMT `gain_i = 1+0.15·N(0,1)` 固定（标定 truth） |
 | E3 afterpulses | **默认开**：per-PE prob 1.6%，延迟 ~Exp(µs 级)，幅度按 SPE 谱；入波形不入物理 truth |
-| E4 dark | 24 kHz Poisson，均匀撒窗 |
+| E4 dark | 24 kHz Poisson，全通道撒在 [t0−800, t0+1500]ns 扩展跨上（参与触发），窗内者入波形 |
 | E5/E6 | waverec FADC + 噪声 |
-| E8 窗截断 | [t0−300, t0+700) ns 外丢弃（truth 记 n_pe_total 仅入窗） |
+| E8 窗截断 | 窗 = [t_trig−300, t_trig+700) ns；窗外物理/暗 PE 丢弃（truth 记 n_pe_total 仅入窗） |
+| E10 触发 | **v4**：物理+暗 PE 时间 1ns 直方图，100ns 因果尾窗和首过 200pe = t_trig（搜索域 [t0±500]ns；纯暗 ~42pe/窗，阈下 >20σ）；绝对 t0 平移不变 → t0 按窗相对打分 |
 | E9 堆积 | 接口：t0 列表重叠生成（默认单事例） |
 
 **锚点**：单 PE 波形峰 ~7mV；dark 计数/窗 ~0.024/PMT；AP 窗内概率 ~0.3%/PE。

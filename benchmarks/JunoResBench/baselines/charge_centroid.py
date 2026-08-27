@@ -11,8 +11,8 @@ The reference any agent must beat. Deliberately simple:
             offset-calibrated on the train split.
 
 Usage:
-  python3 baselines/charge_centroid.py --data blind_task/test.npz \
-      --train blind_task/train.npz --out pred.npz
+  python3 baselines/charge_centroid.py --data blind_task_electron/test.npz \
+      --train blind_task_electron/train.npz --out pred.npz
 """
 
 import argparse
@@ -111,12 +111,19 @@ def main():
     q_tr, centroid_tr, ev_row_tr = event_features(d_tr, wave_cfg, pos)
 
     n_tr = min(args.n_train, len(q_tr) // 2)
-    k = float(np.sum(d_tr["evt_e_true"][:n_tr] * q_tr[:n_tr])
+    # calibrate against the scored reference (e+ includes 1.022 MeV
+    # annihilation light, matching the evaluate.py convention)
+    e_ref_tr = (d_tr["evt_e_scored"] if "evt_e_scored" in d_tr.files
+                else d_tr["evt_e_true"])
+    k = float(np.sum(e_ref_tr[:n_tr] * q_tr[:n_tr])
               / np.sum(q_tr[:n_tr] ** 2))
 
     t_evt, cnt = leading_edge_times(d, wave_cfg, pos, centroid, ev_row)
     t_tr, _ = leading_edge_times(d_tr, wave_cfg, pos, centroid_tr, ev_row_tr)
-    t0_offset = float(np.median(t_tr[:n_tr] - d_tr["evt_t0"][:n_tr]))
+    # window-referenced truth (evaluate.py convention): sample 0 = t_trig - pre
+    pre = meta.get("detector_config", {}).get("pre_trigger_ns", 300.0)
+    t0_ref_tr = d_tr["evt_t0"][:n_tr] - (d_tr["evt_t_trigger"][:n_tr] - pre)
+    t0_offset = float(np.median(t_tr[:n_tr] - t0_ref_tr))
     t0_rec = np.where(cnt > 0, t_evt - t0_offset, 0.0)
 
     np.savez(

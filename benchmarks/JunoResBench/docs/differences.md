@@ -18,10 +18,10 @@ JUNO-SW 怎么做、差别的后果。取舍理由见 [`effects.md`](effects.md)
 
 | 环节 | JUNO-SW | Toy MC | 后果 |
 |---|---|---|---|
-| e± 输运 | Livermore EM 逐步沉积 | **不做**：e-like 事件假设点状、全沉积，E_dep=E_true | 无 dE/dx 涨落、无 delta ray；能量分辨略乐观 |
-| γ | 完整 Compton/photoelectric 链，多作用点+escape | v1 参数化：指数作用距离 + 有限次散射 + escape 概率 | v0 不支持 γ 事件 |
-| e⁺ | positronium 形成(54.5%)+3γ 分支(2.2%) | v1 参数化：o-Ps 延迟 + 能量丢失分支 | v0 e⁺=e⁻ 处理 |
-| Birks quenching | 逐步 E/(1+kB₁δ+kB₂δ²)，按粒子选 kB | 全局解析因子 quench(E) 或关闭 | 无 step-level 涨落；非线性是确定性的 |
+| e± 输运 | Livermore EM 逐步沉积 | e⁻ 不做（点状、全沉积，E_dep=E_true）；e⁺ 初级动能同样点沉积 | e⁻ 无 dE/dx 涨落、无 delta ray，能量分辨略乐观；e⁺ 初级沉积的 <0.5% dE/dx 差异并入共享 quench 常数 |
+| γ | 完整 Compton/photoelectric 链，多作用点+escape | **v1 已实现**：逐 γ KN 链（拒绝采样）+ PE 终止 (E_x/E)³ + 出球逃逸；λ=1/(n_e·σ_KN) | 无 δ-ray/多重散射细节；多作用点+顶点弥散+链飞行时间(~2.5ns@1.5MeV) 进入链路 |
+| e⁺ | positronium 形成(54.5%)+3γ 分支(2.2%) | **v1 已实现**：o-Ps Exp(3.08ns) 延迟、3γ 单纯形分裂（动量守恒玩具近似）、2×511 背对背，湮灭 γ 各自进 γ 链 | o-Ps 分支/时序/能标与 JUNO 数对齐；3γ 方向独立各向同性（文档化近似） |
+| Birks quenching | 逐步 E/(1+kB₁δ+kB₂δ²)，按粒子选 kB | 同一解析因子 per-step 应用：e_vis_step = e_dep/(1+kB·dE/dx) × nl_corr(e_dep_step) | e⁻ 单步 = v0 逐位不变；γ/e⁺ 低能次级电子的额外压制经 B7 曲线自然涌现（e⁺/e⁻ 能标差 ~0.5-1%） |
 
 ## 2. 光子产生 (E_vis → N_gamma)
 
@@ -56,7 +56,7 @@ JUNO-SW 怎么做、差别的后果。取舍理由见 [`effects.md`](effects.md)
 | gain/TTS/offset | DB 中 per-PMT 实测值 | per-channel 高斯 spread |
 | dark noise | per-PMT DCR from DB | 统一 24 kHz |
 | afterpulse/prepulse | AP 联合直方图采样 / prepulse 未生成 | 都不做 |
-| 读出 | 触发链定义窗口、event mixing、双增益、饱和、overshoot、真实波形模板 | 固定窗口无条件读出、单增益、log-normal 解析脉冲 |
+| 读出 | 触发链定义窗口、event mixing、双增益、饱和、overshoot、真实波形模板 | **v4 起有触发**：全局 PE 率滑窗（100ns 因果尾窗、200pe 阈）定窗 = [t_trig−300, +700)ns；无 event mixing/双增益/饱和，log-normal 解析脉冲 |
 
 ## 6. 对评价结论的影响（读 benchmark 结果时须知）
 
@@ -69,15 +69,28 @@ JUNO-SW 怎么做、差别的后果。取舍理由见 [`effects.md`](effects.md)
 
 ## 7. 中间量输出约定（truth 层级）
 
-数据集中保存完整中间链条，便于检查每级分布：
+数据集中保存完整中间链条，便于检查每级分布（npz 实际键名，
+`evt_` 前缀 = 事件级；ragged 级由对应 `*_offsets` int64 (N+1) 索引）：
 
 ```
-per event:  E_true, E_dep, E_vis, t0, x, y, z
-            n_gamma        (= E_vis × LY_scint，产生端光子数)
-            n_pe_total     (= Σ_pmt n_pe_pmt，探测端 pe 总数)
-per PMT:    pmt_id, n_pe_pmt, hit times[], spe charges[]
-per PE:     t_emit(闪烁发光时刻), t_hit(PMT 处到达时刻), q(SPE 电荷)
+per event:  evt_x_m/y_m/z_m, evt_e_true, evt_e_dep, evt_e_vis, evt_t0,
+            evt_t_trigger   (全局触发时刻；打分口径 t0_ref = evt_t0 − (evt_t_trigger − 300))
+            evt_e_escaped   (逃逸 γ 带走的能量；e⁻ 恒 0)
+            evt_e_scored    (打分基准：e⁺ = e_true+1.022，其余 = e_true)
+            evt_particle_type (int8: 0=e⁻ 1=γ 2=e⁺)
+            evt_n_gamma      (= Σ per-step 闪烁光子)
+            evt_n_pe_produced / evt_n_pe_total
+            evt_n_steps
+per step:   step_pos (M,3), step_e_dep, step_e_vis, step_t_ns,
+            step_dir (M,3), step_kind (int8: 0 primary / 1,2 主γ Compton,PE /
+            3,4 湮灭γ Compton,PE / 5 sub-cutoff)
+per PMT:    pmt_ids, n_pe_pmt
+per PE:     t_emit_ns, t_tof_ns, t_rel_ns, q_pe, pe_step (int32, 指向 step 层)
+waveform:   adc (uint16 行), adc_pmt_ids
 ```
 
 其中 `n_gamma → n_pe` 之间不再有独立随机数（合并 thinning），但
-`n_gamma = round(E_vis·LY)` 作为确定性记账量保留，供画分布用。
+`n_gamma` 作为闪烁分支实际抽样数保留。e⁻ 事件是单步特例
+（step 数=1、kind=0、t=0、位置=顶点），与 v0 语义逐位一致。
+盲测 test.npz 只保留 `adc/adc_pmt_ids/pmt_offsets/meta`，
+且 meta 中 seed 置 null（防用种子复现测试真相）。

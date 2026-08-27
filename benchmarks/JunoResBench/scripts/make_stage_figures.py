@@ -36,18 +36,48 @@ from benchmarks.JunoResBench.juno_res_bench.stages.s4_detection import (  # noqa
 
 
 def stage1(cfg, out):
-    """E_true -> E_vis: Birks + low-energy nonlinearity (B3/B7)."""
+    """E_true -> E_vis: Birks + low-E nonlinearity (B3/B7) + v1 particles."""
+    from benchmarks.JunoResBench.juno_res_bench.stages.s1_response import run_s1
+    from benchmarks.JunoResBench.juno_res_bench.truth import (
+        EventInput,
+        ParticleType,
+    )
+
     e = np.geomspace(0.1, 20, 200)
     vis = e / (1 + cfg.birks_kB_ddx) * np.array([nl_corr(x, cfg) for x in e])
-    fig, ax = plt.subplots(figsize=(6, 4.2))
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+    ax = axes[0]
     ax.plot(e, vis / e, "b-", lw=2)
     ax.axhline(1 / (1 + cfg.birks_kB_ddx), color="r", ls="--", lw=1,
                label=f"Birks only ({1/(1+cfg.birks_kB_ddx):.4f})")
     ax.set_xscale("log")
     ax.set_xlabel("E_true [MeV]")
     ax.set_ylabel("E_vis / E_true")
-    ax.set_title("Stage 1: quenching + low-E nonlinearity")
+    ax.set_title("electron: quenching + low-E nonlinearity")
     ax.legend()
+
+    # v1: per-particle visible-energy response (stage-1 MC, vertex at center)
+    es = np.geomspace(0.3, 8.0, 8)
+    for pt, color, label in (
+        (ParticleType.ELECTRON, "tab:blue", "electron"),
+        (ParticleType.GAMMA, "tab:green", "gamma"),
+        (ParticleType.POSITRON, "tab:red", "positron"),
+    ):
+        ys = []
+        for k, e0 in enumerate(es):
+            vals = [
+                run_s1(EventInput(0, 0, 0, float(e0), particle_type=pt),
+                       cfg, np.random.default_rng(300 + 97 * k + i)).e_vis_mev
+                for i in range(200)
+            ]
+            ref = e0 + (1.021998 if pt is ParticleType.POSITRON else 0.0)
+            ys.append(np.mean(vals) / ref)
+        axes[1].plot(es, ys, "o-", color=color, label=label)
+    axes[1].set_xscale("log")
+    axes[1].set_xlabel("E_true [MeV]")
+    axes[1].set_ylabel("<E_vis> / E_ref")
+    axes[1].set_title("v1 particles: per-step quenching response")
+    axes[1].legend()
     fig.tight_layout()
     fig.savefig(out / "stage1.png", dpi=130)
     plt.close(fig)
