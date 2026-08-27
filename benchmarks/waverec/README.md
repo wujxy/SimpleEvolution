@@ -46,6 +46,7 @@ runs/                        baseline outputs + scores (not truth)
 figures/                     explanatory figures (see below)
 blind_task/                  self-contained task package given to agents (see below)
 blind_truth/                 PRIVATE: held-out test truth + meta + reference scores
+whitebox_task/               white-box variant: blind package + generator source
 ```
 
 ## Figures
@@ -64,6 +65,14 @@ model (drawn from `wavegen` itself, so they always match the generator):
   moderate / severe pile-up) with true hit times and the baseline
   reconstructor's output overlaid; red markers are true PEs the threshold
   integrator loses to pile-up.
+- `fig4_tts_dark.png` — the two optional imperfections (both default-off) on
+  one fixed physics event with identical electronics noise: transit-time
+  spread (σ = 5 ns) wanders hit times relative to photon arrival — note the
+  recorded truth moves with them, so the reconstruction task itself is
+  unchanged — while dark noise (shown at an exaggerated 2 MHz; real 20″ PMTs
+  are 10–50 kHz, invisible in a single 1 µs window) adds pulses with no
+  physics hit behind them. Dark pulses are emulated in this script:
+  `dark_rate_hz` is a config hook the generator does not implement yet.
 
 ## Datasets (v1)
 
@@ -138,15 +147,18 @@ the detector response from the data is part of the task.
 ```
 blind_task/
   TASK.md                    one page: physics, goal, format, scoring, rules
-  data/waverec_train.npz     400 events, truth visible (seeds 20260901)
-  data/waverec_val.npz       100 events, truth visible (seed 20260902)
-  data/waverec_test.npz      300 events, adc only — meta & truth stripped (seed 20260903)
+  data/waverec_train.npz     400 events, truth visible (seed 249405856277295613)
+  data/waverec_val.npz       100 events, truth visible (seed 917777727599791913)
+  data/waverec_test.npz      300 events, adc only — meta & truth stripped (seed 263293646208505012)
   evaluate.py                standalone scorer (numpy only)
 ```
 
-Note the npz `meta` key (which embeds the full generator config) is stripped
-from all three files; test truth lives only in `../blind_truth/`, which is
-**not** part of the package. Score submissions against the private copy:
+Note the npz `meta` key (which embeds the full generator config and the
+seed) is stripped from all three files; test truth lives only in
+`../blind_truth/`, which is **not** part of the package. Seeds are 60-bit
+random values — the generator is fast, so small/date-style seeds would be
+brute-forceable once the source ships (white box). Score submissions
+against the private copy:
 
 ```bash
 python3 blind_task/evaluate.py \
@@ -155,8 +167,32 @@ python3 blind_task/evaluate.py \
 
 Ranking: efficiency subject to purity ≥ 0.98, then time RMSE, then charge
 relative RMSE. Reference to beat (threshold integrator on the blind test
-set): efficiency 0.671, purity 0.999, time RMSE 1.25 ns, charge bias +0.31
+set): efficiency 0.658, purity 1.000, time RMSE 1.23 ns, charge bias +0.35
 (`blind_truth/baseline_test_score.json`).
+
+## White-box task package (`whitebox_task/`)
+
+`scripts/make_whitebox.py` builds the white-box variant: byte-identical
+`data/`, scorer and TASK body as `blind_task/`, plus the complete
+numpy-only generator inside the package —
+
+```
+whitebox_task/
+  TASK.md               blind sheet + white-box preamble (the "response is
+                        deliberately undocumented" sentence is replaced)
+  data/                 byte-identical copies of the blind files
+  evaluate.py           byte-identical scorer
+  wavegen/              the generator source (config + generator)
+  generate_dataset.py   package-local entry: labeled waveforms under any
+                        seed of the agent's choosing
+```
+
+The agent may read, run and modify the generator — unlimited self-generated
+training data, exact matched-filter kernels from the known pulse shape,
+per-event pulse-train fits. Blind and white-box scores sit on the same test
+events, so the difference isolates the value of understanding the forward
+model. Self-checks at build time: byte identity vs blind, no meta/seed in
+the shipped npz files, standalone generator smoke run from a foreign cwd.
 
 ## What is simplified relative to JUNO ElecSimV3
 

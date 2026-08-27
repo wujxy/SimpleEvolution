@@ -373,12 +373,206 @@ def fig3(cfg):
     print(f"wrote {out}  (dataset events {list(chosen.values())})")
 
 
+# ---------------------------------------------------------------------------
+# figure 4 — TTS and dark noise on the same physics event
+# ---------------------------------------------------------------------------
+TTS_SIGMA = 5.0        # ns, representative (JUNO 20" LPMT: FWHM 10-15 ns)
+DARK_RATE_HZ = 2e6     # EXAGGERATED so it is visible (real: 10-50 kHz)
+NOISE_SEED = 777       # fresh generator per row -> identical electronics noise
+ZOOM_W = 220.0         # ns
+
+
+def sample_physics(rng, cfg, mean_pe, tts_sigma):
+    """Mirror generate()/_sample_times/_sample_amplitudes, keeping the pre-TTS
+    photon times (which the generator itself never exposes)."""
+    p = cfg.spe
+    n_pe = int(rng.poisson(mean_pe))
+    gain = 1.0 + cfg.gain_spread * rng.normal()
+    lo = cfg.pulse_length_ns * cfg.sample_interval_ns
+    hi = (cfg.n_samples - cfg.pulse_length_ns) * cfg.sample_interval_ns
+    t_phot = rng.uniform(lo, hi, n_pe)
+    t_ano = t_phot + rng.normal(0.0, tts_sigma, n_pe)
+    u = rng.random(n_pe)
+    tail = rng.exponential(p.tail_decay, size=n_pe) + p.tail_cutoff
+    core = rng.normal(p.gain, p.sigma_gain, size=n_pe)
+    amp = np.where(u < p.p_tail, tail, core)
+    np.clip(amp, 1e-4, None, out=amp)
+    return t_phot, t_ano, amp * gain, gain
+
+
+def sample_dark(rng, cfg, gain, rate_hz):
+    """Dark pulses, emulated in this script: Poisson count, times uniform over
+    the FULL window (dark counts are uncorrelated with the readout and may sit
+    in the edge guard bands), SPE charges. `dark_rate_hz` is only a config
+    hook — the generator does not sample dark pulses yet."""
+    p = cfg.spe
+    window_s = cfg.n_samples * cfg.sample_interval_ns * 1e-9
+    k = int(rng.poisson(rate_hz * window_s))
+    t = rng.uniform(0.0, cfg.n_samples * cfg.sample_interval_ns, k)
+    u = rng.random(k)
+    tail = rng.exponential(p.tail_decay, size=k) + p.tail_cutoff
+    core = rng.normal(p.gain, p.sigma_gain, size=k)
+    amp = np.clip(np.where(u < p.p_tail, tail, core), 1e-4, None) * gain
+    return t, amp
+
+
+def synth(cfg, times, amps):
+    """Waveform with a fixed noise realization (fresh generator each call)."""
+    g = WaveformGenerator(cfg, seed=NOISE_SEED)
+    return g._synthesize(np.asarray(times, float), np.asarray(amps, float))
+
+
+def pick_seed(cfg):
+    """Find a physics seed with pile-up, a visible TTS shift and >=2 dark PEs
+    (one inside the zoom span) so all three effects are visible."""
+    for seed in range(20260800, 20260800 + 800):
+        rng = np.random.default_rng(seed)
+        t_phot, t_ano, amp, gain = sample_physics(rng, cfg, 10.0, TTS_SIGMA)
+        t_dark, _ = sample_dark(rng, cfg, gain, DARK_RATE_HZ)
+        srt = np.sort(t_phot)
+        gaps = np.diff(srt)
+        if not 9 <= len(t_phot) <= 12:
+            continue
+        if not 5 < gaps.min() < 40:
+            continue
+        c = 0.5 * (srt[gaps.argmin()] + srt[gaps.argmin() + 1])
+        z0, z1 = c - ZOOM_W / 2, c + ZOOM_W / 2
+        if len(t_dark) < 2 or not np.any((t_dark > z0 + 30) & (t_dark < z1 - 30)):
+            continue
+        dt = t_ano - t_phot
+        if not np.any(np.abs(dt[(t_phot > z0) & (t_phot < z1)]) > 6.0):
+            continue
+        return seed, z0, z1
+    raise RuntimeError("no seed found")
+
+
+def fig4(cfg):
+    seed, z0, z1 = pick_seed(cfg)
+    rng = np.random.default_rng(seed)
+    t_phot, t_ano, amp, gain = sample_physics(rng, cfg, 10.0, TTS_SIGMA)
+    t_dark, a_dark = sample_dark(rng, cfg, gain, DARK_RATE_HZ)
+
+    adc_a = synth(cfg, t_phot, amp)
+    adc_b = synth(cfg, t_ano, amp)
+    adc_c = synth(cfg, np.concatenate([t_phot, t_dark]), np.concatenate([amp, a_dark]))
+
+    t = np.arange(cfg.n_samples) * cfg.sample_interval_ns
+    bl = cfg.baseline_adc
+    adc_min = min(adc_a.min(), adc_b.min(), adc_c.min())
+
+    rows = [
+        (adc_a, "(a) default: TTS = 0, dark rate = 0 — pulses land exactly at the hit times"),
+        (adc_b, f"(b) + transit-time spread (TTS) sigma = {TTS_SIGMA:.0f} ns: hit times wander "
+                "by N(0, sigma); charge and pulse shape untouched"),
+        (adc_c, f"(c) + dark noise at {DARK_RATE_HZ/1e6:.0f} MHz (exaggerated; real 20\" PMTs "
+                "are 10-50 kHz): extra 1-pe pulses with no physics hit behind them"),
+    ]
+
+    fig, axs = plt.subplots(
+        3, 2, figsize=(11.4, 7.6), constrained_layout=True,
+        gridspec_kw={"width_ratios": [2.1, 1.0]},
+    )
+    fig.suptitle(
+        f"TTS and dark noise on the same physics event — {len(t_phot)} PEs, seed {seed}",
+        fontsize=11, fontweight="bold", x=0.005, ha="left",
+    )
+
+    dt_ano = t_ano - t_phot
+    dt_zoom_idx = (t_phot > z0) & (t_phot < z1)
+
+    for r, (adc, title) in enumerate(rows):
+        for c_idx in (0, 1):
+            ax = axs[r, c_idx]
+            ax.axhline(bl, color=AXIS, lw=0.8)
+            ax.step(t, adc, where="post", color=INK, lw=1.0)
+            tr = ax.get_xaxis_transform()
+
+            if c_idx == 0 or r != 1:
+                # rail: anode truth (post-TTS times the benchmark would record)
+                times_rail = t_ano if (r == 1 and c_idx == 0) else t_phot
+                ax.plot(times_rail, np.full(len(times_rail), 0.955), linestyle="none",
+                        transform=tr, marker="v", ms=6, color=ORANGE,
+                        markeredgecolor=SURF, markeredgewidth=1.0, zorder=5)
+            else:
+                # zoom rail (row b): photon arrival (pre-TTS) vs anode hit, paired
+                for tp, ta in zip(t_phot, t_ano):
+                    ax.plot([tp, ta], [0.885, 0.955], color=MUTED, lw=0.7,
+                            transform=tr, zorder=4)
+                ax.plot(t_phot, np.full(len(t_phot), 0.885), linestyle="none",
+                        transform=tr, marker="^", ms=6, color=AQUA,
+                        markeredgecolor=SURF, markeredgewidth=1.0, zorder=5)
+                ax.plot(t_ano, np.full(len(t_ano), 0.955), linestyle="none",
+                        transform=tr, marker="v", ms=6, color=ORANGE,
+                        markeredgecolor=SURF, markeredgewidth=1.0, zorder=5)
+
+            if r == 2:
+                ax.plot(t_dark, np.full(len(t_dark), 0.045), linestyle="none",
+                        transform=tr, marker="x", ms=7, color=RED,
+                        markeredgewidth=1.8, zorder=6)
+
+            ax.set_xlim(z0, z1) if c_idx else ax.set_xlim(0, cfg.n_samples)
+            ax.set_ylim(bl - 1.15 * max(60, bl - adc_min), bl + 45)
+            if r == 0:
+                ax.set_title("full 1000 ns window" if c_idx == 0
+                             else f"zoom {z0:.0f}-{z1:.0f} ns (same span every row)",
+                             loc="left", color=SEC, fontsize=8.5)
+            else:
+                ax.set_title(title if c_idx == 0 else "", loc="left", color=SEC, fontsize=8.5)
+            if c_idx == 0:
+                ax.set_ylabel("ADC counts")
+            style_ax(ax)
+            if r == 2:
+                ax.set_xlabel("time [ns]")
+
+    # annotation (b): largest TTS displacement inside the zoom
+    axb = axs[1, 1]
+    tr = axb.get_xaxis_transform()
+    cand = np.where(dt_zoom_idx)[0]
+    i = cand[np.argmax(np.abs(dt_ano[cand]))]
+    axb.annotate(
+        f"t_hit wanders by {dt_ano[i]:+.0f} ns",
+        xy=(0.5 * (t_phot[i] + t_ano[i]), 0.80), xytext=(z0 + 0.58 * ZOOM_W, 0.62),
+        transform=tr, color=SEC,
+        arrowprops=dict(arrowstyle="-", color=MUTED, lw=0.8),
+    )
+    # annotation (c): one dark pulse hump in the zoom
+    axc = axs[2, 1]
+    d_in = t_dark[(t_dark > z0 + 30) & (t_dark < z1 - 30)]
+    if len(d_in):
+        td = d_in[np.argmin(np.abs(d_in - 0.5 * (z0 + z1)))]
+        tr = axc.get_xaxis_transform()
+        axc.annotate(
+            "dark PE: a pulse with no physics hit",
+            xy=(td, 0.30), xytext=(z0 + 0.30 * ZOOM_W, 0.55),
+            transform=tr, color=SEC,
+            arrowprops=dict(arrowstyle="-", color=MUTED, lw=0.8),
+        )
+
+    handles = [
+        Line2D([], [], color=INK, lw=1.0, label="digitized waveform"),
+        Line2D([], [], linestyle="none", marker="^", ms=6, color=AQUA,
+               markeredgecolor=SURF, label="photon arrival (pre-TTS, never recorded)"),
+        Line2D([], [], linestyle="none", marker="v", ms=6, color=ORANGE,
+               markeredgecolor=SURF, label="anode hit time (the benchmark truth)"),
+        Line2D([], [], linestyle="none", marker="x", ms=7, color=RED,
+               markeredgewidth=1.8, label="dark-noise PE"),
+    ]
+    fig.legend(handles=handles, loc="outside lower center", ncols=4)
+
+    out = FIGDIR / "fig4_tts_dark.png"
+    fig.savefig(out, dpi=160)
+    plt.close(fig)
+    print(f"wrote {out}  (seed {seed}, {len(t_phot)} PEs, "
+          f"{len(t_dark)} dark PEs, zoom {z0:.0f}-{z1:.0f} ns)")
+
+
 def main():
     FIGDIR.mkdir(exist_ok=True)
     cfg = WaveGenConfig()
     fig1(cfg)
     fig2(cfg)
     fig3(cfg)
+    fig4(cfg)
 
 
 if __name__ == "__main__":

@@ -1,13 +1,13 @@
 {
-  "data": "../blind_truth/waverec_test_full.npz",
-  "pred": "../blind_truth/baseline_test_pred.npz",
+  "data": "blind_truth/waverec_test_full.npz",
+  "pred": "blind_truth/baseline_test_pred.npz",
   "tol_ns": 20.0,
-  "n_true": 3000,
-  "n_pred": 2015,
-  "n_matched": 2012,
-  "efficiency": 0.6706666666666666,
-  "purity": 0.9985111662531018,
-  "time_rmse_ns": 1.24569662009808,
-  "charge_rel_bias": 0.30897768352417276,
-  "charge_rel_rmse": 0.8518133110992442
+  "n_true": 3017,
+  "n_pred": 1986,
+  "n_matched": 1986,
+  "efficiency": 0.6582698044414982,
+  "purity": 1.0,
+  "time_rmse_ns": 1.2314002475865342,
+  "charge_rel_bias": 0.34517491980668724,
+  "charge_rel_rmse": 0.9622289785531712
 }
