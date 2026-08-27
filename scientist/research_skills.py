@@ -10,27 +10,31 @@ class ResearchSkill:
     skill_id: str
     description: str
     filename: str
-    # Loaded in full into the system prompt at wake-up instead of on
-    # demand.  claude_use teaches the seat-assistant relationship — it
-    # must be present before the first decision, not fetched after the
-    # seat has already forgotten its assistant exists (科学家完整研究制
-    # §8.2: 技能开局加载).
+    # A method may be loaded into standing context when its semantics are
+    # stable enough to belong there. Collaboration identity is defined by the
+    # team constitution, not by an optional method.
     always_load: bool = False
 
 
 _SKILLS = (
     ResearchSkill(
         "reframe_inherited_problem",
-        "Rebuild a Child world's question from current facts instead of "
-        "continuing the predecessor's memo.",
+        "Rebuild an inherited question from current facts instead of "
+        "continuing a predecessor's memo.",
         "reframe_inherited_problem.md",
     ),
     ResearchSkill(
         "claude_use",
-        "Working with your assistant — ask, debate, delegate execution, "
-        "review.",
+        "Role-based collaboration: frame engagements, compare reports, and "
+        "retain scientific judgment.",
         "claude_use.md",
-        always_load=True,
+    ),
+    ResearchSkill(
+        "analogical_transfer",
+        "Examine the current problem through structurally similar problems "
+        "from distant domains, and map the mechanism back — changing the "
+        "question rather than refining the answer.",
+        "analogical_transfer.md",
     ),
 )
 _BY_ID = {skill.skill_id: skill for skill in _SKILLS}

@@ -35,7 +35,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..model import ChatModel
+from scientist.model import ChatModel
 from .agent_runtime import AgentRuntime
 from ..context import build_first_layer_pack
 from simpleevo.research_state import ResearchState
@@ -51,7 +51,7 @@ from .research_tools import (
     ResearchTools,
     render_research_tool_prompt,
 )
-from ..research_skills import (
+from scientist.research_skills import (
     render_research_skill_catalog, render_startup_skills,
 )
 from .research_agent import (

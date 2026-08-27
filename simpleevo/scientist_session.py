@@ -1,0 +1,376 @@
+"""Persistent Scientist archive — provenance, not active-context continuity.
+
+Three stores under ``run_dir/proposer/`` (the proposer-owned Autobiography
+location; legacy run-dirs keep ``run_dir/scientists/lane-<N>/`` — see
+``_resolve_session_dir``). Single-lane v0 collapses lane-0 into
+``run_dir/proposer/``.
+
+  - ``session.jsonl`` — append-only archive of every conversation message this
+    Scientist ever produced or observed (assistant replies, tool observations,
+    world events). The immutable ground-truth record of what happened.
+  - ``notebook.md``  — an archived Scientist self-account, rewritten at
+    each suspension checkpoint. REVISABLE AUTOBIOGRAPHICAL MEMORY: not an
+    instruction and not established fact. The top-level Scientist prompt does
+    not replay it; Current Research Judgment is the explicit active L1 memory.
+  - ``meta.json``    — stable ``scientist_id`` (identity, NOT the lane scheduling
+    position), prompt version, last base_sha, last round.
+
+The lane directory is a LOCATOR (where this lane's resident scientist lives);
+the ``scientist_id`` inside is the IDENTITY (who). Single-lane today. True
+multi-lane provenance — stamping ``scientist_id`` onto candidates in
+history.jsonl so a Scientist can be told "your proposal → this outcome" when
+other Scientists also ran — is deferred; it requires touching the loop.py /
+store.py seam that this refactor deliberately freezes. For now all of a round's
+experiments are attributed to the resident Scientist, which is correct under
+the single hardcoded lane. See docs/scientist-refactor-plan.md §Revision.5.
+"""
+from __future__ import annotations
+
+import json
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+
+
+def _new_scientist_id() -> str:
+    return uuid.uuid4().hex
+
+
+def _resolve_session_dir(run_dir: Path, lane_id: int) -> Path:
+    """Resolve the session dir ONCE at construction; session_path/notebook_path/
+    meta_path all derive from it, so the append-only archive stays coherent.
+    Prefer the new proposer-owned location; fall back to the legacy
+    ``scientists/lane-<N>/`` for pre-S2c run-dirs (so --continue keeps its
+    trajectory). A fresh run uses the new location."""
+    new = Path(run_dir) / "proposer"
+    legacy = Path(run_dir) / "scientists" / f"lane-{int(lane_id)}"
+    if new.is_dir():
+        return new
+    if legacy.is_dir():
+        return legacy
+    return new
+
+
+def _resolve_episode_session_dir(run_dir: Path, episode_id: str) -> Path:
+    """Episode-based session directory for SimpleEvolution."""
+    return Path(run_dir) / "episodes" / episode_id / "session"
+
+
+def read_expectations(run_dir: Path) -> dict[int, dict]:
+    """Read pre-registered expectations: LAST row per round wins.
+
+    Returns ``{round: {"round", "captured", "expectations"}}`` (empty when the
+    file does not exist yet — e.g. a run-dir from before this mechanism). Used
+    by the world-event builder (pairing outcomes with prior commitments) and by
+    the reflection pack (the expectation↔outcome ledger).
+    """
+    path = _resolve_session_dir(Path(run_dir), 0) / "expectations.jsonl"
+    if not path.exists():
+        return {}
+    rows: dict[int, dict] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("round"), int):
+            rows[obj["round"]] = obj
+    return rows
+
+
+@dataclass
+class ScientistSession:
+    """One Scientist's persistent archive across rounds.
+
+    ``trajectory`` is the full prior conversation (flat ``[{role, content}]``),
+    loaded from session.jsonl for compatibility and post-hoc inspection.
+    ``tail_turns`` remains available to legacy host paths but is not consumed
+    by the top-level single-Scientist context assembler.
+    """
+
+    session_dir: Path
+    scientist_id: str
+    notebook: str
+    trajectory: list[dict] = field(default_factory=list)
+    meta: dict = field(default_factory=dict)
+    _prompt_version: str = ""
+
+    @property
+    def session_path(self) -> Path:
+        return self.session_dir / "session.jsonl"
+
+    @property
+    def notebook_path(self) -> Path:
+        return self.session_dir / "notebook.md"
+
+    @property
+    def meta_path(self) -> Path:
+        return self.session_dir / "meta.json"
+
+    @property
+    def expectations_path(self) -> Path:
+        return self.session_dir / "expectations.jsonl"
+
+    @classmethod
+    def load_or_create_for_episode(
+        cls,
+        run_dir: Path,
+        episode_id: str,
+        *,
+        prompt_version: str,
+    ) -> "ScientistSession":
+        """Load or create a ScientistSession keyed by episode identity."""
+        session_dir = _resolve_episode_session_dir(run_dir, episode_id)
+        session_dir.mkdir(parents=True, exist_ok=True)
+        return cls._load_from_dir(session_dir, prompt_version, episode_id=episode_id)
+
+    @classmethod
+    def load_or_create(
+        cls,
+        run_dir: Path,
+        lane_id: int,
+        *,
+        prompt_version: str,
+    ) -> "ScientistSession":
+        """Load an existing resident Scientist for this lane, or initialize a
+        fresh one (new scientist_id, empty notebook, empty trajectory)."""
+        session_dir = _resolve_session_dir(run_dir, lane_id)
+        session_dir.mkdir(parents=True, exist_ok=True)
+        return cls._load_from_dir(session_dir, prompt_version)
+
+    @classmethod
+    def _load_from_dir(
+        cls,
+        session_dir: Path,
+        prompt_version: str,
+        *,
+        episode_id: str | None = None,
+    ) -> "ScientistSession":
+        """Shared loader used by lane and episode entry points."""
+        meta: dict = {}
+        if session_dir.joinpath("meta.json").exists():
+            try:
+                loaded = json.loads(
+                    session_dir.joinpath("meta.json").read_text(encoding="utf-8")
+                )
+                if isinstance(loaded, dict):
+                    meta = loaded
+            except (OSError, json.JSONDecodeError):
+                meta = {}
+
+        loaded_id = str(meta.get("scientist_id") or "").strip()
+        scientist_id = loaded_id or _new_scientist_id()
+        if not loaded_id:
+            meta = {
+                "scientist_id": scientist_id,
+                "prompt_version": prompt_version,
+                "created_round": None,
+                "last_round": None,
+                "last_base_sha": None,
+                "episode_id": episode_id,
+            }
+            session_dir.joinpath("meta.json").write_text(
+                json.dumps(meta, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        elif episode_id is not None:
+            meta["episode_id"] = episode_id
+            session_dir.joinpath("meta.json").write_text(
+                json.dumps(meta, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+        trajectory: list[dict] = []
+        if session_dir.joinpath("session.jsonl").exists():
+            for line in session_dir.joinpath("session.jsonl").read_text(
+                encoding="utf-8"
+            ).splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                role = obj.get("role")
+                content = obj.get("content")
+                if isinstance(role, str) and isinstance(content, str):
+                    trajectory.append({"role": role, "content": content})
+
+        notebook = ""
+        if session_dir.joinpath("notebook.md").exists():
+            notebook = session_dir.joinpath("notebook.md").read_text(encoding="utf-8")
+
+        return cls(
+            session_dir=session_dir,
+            scientist_id=scientist_id,
+            notebook=notebook,
+            trajectory=trajectory,
+            meta=meta,
+            _prompt_version=prompt_version,
+        )
+
+    def is_first_round(self) -> bool:
+        """True when this Scientist has no lived trajectory and no notebook —
+        an honest cold start (round 0 of this Scientist's life on the problem)."""
+        return not self.trajectory and not self.notebook.strip()
+
+    def append_message(
+        self, role: str, content: str, *, round_id: int | None = None
+    ) -> None:
+        """Append one message to the immutable archive AND the in-memory
+        trajectory. Called live as the Scientist's round proceeds."""
+        with self.session_path.open("a", encoding="utf-8") as fh:
+            fh.write(
+                json.dumps(
+                    {"role": role, "content": content, "round": round_id},
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+        self.trajectory.append({"role": role, "content": content})
+
+    # --- the wire log: the single source of truth for the conversation --
+    #
+    # session.jsonl is a HUMAN-READABLE DERIVATION (narration records,
+    # action-JSON records, tool-results JSON) — every time the wire shape
+    # gains a field, the derivation drifts (seat-delegation arguments
+    # were lost this way; then reasoning_content). wire.jsonl is the
+    # exact wire messages in arrival order, one JSON object per line.
+    # Resume rebuilds the conversation from here and nowhere else.
+
+    @property
+    def wire_path(self) -> Path:
+        return self.session_dir / "wire.jsonl"
+
+    def append_wire(self, message: dict) -> None:
+        """Append one exact wire message (assistant turn with tool_calls
+        and reasoning, tool result, user notice). Flush per line: a crash
+        mid-run leaves at most one torn line, which load tolerates."""
+        with self.wire_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(message, ensure_ascii=False) + "\n")
+
+    def load_wire_messages(self) -> list[dict]:
+        """Rebuild the conversation from the wire log. A torn trailing
+        line (crash mid-write) is skipped; anything without a role is
+        skipped — the log is only ever appended by append_wire."""
+        messages: list[dict] = []
+        if not self.wire_path.exists():
+            return messages
+        for line in self.wire_path.read_text(
+                encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(message, dict) and message.get("role"):
+                messages.append(message)
+        return messages
+
+    def write_notebook(self, text: str) -> None:
+        """Replace the notebook with a fresh self-account (the notebook is
+        revised, not appended — it is a living self-model, not a log)."""
+        self.notebook_path.write_text(text, encoding="utf-8")
+        self.notebook = text
+
+    def append_expectations(
+        self, round_id: int, expectations: list[dict], *, captured: bool
+    ) -> None:
+        """Append one pre-registration row for ``round_id``.
+
+        The notebook is rewritten each round, so free-text expectations do not
+        survive; this row is the durable record of what the Scientist committed
+        to BEFORE the results existed (the hindsight-bias defense). Append-only:
+        a retried round appends again and the reader takes the LAST row per
+        round. ``captured=False`` (budget exhausted / model failure) must still
+        be written — a missing pre-registration is information, never silence.
+        """
+        with self.expectations_path.open("a", encoding="utf-8") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "round": round_id,
+                        "captured": captured,
+                        "expectations": expectations,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
+    def note_replayed_reflection(self, round_id: int) -> None:
+        """Record that the reflection handoff from ``round_id`` was injected
+        into a live round, so a crash-retry does not double-inject (and a
+        duplicate injection is only a harmless archived repeat anyway)."""
+        self.meta["last_reflection_replayed"] = round_id
+        self.meta_path.write_text(
+            json.dumps(self.meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    def save_meta(
+        self,
+        *,
+        round_id: int | None = None,
+        base_sha: str | None = None,
+        node_id: str | None = None,
+        node_sha: str | None = None,
+    ) -> None:
+        self.meta["scientist_id"] = self.scientist_id
+        self.meta["prompt_version"] = self._prompt_version
+        if round_id is not None:
+            if "created_round" not in self.meta or self.meta["created_round"] is None:
+                self.meta["created_round"] = round_id
+            self.meta["last_round"] = round_id
+        if base_sha is not None:
+            self.meta["last_base_sha"] = base_sha
+        if node_id is not None:
+            self.meta["node_id"] = node_id
+        if node_sha is not None:
+            self.meta["node_sha"] = node_sha
+        self.meta_path.write_text(
+            json.dumps(self.meta, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    def tail_turns(self, max_blocks: int) -> list[dict]:
+        """Return up to ``max_blocks`` complete turn-blocks from the end of the
+        trajectory, flattened back to ``[{role, content}, ...]``.
+
+        A turn-block is an assistant message followed by its user observation.
+        Truncating on block boundaries prevents orphaning an observation from
+        the action that produced it (which would leave the resumed Scientist
+        staring at a result it cannot remember wanting). Leading user seed
+        messages (the cold-start / resume notices) are not part of any block and
+        are excluded from the tail — they are superseded by the notebook and the
+        fresh world event injected this round.
+        """
+        if max_blocks <= 0:
+            return []
+        blocks: list[tuple[dict, dict]] = []
+        i = 0
+        msgs = self.trajectory
+        while i < len(msgs):
+            cur = msgs[i]
+            nxt = msgs[i + 1] if i + 1 < len(msgs) else None
+            if (
+                cur.get("role") == "assistant"
+                and nxt is not None
+                and nxt.get("role") == "user"
+            ):
+                blocks.append((cur, nxt))
+                i += 2
+            else:
+                i += 1
+        if not blocks:
+            return []
+        kept = blocks[-max_blocks:]
+        out: list[dict] = []
+        for assistant, user in kept:
+            out.append(assistant)
+            out.append(user)
+        return out

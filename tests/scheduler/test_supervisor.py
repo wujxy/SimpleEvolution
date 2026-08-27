@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from supervisor.facts import build_batch, build_runtime_facts
-from scientist.host.wake import build_wake_view
+from simpleevo.host.wake import build_wake_view
 from simpleevo.config import EvolutionConfig
 from simpleevo.db.queries import ResearchQueries
 from simpleevo.db.store import GateDecision, GateResult, Proposal, ResearchStore

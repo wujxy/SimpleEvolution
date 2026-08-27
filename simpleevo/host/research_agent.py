@@ -22,7 +22,7 @@ from tempfile import TemporaryDirectory
 
 from simpleevo.research_state import ResearchState
 
-from ..model import ChatModel
+from scientist.model import ChatModel
 from .runtime import ApptainerRuntime
 
 

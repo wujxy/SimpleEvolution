@@ -170,8 +170,8 @@ class BaseSubmitter(ABC):
         modules = {
             "proposer": "simpleevo.jobs.proposer_worker",
             "supervisor": "supervisor.cli",
-            "integrator": "scientist.host.integrator_cli",
-            "experiment": "scientist.assistant.cli",
+            "integrator": "simpleevo.host.integrator_cli",
+            "experiment": "simpleevo.assistant.cli",
         }
         module = modules[kind]
         return [

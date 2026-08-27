@@ -131,7 +131,7 @@ def main() -> int:
     if episode_id.upper() == "NONE":  # control: same world, no notebook
         notebook = ""
     elif episode_id.upper() == "MEMO":  # G0: v4 facts + pointer-only
-        from scientist.context import build_research_state_seed_pack
+        from simpleevo.context import build_research_state_seed_pack
         seed_pack = build_research_state_seed_pack({
             "child_node": CHILD,
             "experiment": EXPERIMENT,
@@ -162,7 +162,7 @@ def main() -> int:
         globals()["_MEMO_PREFIX"] = _note_pack(facts, note) + "\n\n"
     elif episode_id.upper() == "NOTE0":  # control: real facts, v4 pointer
         facts, note = _real_seed("3325e324")
-        from scientist.context import build_research_state_seed_pack
+        from simpleevo.context import build_research_state_seed_pack
         seed = {**facts, "originating_research_state": {"working_model": note}}
         notebook = ""
         globals()["_MEMO_PREFIX"] = (

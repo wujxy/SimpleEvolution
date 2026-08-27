@@ -8,16 +8,16 @@ from pathlib import Path
 from typing import Any
 
 
-from scientist.host.agent_runtime import AgentRuntime
-from scientist.host.research_agent import AgentError, ResearchAgent
-from scientist.host.scientist import (
+from simpleevo.host.agent_runtime import AgentRuntime
+from simpleevo.host.research_agent import AgentError, ResearchAgent
+from simpleevo.host.scientist import (
     ContextPolicy,
     _bump,
     _compact_live_messages,
     _estimate_tokens,
     _prompt_tokens,
 )
-from scientist.scientist_session import ScientistSession
+from simpleevo.scientist_session import ScientistSession
 
 
 class SupervisorError(AgentError):

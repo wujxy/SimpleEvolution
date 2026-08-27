@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from scientist.host.integrator import IntegratorAgent, IntegratorError
+from simpleevo.host.integrator import IntegratorAgent, IntegratorError
 from scientist.model import ModelReply
 
 

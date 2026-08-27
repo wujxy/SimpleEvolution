@@ -152,7 +152,7 @@ class ContAgentRunner:
         )
 
     def _session_prompt(self, hours: float, baseline: float) -> str:
-        from scientist.assistant.prompts import load_semantic
+        from simpleevo.assistant.prompts import load_semantic
 
         semantic = load_semantic("executor", self.config.prompt_dir)
         if self.args.mode == "continuation":
@@ -255,7 +255,7 @@ SELF_REPORT block (see the protocol in your role brief) and stop.
         return text[:6000] or "(previous shift report unavailable)"
 
     def run_session(self, ws_path: Path, baseline: float) -> None:
-        from scientist.assistant.agent import Agent
+        from simpleevo.assistant.agent import Agent
         from simpleevo.trace.store import TraceStore
 
         timeout = max(60, int(self.deadline - time.monotonic()) - 30)
@@ -453,7 +453,7 @@ SELF_REPORT block (see the protocol in your role brief) and stop.
     def run(self) -> int:
         from ablation.driver import _spend_usd
         from simpleevo.contracts import WorkspaceSpec
-        from scientist.assistant.git_worktree import GitWorkspaceProvider
+        from simpleevo.assistant.git_worktree import GitWorkspaceProvider
         from simpleevo.cli import _ensure_baseline_measured, _init_run
         from simpleevo.db.queries import ResearchQueries
 

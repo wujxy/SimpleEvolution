@@ -1,17 +1,17 @@
 """The scientist's deliberation loop, in-world.
 
-The agent owns its loop: it sees its own step budget and its own clock
-(the nudges are instruments on the dashboard, not harness orders), it
-dispatches its own tools (world, assistant, ledger), and it walks itself
-to one of the two exits — deliver_world or abstain — both checked against
-the exit contract at the door. Whatever it thinks, decides, and pays
+The agent owns its loop: it dispatches its own tools (world, assistant,
+ledger) and walks itself to one of the two exits — deliver_world or
+abstain — both checked against the exit contract at the door. The wall
+clock is the harness's allocation, not the scientist's knowledge: the
+run may be ended externally at any time (one knock shortly before, then
+cut_off on file). Whatever it thinks, decides, and pays
 lands in the world's ``.scientist/`` files as it goes; there is nobody
 watching in-flight.
 
-Ported from the host-side runtime (scientist.py) and the dissolved
-inworld_cli: the nudge texts, the suspend/notebook checkpoint, the
-terminal validation rules, and the compaction policy carry over
-verbatim — one behavioral lineage, a new owner.
+Ported from the host-side runtime and the dissolved inworld_cli: the
+nudge texts, the terminal validation rules, and the compaction policy
+carry over verbatim — one behavioral lineage, a new owner.
 """
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ from .research_skills import (
     render_research_skill_catalog,
     render_startup_skills,
 )
+from .collaboration import ROLE_NAMES
 
 # Consecutive text-only replies tolerated before the idle nudge.
 _MAX_IDLE_TURNS = 3
@@ -41,72 +42,46 @@ _IDLE_NUDGE = (
 
 # --- ported standing texts (scientist.py, verbatim) -------------------------
 
-_BUDGET_NUDGE = (
-    "Your research turn is nearing its step budget. If your world is "
-    "built and self-verified, update_research_state and deliver it now "
-    "(deliver_world). If your angle provably has nothing here, update "
-    "your state and abstain honestly. This is a resource notice, not a "
-    "required phase — keep researching if your best judgment says nothing "
-    "yet clears the bar."
+# The external kill, disclosed once as a knock. The wall clock is the
+# harness's allocation, not the scientist's knowledge: no countdown lives
+# in its context during the run. One notice shortly before the end, so a
+# concluded investigation can still deliver instead of being cut
+# mid-flight. (Budget-obligation texts were tried for two arms — one
+# honored the wording into a lost handover, the next ignored it — and
+# were removed: internal clocks made stopping worse, not better.)
+_KILL_KNOCK = (
+    "The harness will end this run externally within minutes — the wall "
+    "clock it allocated is spent. Whatever is on file survives, and no "
+    "conclusion is invented on your behalf. If you judge that a "
+    "defensible result is established, deliver it now."
 )
 
-# The wall leg must be visible to the seat: pacing INFORMATION, not a
-# stop order — what the seat does with the remaining fifth of the wall
-# is its own judgment.
-_TIME_NUDGE = (
-    "TIME: about 80% of your wall-clock budget is spent; your research "
-    "process will be cut off when it runs out (whatever is on file "
-    "survives, but the conclusion would not be yours). If your world is "
-    "built and self-verified, update_research_state and deliver it now. "
-    "If the remaining work is heavy building you have not started, one "
-    "work() call to your assistant may be cheaper than your own hands."
-)
-
-_SUSPEND_PROMPT = (
-    "Your research is being paused while the direction you submitted is "
-    "executed as an experiment. Leave a continuation note for your resumed "
-    "self — first person, as your own running account. Capture what would "
-    "let you re-enter this investigation after the world may have changed:\n"
-    "\n"
-    "  - what you currently understand about the problem, and why you "
-    "believe it;\n"
-    "  - the specific code regions, mechanisms, or measurements your current "
-    "view rests on — so you can re-check them against the world that exists "
-    "when you resume, not rely on this note as fact;\n"
-    "  - what remains unresolved or uncertain.\n"
-    "\n"
-    "Separately — and this part is recorded verbatim and replayed next to "
-    "the results before you see them — register what you expect from the "
-    "direction you submitted: what outcome you honestly expect and why, and "
-    "what outcome would WEAKEN the belief that motivated it. Write your "
-    "honest prior, not a safe prediction — a pre-registration you hedged "
-    "cannot discipline your future judgment.\n"
-    "\n"
-    "This is autobiographical memory, not an established account of the "
-    "present or future world, and not a plan your future self must follow. "
-    "You may revise or reject any of it when you resume. Return one JSON "
-    "object:\n"
-    '  {"notebook": "<your continuation note>",\n'
-    '   "expectations": [{"slot": 0,\n'
-    '                     "expectation": "<what outcome I expect and why>",\n'
-    '                     "would_weaken": "<what outcome would weaken the '
-    'belief motivating this direction>"}]}\n'
-    "(one expectations entry, for your submitted proposal)"
-)
+def _render_goal_block(goal: str, editable: list[str], base_sha: str,
+                       gate_block: str) -> str:
+    """The task definition and nothing else: objective, gates, revision,
+    writable set. The read-only rest is physical (EROFS mounts), so it is
+    stated once, never enumerated."""
+    return (
+        f"Research objective:\n{goal}\n\n"
+        f"Harness Gates:\n{gate_block or '(declared in factual records)'}\n"
+        f"\nCurrent accepted revision: {base_sha}\n"
+        f"Editable paths (writable world — mounted :rw): "
+        f"{json.dumps(editable, ensure_ascii=False)}\n"
+        "Read-only world: every other path is mounted :ro — the whole "
+        "repo is visible and runnable, but edits outside the editable "
+        "set fail at the filesystem."
+    )
 
 _COLD_START = (
-    "You are beginning this research. The goal, the gates, and the current "
-    "accepted revision are in your standing context above; your lens names "
-    "the angle this seat was hired for. Begin as a scientist begins: form "
-    "your own understanding of this world — read it, question it, talk it "
-    "through with your assistant — until you hold a working model of why "
-    "it behaves as it does. When your model is sharp enough to bet on, "
-    "design the change or measurement that would discriminate it, brief "
-    "your assistant to execute, and register what you learn in your "
-    "research state. The lease ends when your understanding has produced "
-    "a world worth delivering — or an honest memo that this lens has no "
-    "ore here. There is no phase you must rush through; take the time "
-    "your judgment needs."
+    "You are beginning this investigation as its principal investigator. "
+    "Ground yourself in the live world and determine what uncertainty "
+    "deserves attention first; consult past experiments when they are "
+    "relevant to that judgment. Your own inspection and small "
+    "discriminating probes serve your judgment; substantial "
+    "investigations, implementations, and measurement campaigns are work "
+    "for Searcher, Proposer, Executor, or Challenger, and you may open "
+    "them before any stable judgment exists. Preserve uncertainty when "
+    "the evidence is insufficient."
 )
 
 # Handover double cap: the prompt teaches ≤400; the door rejects beyond
@@ -116,62 +91,14 @@ _COLD_START = (
 _HANDOVER_SOFT_WORD_CAP = 400
 _HANDOVER_HARD_WORD_CAP = 600
 
-# The seat's mode of existence, appended after the lens identity.
-_SCIENTIST_MODE = (
-    "You are a scientist. Your work is understanding — a model of this "
-    "world that evidence keeps correcting, carried in your research "
-    "state. You advance it by reading, thinking, and directing. Your "
-    "assistant is Claude Code, far stronger than your own hands at "
-    "execution — brief it and keep thinking. Execution is "
-    "its, judgment is yours; the deciding is the one thing you cannot "
-    "delegate."
-)
-
-
-def seat_identity_block(lens: dict | None, node_id: str | None) -> str:
-    """The seat's identity: system-prompt line one (seat design §7.3).
-
-    The lens is stated as identity — the angle this seat was hired for —
-    with its three parts verbatim from the basis. ``None`` (no lens)
-    degrades to the plain control identity."""
-    if not lens:
-        return "You are a Scientist assigned to this node."
-    lens_id = lens.get("lens_id") or "?"
-    name = lens.get("name_zh") or lens_id
-    parts = [
-        f"You are the {lens_id}（{name}）seat of node "
-        f"{node_id or 'this world'}. Your lens is your identity: it is the "
-        "angle you were hired for, not advice you may weigh.",
-    ]
-    if lens.get("directive"):
-        parts.append(f"透镜操作指令：{lens['directive']}")
-    if lens.get("forbidden"):
-        parts.append(f"透镜禁令：{lens['forbidden']}")
-    if lens.get("self_check"):
-        parts.append(f"提交自检：{lens['self_check']}")
-    parts.append(_SCIENTIST_MODE)
-    return "\n\n".join(parts)
-
-
-def build_system_prompt(spec: dict, *, notebook: str = "",
-                        notes: str = "", roots: dict | None = None) -> str:
-    """Assemble the standing context from the spec (package-side).
-
-    The harness (or the standalone user) writes the spec; whatever resume
-    history the seat should receive travels as ``opening_messages`` —
-    facts and one handover, re-authored, never forwarded blobs. Here:
-    identity (lens) → charter → world facts → skills → native tool/
-    protocol/boundaries blocks → notebook (the seat's own revisable
-    autobiographical memory, when a session continues one).
-
-    ``roots`` names this world's real work/repo/scratch directories for
-    the boundaries block — in-container they ARE ``/work`` / ``/repo`` /
-    ``/scratch``; standalone they are the host paths the shell will
-    actually see."""
-    from .memory.context import build_generation_context
+def build_system_prompt(spec: dict, *, roots: dict | None = None) -> str:
+    """Assemble the Scientist's stable PI context. Revisable research
+    memory is supplied as an attributed ordinary message by the caller,
+    never as system content."""
     from .native_tools import (
+        NATIVE_CONCLUDING_BLOCK,
         NATIVE_PROTOCOL_BLOCK,
-        NATIVE_TOOL_BLOCK,
+        NATIVE_RUNTIME_BLOCK,
         render_native_boundaries,
     )
     roots = roots or {}
@@ -185,37 +112,56 @@ def build_system_prompt(spec: dict, *, notebook: str = "",
     editable = list(spec.get("editable_paths") or [])
     gate_block = spec.get("gate_block") or "(no gates stated)"
     base_sha = spec.get("base_sha") or "—" * 40
-    lens = spec.get("lens") or None
-    node_id = spec.get("node_id")
-
     charter = str(spec.get("charter") or "").strip()
     if not charter:
         from .prompts import load_semantic
 
-        charter = load_semantic("proposer", None)
+        charter = load_semantic("scientist", None)
+    from .prompts import load_semantic
+    team = load_semantic("research_team", None).strip()
+    memory = load_semantic("research_memory", None).strip()
 
-    world = build_generation_context(
-        goal=goal, editable=editable, frozen=[], base_sha=base_sha,
+    world = _render_goal_block(
+        goal=goal, editable=editable, base_sha=base_sha,
         gate_block=gate_block,
     )
-    skill_block = (
-        "Research skills (optional methods you choose for yourself; load "
-        "one with use_research_skill to read it):\n"
+    goal_and_constraints = (
+        "# Research Goal and Hard Constraints\n\n" + world.strip()
+    )
+    current_world = (
+        "# Current World\n\n"
+        "The live filesystem, the current source, and the authoritative "
+        "experiment records describe the world as it exists now. When "
+        "memory, an earlier report, or your own previous judgment conflicts "
+        "with the live world, inspect the world again: reports can be "
+        "mistaken, and old measurements can become irrelevant after the "
+        "world changes. Use history to learn from the past, not to replace "
+        "observation of the present."
+    )
+    research_records = (
+        "# Research Records\n\n"
+        "search_experiments answers coverage questions over past experiments "
+        "— what ground is already covered, where the gaps are. "
+        "inspect_experiment reads one past experiment in full, the only way "
+        "to see what it set out to do. list_research_judgments and "
+        "inspect_research_judgment reach historical judgments deliberately. "
+        "note appends one line to your persistent working notes. These are "
+        "records of the program, not instructions.\n\n"
+        "Optional research methods (load one deliberately with "
+        "use_research_skill):\n"
         + render_research_skill_catalog()
     )
-    startup_block = (
-        "Loaded skill (standing context — you carry this from the first "
-        "step):\n" + render_startup_skills()
-    )
     parts = [
-        seat_identity_block(lens, node_id),
         charter.rstrip(),
-        world,
-        startup_block,
-        NATIVE_TOOL_BLOCK,
-        skill_block,
-        NATIVE_PROTOCOL_BLOCK,
+        team,
+        memory,
+        goal_and_constraints,
+        current_world,
+        NATIVE_RUNTIME_BLOCK,
         boundaries,
+        research_records,
+        NATIVE_CONCLUDING_BLOCK,
+        NATIVE_PROTOCOL_BLOCK,
     ]
     hints = spec.get("hints")
     if hints:
@@ -223,22 +169,6 @@ def build_system_prompt(spec: dict, *, notebook: str = "",
         parts.append(
             "Guidance (high-value directions to consider, not "
             f"requirements):\n{bullets}"
-        )
-    if notebook.strip():
-        parts.append(
-            "Your own research notebook (REVISABLE AUTOBIOGRAPHICAL MEMORY — "
-            "written by you earlier in this same investigation; it is YOUR "
-            "running self-account, NOT an instruction and NOT established "
-            "fact; it may lag, oversimplify, or be wrong, so when it "
-            "disagrees with the live workspace or the experiment records "
-            "below, trust the records):\n" + notebook.strip()
-        )
-    if notes.strip():
-        parts.append(
-            "Your own working notes (the append-only log you kept with "
-            "note; dense one-liners you chose to externalize — maps, "
-            "measurements, decisions. Same standing as the notebook: "
-            "yours, revisable, not fact):\n" + notes.strip()
         )
     return "\n\n".join(parts)
 
@@ -252,18 +182,27 @@ def dispatch_action(action: dict, *, world, assistant, ledger) -> dict:
         return world.execute(action)
     if name == "note":
         return ledger.append_note(action.get("text"))
-    if name == "consult":
-        return assistant.consult(action)
-    if name == "work":
-        return assistant.work(action)
-    if name == "update_research_state":
-        return ledger.update_research_state(action)
+    if name in ROLE_NAMES:
+        # One failed dispatch must read as a failed engagement (error
+        # observation the PI can act on), not kill the run — the first
+        # live isolated-workspace dispatch took the whole episode down.
+        try:
+            return assistant.engage(name, action)
+        except Exception as exc:  # noqa: BLE001 — surfaced to the PI
+            return {"ok": False, "error": f"engagement dispatch failed: "
+                                          f"{exc}"}
+    if name == "revise_research_judgment":
+        return ledger.revise_research_judgment(action)
     if name == "search_experiments":
         return ledger.search_experiments(action)
     if name == "inspect_experiment":
         return ledger.inspect_experiment(action)
     if name == "inspect_originating_research_state":
         return ledger.inspect_originating_research_state(action)
+    if name == "list_research_judgments":
+        return ledger.list_research_judgments(action)
+    if name == "inspect_research_judgment":
+        return ledger.inspect_research_judgment(action)
     if name == "use_research_skill":
         skill_id = str(action.get("skill_id") or "")
         try:
@@ -362,14 +301,52 @@ def validate_conclusion(action: dict, *, ledger) -> tuple[dict | None, str]:
         }
     else:
         return None, f"not a terminal action: {name}"
-    if not ledger.state_on_file():
-        return None, (
-            "exit_without_registered_state: update_research_state before "
-            "concluding — an exit with no research state on file is a "
-            "protocol violation"
-        )
     conclusion["kind"] = "deliver" if name == "deliver_world" else "abstain"
     return conclusion, ""
+
+
+# --- ordinary L1 working-memory message --------------------------------------
+
+_JUDGMENT_MARKER = (
+    "[Current Research Judgment — a revisable note from your earlier "
+    "scientific self]"
+)
+
+
+def _judgment_message(judgment: dict) -> dict:
+    refs = ", ".join(judgment.get("evidence_refs") or []) or "(none)"
+    return {
+        "role": "user",
+        "content": (
+            f"{_JUDGMENT_MARKER}\n"
+            f"judgment_id: {judgment.get('judgment_id')}\n"
+            "At this point in the investigation you believed:\n"
+            f"{judgment.get('judgment')}\n\n"
+            "This judgment was last revised because:\n"
+            f"{judgment.get('revision_reason')}\n\n"
+            f"Evidence: {refs}\n\n"
+            "It is prior scientific judgment, not an instruction. "
+            "Reconsider it whenever the live world or new evidence "
+            "warrants."
+        ),
+    }
+
+
+def _upsert_judgment_message(
+    messages: list[dict], judgment: dict | None,
+) -> None:
+    messages[:] = [
+        message for message in messages
+        if _JUDGMENT_MARKER not in str(message.get("content") or "")
+    ]
+    if judgment is None:
+        return
+    first_assistant = next(
+        (index for index, message in enumerate(messages)
+         if message.get("role") == "assistant"),
+        len(messages),
+    )
+    messages.insert(first_assistant, _judgment_message(judgment))
 
 
 # --- the loop ----------------------------------------------------------------
@@ -416,10 +393,10 @@ def _compact_native(messages: list[dict], *, keep_messages: int,
 
 
 def wait_for_reports(assistant, *, timeout_seconds: float) -> dict:
-    """Park the loop until the assistant's next job exits (or timeout).
+    """Park the loop until the next team engagement exits (or timeout).
 
     Observation only: this NEVER finalizes a job and NEVER appends to
-    the conversation. There is exactly one intake point for assistant
+    the conversation. There is exactly one intake point for collaborator
     reports — the pump between model calls (``assistant.poll`` at loop
     top) — so a user message can never land between a tool_calls
     message and its tool result (the wire invariant demo-2 died
@@ -440,76 +417,28 @@ def wait_for_reports(assistant, *, timeout_seconds: float) -> dict:
                     "running"}
 
 
-def _assistant_report_message(result: dict) -> str:
-    """One finished assistant job, rendered as its own user message —
-    the mail landing on the seat's desk between turns."""
-    header = f"[your assistant finished | {result.get('call_id', '?')}]"
+def _collaborator_report_message(result: dict) -> str:
+    """Render one attributed team report as an ordinary user message."""
+    header = (
+        f"[Research collaborator report | role={result.get('role')} | "
+        f"collaborator_id={result.get('collaborator_id')}]"
+    )
     if not result.get("ok"):
-        return f"{header}\n{result.get('error') or 'job failed'}"
+        return f"{header}\nstatus: failed\nerror: {result.get('error') or 'engagement failed'}"
+    metrics = json.dumps(result.get("metrics") or {}, ensure_ascii=False)
     return (
         f"{header}\n"
-        f"mode: {result.get('mode')}\n"
-        f"diff_summary: {result.get('diff_summary')}\n"
-        f"self_report: {result.get('self_report_digest')}\n"
-        f"metrics: {json.dumps(result.get('metrics') or {},
-                              ensure_ascii=False)}\n"
-        "(its own report, not a verdict — verify what matters)"
-    )
-
-
-def _assistant_archive_text(reply) -> str:
-    """The session.jsonl form of one native assistant turn: its text when
-    present, else a compact trace of the calls (the archive must record
-    WHAT was asked even when the model said nothing)."""
-    if reply.text and reply.text.strip():
-        return reply.text
-    return json.dumps(
-        [{"action": c.name, "arguments_raw": c.arguments_raw}
-         for c in reply.tool_calls],
-        ensure_ascii=False,
+        f"report: {result.get('report_digest') or result.get('self_report_digest')}\n"
+        f"artifacts: {result.get('artifacts') or result.get('diff_summary') or '(none)'}\n"
+        f"metrics: {metrics}\n"
+        f"uncertainty: {result.get('uncertainty') or '(not stated)'}\n"
+        "status: collaborator testimony; not Scientist judgment"
     )
 
 
 def _log(message: str) -> None:
     print(f"[scientist {time.strftime('%H:%M:%S')}] {message}",
           flush=True)
-
-
-def _notebook_checkpoint(model, system_prompt: str, messages: list[dict],
-                         session, deadline: float, usages: list,
-                         ledger) -> None:
-    """Cut-off continuity: leave a continuation note as the notebook.
-    Best-effort — the checkpoint never blocks the exit."""
-    if session is None:
-        return
-    remaining = deadline - time.monotonic()
-    if remaining <= 5:
-        return
-    try:
-        reply = model.complete(
-            system=system_prompt,
-            messages=list(messages) + [{"role": "user",
-                                        "content": _SUSPEND_PROMPT}],
-            timeout_seconds=remaining,
-        )
-    except Exception as exc:  # noqa: BLE001 — checkpoint is best-effort
-        _log(f"notebook checkpoint failed: {exc}")
-        return
-    if reply.usage is not None:
-        usages.append(reply.usage)
-        ledger.note_usage(reply.usage)
-    try:
-        obj = json.loads(reply.text)
-        note = obj.get("notebook")
-    except (json.JSONDecodeError, TypeError, AttributeError):
-        note = None
-    if isinstance(note, str) and note.strip():
-        session.write_notebook(note.strip())
-        session.append_message("user", _SUSPEND_PROMPT, round_id=0)
-        session.append_message("assistant", reply.text, round_id=0)
-        _log("notebook updated at cut-off")
-    else:
-        _log("notebook checkpoint produced nothing; left as-is")
 
 
 def run_episode(
@@ -523,7 +452,6 @@ def run_episode(
     steps_budget: int,
     wall_seconds: float,
     session=None,
-    round_id: int = 0,
     compact_keep_messages: int = 400,
     compact_max_chars: int = 200_000,
 ) -> dict:
@@ -535,41 +463,45 @@ def run_episode(
     deadline = started + wall_seconds
     usages: list = []
     action_log: list[dict] = []
-    reminder_step = int(0.8 * steps_budget)
-    reminded = False
-    time_reminded = False
+    knocked = False
     idle_turns = 0
     outcome = "cut_off"
     conclusion: dict | None = None
+    _upsert_judgment_message(messages, ledger.current_judgment())
 
-    def _archive(role: str, content: str) -> None:
+    def _emit(message: dict) -> None:
+        """Append to the live list AND the wire log — the wire log is the
+        single source of truth a resume rebuilds from."""
+        messages.append(message)
         if session is not None:
-            session.append_message(role, content, round_id=round_id)
+            session.append_wire(message)
+
+    if session is not None and not session.wire_path.exists():
+        # cold start: the framing (opening messages + judgment note) is
+        # part of the record too
+        for message in messages:
+            session.append_wire(message)
 
     def _nudge(text: str) -> None:
-        messages.append({"role": "user", "content": text})
-        _archive("user", text)
+        _emit({"role": "user", "content": text})
 
     def _deliver(report: dict) -> None:
-        content = _assistant_report_message(report)
-        messages.append({"role": "user", "content": content})
-        _archive("user", content)
+        _emit({"role": "user",
+               "content": _collaborator_report_message(report)})
 
     try:
         for index in range(steps_budget):
             step = index + 1
-            # The assistant's finished jobs land as messages before the next
-            # model call — the seat never waits on work it dispatched.
+            # Finished engagements land as messages before the next model call.
             for report in assistant.poll():
                 _deliver(report)
-                _log(f"assistant job {report.get('call_id')} finished")
-            if not reminded and reminder_step > 0 and step >= reminder_step:
-                _nudge(_BUDGET_NUDGE)
-                reminded = True
-            if not time_reminded and (
-                    time.monotonic() - started >= 0.8 * wall_seconds):
-                _nudge(_TIME_NUDGE)
-                time_reminded = True
+                _log(f"{report.get('role')} engagement "
+                     f"{report.get('collaborator_id')} finished")
+            if not knocked and (
+                    deadline - time.monotonic()
+                    < min(600.0, 0.05 * wall_seconds)):
+                _nudge(_KILL_KNOCK)
+                knocked = True
             # Graceful wall exit: with less than ~10% of the wall (cap 90s)
             # left there is no room for another model call plus a conclusion
             # — conclude cut_off on file instead.
@@ -593,8 +525,7 @@ def run_episode(
                 # Text-only turn: archive and nudge; the model acts by calling.
                 idle_turns += 1
                 _log(f"step {step}: text-only reply")
-                messages.append({"role": "assistant", "content": reply.text})
-                _archive("assistant", reply.text)
+                _emit({"role": "assistant", "content": reply.text})
                 if idle_turns >= _MAX_IDLE_TURNS:
                     _nudge(_IDLE_NUDGE)
                     idle_turns = 0
@@ -608,8 +539,7 @@ def run_episode(
             if terminals and len(actions) == 1:
                 action = actions[0]
                 action_log.append({"action": action["action"], "step": step})
-                messages.append(wire_assistant_message(reply, actions))
-                _archive("assistant", _assistant_archive_text(reply))
+                _emit(wire_assistant_message(reply, actions))
                 conclusion, rejection = validate_conclusion(
                     action, ledger=ledger)
                 if conclusion is not None:
@@ -622,14 +552,11 @@ def run_episode(
                 outcome = "cut_off"
                 conclusion = None
                 observation = {"ok": False, "error": rejection}
-                messages.append(wire_tool_result(
+                _emit(wire_tool_result(
                     action.get("tool_call_id", ""), observation))
-                _archive("user", json.dumps(
-                    {"tool_results": [observation]}, ensure_ascii=False))
                 continue
 
-            messages.append(wire_assistant_message(reply, actions))
-            _archive("assistant", _assistant_archive_text(reply))
+            _emit(wire_assistant_message(reply, actions))
             for action in actions:
                 name = action["action"]
                 if name in NATIVE_TERMINAL_ACTIONS:
@@ -663,25 +590,24 @@ def run_episode(
                         ledger=ledger,
                     )
                 action_log.append({"action": name, "step": step})
-                messages.append(wire_tool_result(
+                _emit(wire_tool_result(
                     action.get("tool_call_id", ""), observation))
-                _archive("user", json.dumps(
-                    {"tool_results": [observation]}, ensure_ascii=False))
+                if name == "revise_research_judgment" and observation.get("ok"):
+                    _upsert_judgment_message(messages, ledger.current_judgment())
             _compact_native(
                 messages, keep_messages=compact_keep_messages,
                 max_chars=compact_max_chars,
             )
+            _upsert_judgment_message(messages, ledger.current_judgment())
 
         # Budget expiry: conclude cut_off — what is on file survives.
-        _notebook_checkpoint(model, system_prompt, messages, session, deadline,
-                             usages, ledger)
         conclusion = {"kind": "cut_off", "reason": "budget exhausted"}
         return _result("cut_off", conclusion, steps_budget, usages,
                        action_log)
     finally:
         abandoned = assistant.shutdown()
         if abandoned:
-            _log(f"{abandoned} assistant job(s) abandoned at exit")
+            _log(f"{abandoned} collaborator engagement(s) abandoned at exit")
 
 
 def _result(outcome, conclusion, steps, usages, action_log) -> dict:

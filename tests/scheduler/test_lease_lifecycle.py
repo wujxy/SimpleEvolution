@@ -133,7 +133,7 @@ def test_gate_reject_reopens_the_seat_with_wake_feedback(env):
     assert len(attempts) == 2
 
     # The reopened seat sees the adjudication feedback at wake.
-    from scientist.host.wake import build_wake_view
+    from simpleevo.host.wake import build_wake_view
 
     feedback = ResearchQueries(store.path).lease_adjudication_for_episode(
         episode.episode_id)

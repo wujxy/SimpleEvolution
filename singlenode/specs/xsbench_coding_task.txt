@@ -1,0 +1,9 @@
+You are working on the XSBench macroscopic cross-section lookup kernel in /work. Optimize src/ for speed — higher lookups_per_sec (single-threaded, event-based, H-M small, unionized grid; see /work/scripts/config.sh) — while keeping results bit-identical: the verification checksum must equal the frozen reference.
+
+The evaluation scripts and frozen reference numbers are fixed; only src/ is writable (the filesystem enforces this). The harness runs, in order:
+  bash scripts/check_verify.sh   (VERIFY gate: bit-identical at multiple lookup lengths)
+  bash scripts/bench.sh          (objective: lookups_per_sec; RATE_PLAUSIBLE cap 8M rejects timing cheats — all lookup work must stay in the timed loop)
+
+Calibration, measured on comparable single-core hardware: the unmodified kernel runs at ~1.45M lookups_per_sec; optimizations that keep the existing lookup structure land near 2.5M; substantially restructured kernels have exceeded 3.2M. The plausibility cap is 8M.
+
+Measure your own progress with the two scripts; work in /work (builds under src/ are fine; /scratch is free space).

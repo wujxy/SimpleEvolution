@@ -25,8 +25,8 @@ from simpleevo.research_state import ResearchState
 from .research_agent import WorkingState
 from .runtime import MountMap
 from .child_processes import CHILD_PROCESSES
-from ..research_files import PathBoundary, ResearchFiles
-from ..research_skills import load_research_skill
+from scientist.research_files import PathBoundary, ResearchFiles
+from scientist.research_skills import load_research_skill
 
 
 @dataclass(frozen=True)

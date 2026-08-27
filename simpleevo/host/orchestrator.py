@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .runtime import ApptainerRuntime, MountMap
-from ..model import ChatModel
+from scientist.model import ChatModel
 from ..context import build_world_transition_pack
 from .scientist import (
     ContextPolicy,

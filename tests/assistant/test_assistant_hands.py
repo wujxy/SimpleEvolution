@@ -9,10 +9,10 @@ import pytest
 
 from simpleevo.contracts import GateDecision
 from simpleevo.db.store import ResearchStore
-from scientist.assistant.hands import (
+from simpleevo.assistant.hands import (
     AssistantHands, HandTally, _cap_words, _parse_tail,
 )
-from scientist.assistant.lab import Laboratory, snapshot_commit
+from simpleevo.assistant.lab import Laboratory, snapshot_commit
 
 
 class _FakeAgent:
@@ -78,7 +78,7 @@ def env(tmp_path):
         capture_output=True, text=True, check=True,
     ).stdout.strip()
 
-    from scientist.assistant.git_worktree import GitWorkspaceProvider
+    from simpleevo.assistant.git_worktree import GitWorkspaceProvider
 
     provider = GitWorkspaceProvider(run_dir, repo)
     provider.initialize()
@@ -212,20 +212,3 @@ def test_call_budget_refusal(env):
     hands.tally = HandTally(max_consult_calls=0, max_work_calls=0)
     assert hands.consult("q")["status"] == "refused"
     assert hands.work("x")["status"] == "refused"
-
-
-def test_claude_use_skill_loads_at_startup():
-    from scientist.research_skills import (
-        load_research_skill, render_startup_skills,
-    )
-
-    text = load_research_skill("claude_use")
-    # 四节齐备,教的是关系(要反驳不要附和、判断权在席位),不是 API。
-    for section in ("问", "辩", "做", "审"):
-        assert section in text
-    assert "不要附和" in text or "Do NOT agree" in text
-    assert "judgment" in text or "判断" in text
-    startup = render_startup_skills()
-    assert "claude_use" in startup or "your assistant" in startup
-    # reframe 保持按需,不进开局块。
-    assert "reframe" not in startup.lower()

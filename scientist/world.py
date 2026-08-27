@@ -18,6 +18,12 @@ from pathlib import Path
 
 from .research_files import PathBoundary, ResearchFiles, _WRITE_MAX_CHARS
 
+# Hard ceiling for any single bash call. The world default
+# (command_timeout_seconds) bounds only calls that do not ask for more;
+# an explicit per-call timeout may run longer — long builds, benchmark
+# campaigns — up to this cap.
+_BASH_TIMEOUT_CEILING = 3600
+
 
 class LocalWorld:
     """bash / read_file / write_file over the lived-in filesystem."""
@@ -154,7 +160,7 @@ class LocalWorld:
                 }
             self.last_workdir = str(host)
         timeout = action.get("timeout_seconds") or self.timeout_seconds
-        timeout = min(int(timeout), self.timeout_seconds)
+        timeout = max(1, min(int(timeout), _BASH_TIMEOUT_CEILING))
         env = dict(os.environ)
         env.update(self.git_env)
         try:

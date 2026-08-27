@@ -10,7 +10,7 @@ from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
 from ..assistant.git_worktree import GitWorkspaceProvider, WorkspaceSpec
 
 from .integrator import IntegratorAgent
-from ..model import build_chat_model
+from scientist.model import build_chat_model
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -12,6 +12,8 @@ import pytest
 from scientist.agent import (
     _HANDOVER_HARD_WORD_CAP,
     _HANDOVER_SOFT_WORD_CAP,
+    _compact_native,
+    _upsert_judgment_message,
     validate_conclusion,
 )
 from scientist.ledger import LocalLedger
@@ -37,24 +39,61 @@ def _seed_experiments(ledger: LocalLedger, rows: list[dict]) -> None:
 
 def test_state_on_file_requires_a_row(ledger: LocalLedger):
     assert not ledger.state_on_file()
-    reply = ledger.update_research_state({
-        "working_model": "binary search dominates",
+    reply = ledger.revise_research_judgment({
+        "judgment": "binary search dominates",
+        "revision_reason": "first probes",
         "evidence_refs": ["src/Simulation.c:120"],
     })
     assert reply["ok"] and reply["revision"] == 1
     assert ledger.state_on_file()
-    second = ledger.update_research_state({
-        "working_model": "revised", "evidence_refs": [],
+    second = ledger.revise_research_judgment({
+        "judgment": "revised", "revision_reason": "new evidence",
+        "evidence_refs": [],
     })
     assert second["revision"] == 2
-    assert ledger.current_state()["working_model"] == "revised"
+    assert ledger.current_state()["judgment"] == "revised"
 
 
-def test_update_research_state_validates(ledger: LocalLedger):
-    assert not ledger.update_research_state(
-        {"working_model": "  "})["ok"]
-    assert not ledger.update_research_state(
-        {"working_model": "m", "evidence_refs": [1]})["ok"]
+def test_current_judgment_may_be_absent(ledger: LocalLedger):
+    assert ledger.current_judgment() is None
+
+
+def test_judgment_revision_is_append_only_and_may_be_uncertain(
+    ledger: LocalLedger,
+):
+    first = ledger.revise_research_judgment({
+        "judgment": "No stable mechanism yet; allocation and cache costs remain plausible.",
+        "revision_reason": "Initial probes conflict.",
+        "evidence_refs": ["experiment:E1"],
+    })
+    second = ledger.revise_research_judgment({
+        "judgment": "Allocation lifetime appears primary; cache cost remains uncertain.",
+        "revision_reason": "E2 moved cache cost below 10%.",
+        "evidence_refs": ["experiment:E2"],
+    })
+    assert first["judgment_id"] == "rj-0001"
+    assert second["judgment_id"] == "rj-0002"
+    assert ledger.current_judgment()["judgment_id"] == "rj-0002"
+
+
+def test_judgment_history_is_thin_and_detail_is_pull_only(ledger: LocalLedger):
+    ledger.revise_research_judgment({
+        "judgment": "private long judgment body",
+        "revision_reason": "new evidence",
+        "evidence_refs": ["experiment:E3"],
+    })
+    index = ledger.list_research_judgments({"limit": 10})
+    assert "judgment" not in index["results"][0]
+    detail = ledger.inspect_research_judgment({"judgment_id": "rj-0001"})
+    assert detail["judgment"] == "private long judgment body"
+
+
+def test_revise_research_judgment_validates(ledger: LocalLedger):
+    assert not ledger.revise_research_judgment(
+        {"judgment": "  ", "revision_reason": "r"})["ok"]
+    assert not ledger.revise_research_judgment(
+        {"judgment": "m", "revision_reason": "r",
+         "evidence_refs": [1]})["ok"]
 
 
 def test_search_experiments_buckets(ledger: LocalLedger):
@@ -137,12 +176,12 @@ def test_validate_conclusion_deliver():
     assert conclusion["kind"] == "deliver"
 
 
-def test_validate_conclusion_requires_state_on_file():
+def test_validate_conclusion_does_not_fabricate_state_for_exit():
     ledger = _FakeLedger(False)
     conclusion, rejection = validate_conclusion(
         _handover(3), ledger=ledger)
-    assert conclusion is None
-    assert "state" in rejection
+    assert conclusion is not None
+    assert rejection == ""
 
 
 def test_validate_conclusion_handover_caps():
@@ -241,11 +280,10 @@ def test_render_native_boundaries_names_the_roots():
 
 
 def test_note_appends_and_reads_back(ledger: LocalLedger):
-    assert ledger.read_notes() == ""
     first = ledger.append_note("grid_search is 5% — not the bottleneck")
     assert first["ok"]
     ledger.append_note("carried-seed: +12%, checksum identical")
-    notes = ledger.read_notes()
+    notes = ledger.notes_path.read_text(encoding="utf-8")
     assert "not the bottleneck" in notes
     assert "checksum identical" in notes
     assert not ledger.append_note("   ")["ok"]
@@ -261,12 +299,45 @@ def test_note_dispatch_and_resume_context(tmp_path: Path):
         world=None, assistant=None, ledger=ledger,
     )
     assert reply["ok"]
-    prompt = build_system_prompt(
-        {"goal": "g", "editable_paths": ["src"]},
-        notes=ledger.read_notes(),
-    )
-    assert "precompute thresholds" in prompt
-    assert "append-only log" in prompt
+    prompt = build_system_prompt({"goal": "g", "editable_paths": ["src"]})
+    assert "precompute thresholds" not in prompt
+
+
+def test_judgment_is_an_ordinary_revisable_message_not_system_text():
+    messages = [{"role": "user", "content": "begin"}]
+    _upsert_judgment_message(messages, {
+        "judgment_id": "rj-0001",
+        "judgment": "Cache cost and allocation are both plausible.",
+        "revision_reason": "evidence conflicts",
+        "evidence_refs": ["experiment:E1"],
+    })
+    assert messages[1]["role"] == "user"
+    assert "not an instruction" in messages[1]["content"]
+    assert "both plausible" in messages[1]["content"]
+
+
+def test_judgment_message_is_replaced_and_survives_compaction():
+    messages = [{"role": "user", "content": "begin"}]
+    _upsert_judgment_message(messages, {
+        "judgment_id": "rj-0001", "judgment": "old",
+        "revision_reason": "first", "evidence_refs": [],
+    })
+    _upsert_judgment_message(messages, {
+        "judgment_id": "rj-0002", "judgment": "new",
+        "revision_reason": "revision", "evidence_refs": [],
+    })
+    for index in range(8):
+        messages.extend([
+            {"role": "assistant", "content": f"turn {index}"},
+            {"role": "user", "content": f"observation {index}"},
+        ])
+    _compact_native(messages, keep_messages=4, max_chars=1000)
+    blocks = [
+        message for message in messages
+        if "Current Research Judgment" in str(message.get("content"))
+    ]
+    assert len(blocks) == 1
+    assert "new" in blocks[0]["content"] and "old" not in blocks[0]["content"]
 
 
 # --- async work: dispatch, keep working, report lands later ------------------
@@ -293,7 +364,7 @@ def _fake_claude(tmp_path: Path) -> Path:
     return script
 
 
-def test_work_async_receipt_then_report(tmp_path: Path):
+def test_executor_async_receipt_then_report(tmp_path: Path):
     import time as _time
 
     from scientist.assistant_tools import AssistantConfig, InWorldAssistant
@@ -306,10 +377,11 @@ def test_work_async_receipt_then_report(tmp_path: Path):
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
-    receipt = assistant.work(
-        {"action": "work", "instruction": "instrument the kernel"})
+    receipt = assistant.engage("executor", {
+        "brief": "instrument the kernel",
+        "definition_of_done": "report changes and measurements",
+    })
     assert receipt["ok"] and receipt["status"] == "running"
-    assert "arrives as its own message" in receipt["note"]
 
     reports: list[dict] = []
     for _ in range(200):
@@ -319,11 +391,12 @@ def test_work_async_receipt_then_report(tmp_path: Path):
         _time.sleep(0.05)
     assert reports, "dispatched job never finished"
     report = reports[0]
-    assert report["ok"] and report["call_id"] == receipt["call_id"]
+    assert report["ok"]
+    assert report["collaborator_id"] == receipt["collaborator_id"]
     assert report["diff_summary"] == "changed a.c"
     assert report["metrics"] == {"speed": 2}
     digest_path = (world.work / ".scientist" / "assistant"
-                   / receipt["call_id"] / "digest.json")
+                   / receipt["collaborator_id"] / "digest.json")
     assert digest_path.exists()
     rows = [json.loads(line)
             for line in ledger.assistant_calls_path.read_text().splitlines()]
@@ -334,7 +407,7 @@ def test_work_async_receipt_then_report(tmp_path: Path):
     assert assistant.shutdown() == 0
 
 
-def test_work_receipt_lists_outstanding(tmp_path: Path):
+def test_engagement_receipt_lists_outstanding(tmp_path: Path):
     import time as _time
 
     from scientist.assistant_tools import AssistantConfig, InWorldAssistant
@@ -350,13 +423,14 @@ def test_work_receipt_lists_outstanding(tmp_path: Path):
                                work_default_minutes=10),
         ledger=ledger, episode_id="t",
     )
-    first = assistant.work({"action": "work", "instruction": "a"})
-    assert first["outstanding_jobs"] == [first["call_id"]]
+    first = assistant.engage("executor", {
+        "brief": "a", "definition_of_done": "done a",
+    })
+    assert first["outstanding_jobs"] == [first["collaborator_id"]]
     _time.sleep(0.1)
-    second = assistant.work({"action": "work", "instruction": "b"})
-    assert second["outstanding_jobs"] == [first["call_id"],
-                                          second["call_id"]]
-    assert "still running" in second["note"]
+    second = assistant.engage("searcher", {"brief": "b"})
+    assert second["outstanding_jobs"] == [first["collaborator_id"],
+                                          second["collaborator_id"]]
     assistant.shutdown()
 
 
@@ -381,7 +455,9 @@ def test_wait_blocks_until_report(tmp_path: Path):
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
-    assistant.work({"action": "work", "instruction": "quick job"})
+    assistant.engage("executor", {
+        "brief": "quick job", "definition_of_done": "report completion",
+    })
     started = _time.time()
     observation = wait_for_reports(assistant, timeout_seconds=30.0)
     assert observation["ok"] and observation.get("landed") == 1
@@ -430,17 +506,20 @@ def test_wait_report_never_orphans_tool_result(tmp_path: Path):
             self.seen.append([dict(m) for m in messages])
             self.turn += 1
             if self.turn == 1:
-                return ModelReply(text="dispatch", tool_calls=(
-                    ToolCall(id="c1", name="work",
-                             arguments={"instruction": "instrument"}),))
+                    return ModelReply(text="dispatch", tool_calls=(
+                        ToolCall(id="c1", name="executor", arguments={
+                            "brief": "instrument",
+                            "definition_of_done": "report the result",
+                        }),))
             if self.turn == 2:
                 return ModelReply(text="wait", tool_calls=(
                     ToolCall(id="c2", name="wait",
                              arguments={"timeout_seconds": 30}),))
             if self.turn == 3:
-                return ModelReply(text="state", tool_calls=(
-                    ToolCall(id="c3", name="update_research_state",
-                             arguments={"working_model": "m"}),))
+                    return ModelReply(text="state", tool_calls=(
+                        ToolCall(id="c3", name="revise_research_judgment",
+                                 arguments={"judgment": "m",
+                                            "revision_reason": "probe"}),))
             return ModelReply(text="stop", tool_calls=(
                 ToolCall(id="c4", name="abstain",
                          arguments={"reason": "probe",
@@ -466,13 +545,88 @@ def test_wait_report_never_orphans_tool_result(tmp_path: Path):
         "— the demo-2 wire bug")
     delivered = [
         m for m in after_wait[idx + 2:]
-        if m.get("role") == "user" and "assistant finished" in str(
+        if m.get("role") == "user" and "Research collaborator report" in str(
             m.get("content"))
     ]
     assert delivered, "the report never landed as its own message"
 
 
-def test_work_shutdown_abandoned(tmp_path: Path):
+def test_wire_log_keeps_forwarded_calls_with_narration(
+        tmp_path: Path):
+    """v3 probe debt: a turn that narrated AND called a seat once lost
+    the delegation's arguments — the record could not say what was
+    asked of whom (nor with what time box). The wire log carries both:
+    narration in content, the call in tool_calls with raw arguments."""
+    from scientist.agent import run_episode
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+    from scientist.model import ModelReply, ToolCall
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    script = tmp_path / "immediate.sh"
+    script.write_text(
+        "#!/bin/sh\ncat >/dev/null\ncat <<'JSONLINE'\n"
+        + json.dumps({"type": "result", "result": "ok", "usage": {}})
+        + "\nJSONLINE\n", encoding="utf-8")
+    script.chmod(0o755)
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(script),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+
+    class ScriptedModel:
+        def __init__(self):
+            self.turn = 0
+
+        def complete(self, *, system, messages, timeout_seconds, tools):
+            self.turn += 1
+            if self.turn == 1:
+                args = {
+                    "brief": "sweep the flag space",
+                    "definition_of_done": "report the best variant",
+                    "timeout_minutes": 90,
+                }
+                return ModelReply(text="delegate the sweep", tool_calls=(
+                    ToolCall(id="c1", name="executor", arguments=args,
+                             arguments_raw=json.dumps(args)),))
+            return ModelReply(text="stop", tool_calls=(
+                ToolCall(id="c2", name="abstain",
+                         arguments={"reason": "probe",
+                                    "axes_checked": ["a"]},
+                         arguments_raw=json.dumps(
+                             {"reason": "probe",
+                              "axes_checked": ["a"]})),))
+
+    from scientist.scientist_session import ScientistSession
+    session_dir = world.work / ".scientist" / "session"
+    session = ScientistSession.load_or_create(
+        session_dir, prompt_version="test-archive", episode_id="t")
+    result = run_episode(
+        model=ScriptedModel(), system_prompt="sys",
+        messages=[{"role": "user", "content": "go"}],
+        world=world, assistant=assistant, ledger=ledger,
+        steps_budget=4, wall_seconds=60.0, session=session,
+    )
+    assert result["outcome"] == "abstain"
+
+    turns = [json.loads(l) for l in
+             session.wire_path.read_text(encoding="utf-8").splitlines()]
+    narrations = [t for t in turns if t.get("role") == "assistant"
+                  and t.get("content")]
+    assert any("delegate the sweep" in t["content"] for t in narrations), (
+        "the narration record was dropped")
+    calls = [c for t in narrations for c in t.get("tool_calls") or []
+             if c["function"]["name"] == "executor"]
+    assert calls, ("the executor call vanished from the wire — the "
+                   "record cannot say what was delegated")
+    archived_args = json.loads(calls[0]["function"]["arguments"])
+    assert archived_args.get("timeout_minutes") == 90, (
+        "the wire lost the time box the PI chose")
+
+
+def test_engagement_shutdown_abandoned(tmp_path: Path):
     import time as _time
 
     from scientist.assistant_tools import AssistantConfig, InWorldAssistant
@@ -489,7 +643,9 @@ def test_work_shutdown_abandoned(tmp_path: Path):
                                work_default_minutes=10),
         ledger=ledger, episode_id="t",
     )
-    receipt = assistant.work({"action": "work", "instruction": "slow job"})
+    receipt = assistant.engage("executor", {
+        "brief": "slow job", "definition_of_done": "report completion",
+    })
     assert receipt["status"] == "running"
     _time.sleep(0.2)
     assert assistant.poll() == []

@@ -71,6 +71,11 @@ class ModelReply:
     text: str
     usage: object = None
     tool_calls: tuple[ToolCall, ...] = ()
+    # The hidden reasoning of a thinking-mode reply. DeepSeek's API
+    # requires it to be passed back on replayed assistant turns in
+    # multi-turn tool loops ("The reasoning_content in the thinking mode
+    # must be passed back"); a real run died at step 32 without it.
+    reasoning: str = ""
 
 
 class ChatModel(Protocol):
@@ -301,6 +306,7 @@ class OpenAICompatChatModel(_RetryChatModel):
 
     def _to_reply(self, response) -> ModelReply:
         parts: list[str] = []
+        reasoning_parts: list[str] = []
         usage = None
         finish_reason = None
         # Native tool calls arrive as per-index fragments across stream
@@ -320,6 +326,9 @@ class OpenAICompatChatModel(_RetryChatModel):
             content = getattr(delta, "content", None) if delta else None
             if content:
                 parts.append(content)
+            rc = getattr(delta, "reasoning_content", None) if delta else None
+            if rc:
+                reasoning_parts.append(rc)
             if delta is not None:
                 for tc in getattr(delta, "tool_calls", None) or ():
                     index = getattr(tc, "index", None)
@@ -337,11 +346,13 @@ class OpenAICompatChatModel(_RetryChatModel):
                     if getattr(function, "arguments", None):
                         slot["arguments"] += function.arguments
         return _assemble_stream_reply(parts, usage, finish_reason,
-                                      tool_fragments)
+                                      tool_fragments,
+                                      reasoning="".join(reasoning_parts))
 
 
 def _assemble_stream_reply(
     parts: list[str], usage, finish_reason, tool_fragments: dict[int, dict],
+    reasoning: str = "",
 ) -> ModelReply:
     """The shared tail of every streaming Chat Completions decoder: join
     content, normalize usage to a dict, assemble tool calls by index, and
@@ -369,7 +380,8 @@ def _assemble_stream_reply(
             f"(finish_reason={finish_reason}, "
             f"completion_tokens={completion_tokens})"
         )
-    return ModelReply(text=text, usage=usage, tool_calls=tool_calls)
+    return ModelReply(text=text, usage=usage, tool_calls=tool_calls,
+                      reasoning=reasoning)
 
 
 def _tool_call_from_fragment(slot: dict) -> ToolCall:

@@ -190,6 +190,7 @@ class StdlibChatModel(_RetryChatModel):
 
     def _to_reply(self, response) -> ModelReply:
         parts: list[str] = []
+        reasoning_parts: list[str] = []
         usage = None
         finish_reason = None
         tool_fragments: dict[int, dict] = {}
@@ -224,6 +225,9 @@ class StdlibChatModel(_RetryChatModel):
                 content = delta.get("content")
                 if content:
                     parts.append(content)
+                rc = delta.get("reasoning_content")
+                if rc:
+                    reasoning_parts.append(rc)
                 for tc in delta.get("tool_calls") or ():
                     if not isinstance(tc, dict):
                         continue
@@ -251,7 +255,8 @@ class StdlibChatModel(_RetryChatModel):
             except Exception:  # noqa: BLE001 — cleanup is best-effort
                 pass
         return _assemble_stream_reply(parts, usage, finish_reason,
-                                      tool_fragments)
+                                      tool_fragments,
+                                      reasoning="".join(reasoning_parts))
 
 
 def build_stdlib_chat_model(config: dict) -> StdlibChatModel:

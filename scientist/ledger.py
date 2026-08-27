@@ -5,26 +5,30 @@ any host. The ledger is always local files under the world's
 ``.scientist/`` directory — standalone and simpleevo modes are the SAME
 shape. The harness (when there is one) reads these files after the world
 closes; it never sits in the loop. Every post-hoc question — what the
-seat believed, what it asked its assistant, what it spent — is answered
+Scientist believed, which role engagements it opened, what it spent — is answered
 from here.
 
 Files (all line-JSON, append-only where the scientist writes):
-- ``research_state.jsonl``  — one row per update_research_state
+- ``research_state.jsonl``  — append-only Current Research Judgment
+                              revisions (rows seeded by the supervisor
+                              generation may carry the older
+                              ``working_model`` shape; reads tolerate it)
 - ``experiments.jsonl``     — the seeded experiment archive (read-only
                               for the scientist; the harness writes it
                               when it opens the world, from the lineage)
-- ``assistant_calls.jsonl`` — one row per consult/work call
+- ``assistant_calls.jsonl`` — one row per role engagement (the name is
+                              historical; simpleevo's db readers know it)
 - ``usage.jsonl``           — one row per model call (the token ledger)
 
 The search/inspect logic over the seeded archive is a lean port of the
-L2 memory service's — same row shapes, same bucket semantics — so the
-behavior the seat-v2 prompts were tuned against carries over unchanged.
+old L2 memory service's — same row shapes, same bucket semantics — so
+the behavior the seat-v2 prompts were tuned against carries over
+unchanged.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Protocol
 
 
 def _query_terms(query: str) -> list[str]:
@@ -66,24 +70,8 @@ def _append_row_text(path: Path, text: str) -> None:
         handle.write(text)
 
 
-class LedgerBackend(Protocol):
-    """The narrow waist between the scientist and any record system."""
-
-    def update_research_state(self, action: dict) -> dict: ...
-
-    def search_experiments(self, action: dict) -> dict: ...
-
-    def inspect_experiment(self, action: dict) -> dict: ...
-
-    def inspect_originating_research_state(self, action: dict) -> dict: ...
-
-    def state_on_file(self) -> bool: ...
-
-    def note_assistant_call(self, record: dict) -> None: ...
-
-
 class LocalLedger:
-    """The ledger as files in the world's ``.scientist/`` directory."""
+    """L1 judgment, pull-only history, and archive files for one world."""
 
     def __init__(self, root: Path):
         self.root = Path(root)
@@ -92,13 +80,6 @@ class LocalLedger:
         self.assistant_calls_path = self.root / "assistant_calls.jsonl"
         self.usage_path = self.root / "usage.jsonl"
         self.notes_path = self.root / "notes.md"
-
-    def read_notes(self) -> str:
-        """The append-only working notes, for the resume context."""
-        try:
-            return self.notes_path.read_text(encoding="utf-8").strip()
-        except OSError:
-            return ""
 
     def append_note(self, text: str) -> dict:
         if not isinstance(text, str) or not text.strip():
@@ -111,41 +92,91 @@ class LocalLedger:
 
     # -- research state (the evolving understanding) ------------------------
 
-    def update_research_state(self, action: dict) -> dict:
-        working_model = action.get("working_model")
-        if not isinstance(working_model, str) or not working_model.strip():
-            return {"ok": False,
-                    "error": "working_model must be a non-empty string"}
-        refs = action.get("evidence_refs")
-        if refs is None:
-            refs = []
-        if not isinstance(refs, list) or not all(
-            isinstance(r, str) and r.strip() for r in refs
-        ):
-            return {"ok": False,
-                    "error": "evidence_refs must be a list of strings"}
-        revisions = len(_read_rows(self.research_state_path)) + 1
-        row: dict = {
-            "research_state_id": f"rs-{revisions:04d}",
-            "revision": revisions,
-            "working_model": working_model.strip(),
-            "evidence_refs": [r.strip() for r in refs],
-        }
-        for key in ("evidence", "experiment_log", "deliverables",
-                    "conclusion"):
-            value = action.get(key)
-            if value is not None:
-                row[key] = value
-        _append_row(self.research_state_path, row)
-        return {
-            "ok": True,
-            "research_state_id": row["research_state_id"],
-            "revision": revisions,
-        }
-
     def current_state(self) -> dict | None:
         rows = _read_rows(self.research_state_path)
         return rows[-1] if rows else None
+
+    @staticmethod
+    def _as_judgment(row: dict) -> dict:
+        """Tolerant READ shape: rows a supervisor generation seeded with
+        ``working_model`` normalize on the way out. The only in-run
+        writer is revise_research_judgment."""
+        normalized = dict(row)
+        if "judgment" not in normalized and normalized.get("working_model"):
+            normalized["judgment"] = normalized["working_model"]
+            normalized["judgment_id"] = normalized.get("research_state_id")
+            normalized.setdefault(
+                "revision_reason", "seeded row; reason unavailable"
+            )
+        return normalized
+
+    def current_judgment(self) -> dict | None:
+        """Return the latest L1 judgment, normalizing legacy state rows."""
+        row = self.current_state()
+        return self._as_judgment(row) if row else None
+
+    def revise_research_judgment(self, action: dict) -> dict:
+        judgment = action.get("judgment")
+        reason = action.get("revision_reason")
+        refs = action.get("evidence_refs", [])
+        if not isinstance(judgment, str) or not judgment.strip():
+            return {"ok": False, "error": "judgment must be a non-empty string"}
+        if not isinstance(reason, str) or not reason.strip():
+            return {
+                "ok": False,
+                "error": "revision_reason must be a non-empty string",
+            }
+        if not isinstance(refs, list) or not all(
+            isinstance(ref, str) and ref.strip() for ref in refs
+        ):
+            return {"ok": False, "error": "evidence_refs must be a list of strings"}
+        revision = len(_read_rows(self.research_state_path)) + 1
+        row = {
+            "judgment_id": f"rj-{revision:04d}",
+            "revision": revision,
+            "judgment": judgment.strip(),
+            "revision_reason": reason.strip(),
+            "evidence_refs": [ref.strip() for ref in refs],
+        }
+        _append_row(self.research_state_path, row)
+        return {
+            "ok": True,
+            "judgment_id": row["judgment_id"],
+            "revision": revision,
+        }
+
+    def list_research_judgments(self, action: dict) -> dict:
+        try:
+            limit = max(1, min(int(action.get("limit") or 20), 100))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "limit must be an integer"}
+        results = []
+        for raw in reversed(_read_rows(self.research_state_path)):
+            row = self._as_judgment(raw)
+            results.append({
+                "judgment_id": row.get("judgment_id"),
+                "revision": row.get("revision"),
+                "revision_reason": row.get("revision_reason"),
+                "evidence_refs": list(row.get("evidence_refs") or []),
+            })
+            if len(results) >= limit:
+                break
+        return {"ok": True, "results": results}
+
+    def inspect_research_judgment(self, action: dict) -> dict:
+        judgment_id = str(action.get("judgment_id") or "").strip()
+        if not judgment_id:
+            return {"ok": False, "error": "judgment_id must be non-empty"}
+        for raw in _read_rows(self.research_state_path):
+            row = self._as_judgment(raw)
+            if judgment_id in {
+                str(row.get("judgment_id") or ""),
+                str(row.get("research_state_id") or ""),
+            }:
+                row["ok"] = True
+                row["kind"] = "SUBJECTIVE_RESEARCH_JUDGMENT"
+                return row
+        return {"ok": False, "error": f"judgment not found: {judgment_id}"}
 
     def state_on_file(self) -> bool:
         return bool(_read_rows(self.research_state_path))
@@ -227,6 +258,12 @@ class LocalLedger:
             "metrics": dict(experiment.get("metrics") or {}),
             "changed_paths": list(experiment.get("changed_paths") or ()),
         }
+
+    def neutral_experiment_index(self) -> list[dict]:
+        """Return every experiment as a sorted, narrative-free fact row."""
+        rows = [self._search_row(experiment) for experiment in self._experiments()]
+        rows.sort(key=lambda row: str(row.get("experiment_id") or ""))
+        return rows
 
     def _find_experiment(self, experiment_id: str) -> dict | None:
         for row in self._experiments():

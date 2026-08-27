@@ -17,14 +17,14 @@ from simpleevo.db.queries import ResearchQueries
 from simpleevo.generator import load_generator_basis
 from simpleevo.jobs.envelope import WorkerResult, WorkerStatus, write_result
 
-from scientist.assistant.git_worktree import GitWorkspaceProvider
+from ..assistant.git_worktree import GitWorkspaceProvider
 
-from scientist.memory.l2 import L2MemoryService
-from scientist.host.wake import build_wake_view
+from ..memory.l2 import L2MemoryService
+from ..host.wake import build_wake_view
 from scientist.model import build_chat_model
-from scientist.host.orchestrator import ProposerOrchestrator
-from scientist.host.runtime import ApptainerRuntime, world_mount_map
-from scientist.host.scientist import ContextPolicy
+from ..host.orchestrator import ProposerOrchestrator
+from ..host.runtime import ApptainerRuntime, world_mount_map
+from ..host.scientist import ContextPolicy
 
 
 def _load_manifest(path: Path) -> dict:
@@ -152,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
     # so the adjudication worker can evaluate them.
     provider = GitWorkspaceProvider(run_dir, repo_path)
     provider.initialize()
-    from scientist.assistant.lab import Laboratory
+    from ..assistant.lab import Laboratory
 
     lab = Laboratory(
         provider=provider, episode_id=episode_id, node_sha=node_sha,
@@ -205,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
                   flush=True)
 
     # The seat's claude assistant (consult/work) — the two hands.
-    from scientist.assistant.hands import AssistantHands, HandTally
+    from ..assistant.hands import AssistantHands, HandTally
 
     hands = AssistantHands(
         run_dir=run_dir, db_path=db_path, lease_id=lease_id,

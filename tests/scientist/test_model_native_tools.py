@@ -54,18 +54,47 @@ def _model(chunks):
     return OpenAICompatChatModel(client=client, model="test"), client
 
 
+def _schemas():
+    return {tool["function"]["name"]: tool["function"] for tool in NATIVE_TOOLS}
+
+
+def test_team_roles_are_first_class_endpoints():
+    schemas = _schemas()
+    assert {"searcher", "proposer", "executor", "challenger"} <= set(schemas)
+    assert "consult" not in schemas
+    assert "work" not in schemas
+    assert "ask_collaborator" not in schemas
+    for role in ("searcher", "proposer", "executor", "challenger"):
+        assert "role" not in schemas[role]["parameters"]["properties"]
+
+
+def test_proposer_has_open_and_directed_scope():
+    scope = _schemas()["proposer"]["parameters"]["properties"]["scope"]
+    assert scope["enum"] == ["open", "directed"]
+
+
+def test_judgment_channels_replace_mandatory_research_state_tool():
+    schemas = _schemas()
+    assert {
+        "revise_research_judgment",
+        "list_research_judgments",
+        "inspect_research_judgment",
+    } <= set(schemas)
+    assert "update_research_state" not in schemas
+
+
 def test_streamed_tool_calls_assemble_and_parse():
     model, client = _model([
-        _chunk(tool_calls=[_tc(0, tc_id="call_1", name="work")]),
+        _chunk(tool_calls=[_tc(0, tc_id="call_1", name="executor")]),
         _chunk(tool_calls=[
-            _tc(0, arguments='{"instruction": "build the bucketed '),
+            _tc(0, arguments='{"brief": "build the bucketed '),
         ]),
         _chunk(tool_calls=[
-            _tc(0, arguments='index","mode": "continue"}'),
+            _tc(0, arguments='index","definition_of_done": "tests pass"}'),
         ]),
         _chunk(tool_calls=[
-            _tc(1, tc_id="call_2", name="consult",
-                arguments='{"question": "why?"}'),
+            _tc(1, tc_id="call_2", name="searcher",
+                arguments='{"brief": "why?"}'),
         ]),
         _chunk(finish_reason="tool_calls"),
         _chunk(usage=SimpleNamespace(
@@ -74,9 +103,9 @@ def test_streamed_tool_calls_assemble_and_parse():
     ])
     reply = model.complete(system="s", messages=[], timeout_seconds=5,
                            tools=list(NATIVE_TOOLS))
-    assert [c.name for c in reply.tool_calls] == ["work", "consult"]
+    assert [c.name for c in reply.tool_calls] == ["executor", "searcher"]
     assert reply.tool_calls[0].arguments == {
-        "instruction": "build the bucketed index", "mode": "continue",
+        "brief": "build the bucketed index", "definition_of_done": "tests pass",
     }
     assert reply.tool_calls[0].id == "call_1"
     assert reply.usage == {"completion_tokens": 90}
@@ -130,8 +159,8 @@ def test_json_protocol_track_unchanged_without_tools():
 def test_native_actions_and_wire_helpers():
     reply_text = "planning aloud"
     calls = (
-        ToolCall(id="c1", name="consult",
-                 arguments={"question": "refute this"}, arguments_raw="{}"),
+        ToolCall(id="c1", name="challenger",
+                 arguments={"brief": "refute this"}, arguments_raw="{}"),
         ToolCall(id="c2", name="bash", arguments=None,
                  arguments_raw="{broken"),
     )
@@ -139,11 +168,12 @@ def test_native_actions_and_wire_helpers():
     class _Reply:
         text = reply_text
         tool_calls = calls
+        reasoning = ""
 
     actions = native_actions(_Reply())
     assert actions[0] == {
-        "action": "consult", "tool_call_id": "c1",
-        "question": "refute this",
+        "action": "challenger", "tool_call_id": "c1",
+        "brief": "refute this",
     }
     assert actions[1]["_arguments_raw"] == "{broken"
 
@@ -159,8 +189,10 @@ def test_native_actions_and_wire_helpers():
 
 def test_forwardable_set_excludes_local_and_terminal():
     assert FORWARDABLE_ACTIONS == {
-        "consult", "work", "update_research_state", "search_experiments",
+        "searcher", "proposer", "executor", "challenger",
+        "revise_research_judgment", "search_experiments",
         "inspect_experiment", "inspect_originating_research_state",
+        "list_research_judgments", "inspect_research_judgment",
         "use_research_skill",
     }
     assert "bash" not in FORWARDABLE_ACTIONS

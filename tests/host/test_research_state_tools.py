@@ -8,13 +8,13 @@ from pathlib import Path
 import pytest
 
 from simpleevo.jobs.proposer_worker import _result_to_dict
-from scientist.host.research_agent import (
+from simpleevo.host.research_agent import (
     WorkingState, _build_telemetry, _build_trace, _register_evidence,
 )
-from scientist.host.research_tools import ResearchTools
+from simpleevo.host.research_tools import ResearchTools
 from scientist.research_skills import render_research_skill_catalog
-from scientist.host.runtime import MountMap
-from scientist.host.scientist import (
+from simpleevo.host.runtime import MountMap
+from simpleevo.host.scientist import (
     ProposerError,
     _validate_action_guard,
     parse_response,

@@ -9,7 +9,7 @@ from typing import Any
 
 from .agent_runtime import AgentRuntime
 from .research_agent import AgentError, ResearchAgent, WorkingState
-from ..research_files import ResearchFiles
+from scientist.research_files import ResearchFiles
 
 
 class IntegratorError(AgentError):

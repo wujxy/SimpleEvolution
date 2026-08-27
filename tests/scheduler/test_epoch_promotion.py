@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from scientist.memory.l2 import L2MemoryService
+from simpleevo.memory.l2 import L2MemoryService
 from supervisor.agent import SupervisorTools
 from simpleevo.db.store import GateDecision, GateResult, Proposal, ResearchStore
 from simpleevo.scheduler.loop import Scheduler, SchedulerConfig

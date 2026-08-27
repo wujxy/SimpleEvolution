@@ -15,13 +15,15 @@ the loop; the spec is the whole opening handshake and
 ``conclusion.json`` the whole exit contract.
 
 Spec shape (see docs/design; all keys optional unless marked):
-    goal, gate_block, editable_paths[], base_sha, lens{}, node_id,
-    hints[], charter (overrides prompts/proposer.md),
+    goal, gate_block, editable_paths[], base_sha, node_id,
+    hints[], charter (overrides the packaged Scientist charter,
+                      prompts/scientist.md),
     model{api?|model, base_url, api_key, reasoning_effort},
     assistant{command, model, effort, node_world, env{}},
     budget{steps, wall_seconds, command_timeout_seconds,
            command_output_cap_chars, consult_timeout_seconds,
-           work_default_minutes, distill_word_cap},
+           work_default_minutes, distill_word_cap,
+           compact_keep_messages, compact_max_chars},
     opening_messages[{role, content}] (default: the cold start),
     paths{work, repo, scratch} — container namespace, when running in
     the world container (standalone defaults: --world everywhere).
@@ -33,7 +35,10 @@ import json
 import time
 from pathlib import Path
 
-from .agent import _COLD_START, build_system_prompt, run_episode
+from .agent import (
+    _COLD_START, _compact_native, _upsert_judgment_message, \
+    build_system_prompt, run_episode,
+)
 from .assistant_tools import AssistantConfig, InWorldAssistant
 from .ledger import LocalLedger
 from .model import ModelError
@@ -41,7 +46,7 @@ from .model_stdlib import build_stdlib_chat_model
 from .scientist_session import ScientistSession
 from .world import LocalWorld
 
-PROMPT_VERSION = "oneworld-v1"
+PROMPT_VERSION = "oneworld-v5"
 
 
 def _resolve_roots(args, spec: dict) -> dict:
@@ -51,14 +56,18 @@ def _resolve_roots(args, spec: dict) -> dict:
     (identity); standalone, ``--world`` is the /work root and repo
     defaults to it (a plain clone serves as its own /repo)."""
     paths = dict(spec.get("paths") or {})
-    work = Path(args.world)
+    # resolve(): the boundaries block must carry absolute paths — a
+    # relative --world makes the model guess disk locations (observed:
+    # both xsbench arms opened with cd /root/runs/... and find /).
+    work = Path(args.world).resolve()
     return {
         "work": work,
-        "repo": Path(args.repo) if args.repo else Path(
-            paths.get("repo") or work),
+        "repo": Path(args.repo).resolve() if args.repo else Path(
+            paths.get("repo") or work).resolve(),
         "scratch": (
-            Path(args.scratch) if args.scratch else Path(
-                paths.get("scratch") or work / ".scientist" / "scratch")
+            Path(args.scratch).resolve() if args.scratch else Path(
+                paths.get("scratch")
+                or work / ".scientist" / "scratch").resolve()
         ),
     }
 
@@ -183,31 +192,78 @@ def main(argv: list[str] | None = None) -> int:
         args.session or ledger_root / "session"
     )
     session_dir.mkdir(parents=True, exist_ok=True)
-    session = ScientistSession._load_from_dir(
-        session_dir, PROMPT_VERSION, episode_id=episode_id,
+    session = ScientistSession.load_or_create(
+        session_dir, prompt_version=PROMPT_VERSION, episode_id=episode_id,
     )
-    system_prompt = build_system_prompt(
-        spec, notebook=session.notebook, notes=ledger.read_notes(),
-        roots=roots)
+    system_prompt = build_system_prompt(spec, roots=roots)
     model = build_stdlib_chat_model(dict(spec.get("model") or {}))
+    # Resume: the wire log is the single source of truth for the
+    # conversation. A run whose process died (crash, reboot, provider
+    # change) resumes from it instead of restarting from zero — the
+    # difference between a long-horizon process and a 3h toy.
+    prior = session.load_wire_messages()
+    if prior and not (ledger_root / "conclusion.json").exists():
+        messages = prior
+        resume_note = (
+            "The research process was interrupted and has been resumed "
+            "externally. The conversation record above is intact as it "
+            "was left; the harness's wall clock restarted with this "
+            "resume."
+        )
+        messages.append({"role": "user", "content": resume_note})
+        session.append_wire({"role": "user", "content": resume_note})
+        _compact_native(
+            messages,
+            keep_messages=int(budget.get("compact_keep_messages", 400)),
+            max_chars=int(budget.get("compact_max_chars", 200_000)),
+        )
+        _upsert_judgment_message(messages, ledger.current_judgment())
+        print(f"[scientist] resumed from wire.jsonl: "
+              f"{len(prior)} messages replayed", flush=True)
+    else:
+        messages = _opening_messages(spec)
+        _upsert_judgment_message(messages, ledger.current_judgment())
 
     try:
         result = run_episode(
             model=model,
             system_prompt=system_prompt,
-            messages=_opening_messages(spec),
+            messages=messages,
             world=world,
             assistant=assistant,
             ledger=ledger,
             steps_budget=int(budget.get("steps", 200)),
             wall_seconds=float(budget.get("wall_seconds", 3600)),
             session=session,
+            compact_keep_messages=int(
+                budget.get("compact_keep_messages", 400)),
+            compact_max_chars=int(
+                budget.get("compact_max_chars", 200_000)),
         )
     except ModelError as exc:
         # Infra death (transport/model failure): fail loudly so a
         # scheduler retries the attempt rather than reading a silent
-        # clean exit.
+        # clean exit — but the exit contract is an INVARIANT: a crashed
+        # run leaves a crashed conclusion, never nothing. Without this,
+        # the harness cannot tell crash from still-running, and the
+        # world's exit contract silently vanishes (observed twice in one
+        # day: a dispatch crash and a provider-side 400).
         print(f"[scientist] model failure: {exc}", flush=True)
+        _write_conclusion(ledger_root, {
+            "outcome": "crashed",
+            "conclusion": {"kind": "crashed",
+                           "reason": f"model failure: {exc}"[:500]},
+            "steps": 0, "actions": [],
+        })
+        return 1
+    except Exception as exc:  # noqa: BLE001 — the contract must survive us
+        print(f"[scientist] crashed: {exc!r}", flush=True)
+        _write_conclusion(ledger_root, {
+            "outcome": "crashed",
+            "conclusion": {"kind": "crashed",
+                           "reason": f"{type(exc).__name__}: {exc}"[:500]},
+            "steps": 0, "actions": [],
+        })
         return 1
 
     path = _write_conclusion(ledger_root, result)

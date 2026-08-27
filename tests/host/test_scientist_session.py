@@ -5,7 +5,7 @@ import tempfile
 from pathlib import Path
 
 from simpleevo.jobs.proposer_worker import _inherit_parent_session
-from scientist.scientist_session import ScientistSession
+from simpleevo.scientist_session import ScientistSession
 
 
 def test_load_or_create_for_episode():

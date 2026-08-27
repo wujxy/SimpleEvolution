@@ -1,20 +1,10 @@
-"""The scientist's two hands on its claude assistant: consult and work.
+"""One subprocess runtime for fresh research-team engagements.
 
-One world, one filesystem: the assistant is an equal resident — it runs
-the same ``claude`` CLI the image carries, with the same read/write
-capabilities the scientist has. There is no sandbox, no mount choreography,
-no per-call snapshot; the permission boundary of the consult channel is
-expressed the one way claude itself offers — ``--allowedTools`` without
-write tools. What the boundary means is unchanged: consult never writes
-the world, work does.
-
-The distillation contract is mechanical and carries over verbatim from
-the host-side hands: the raw transcript lands under
-``<world>/.scientist/assistant/<call_id>/`` and NEVER returns to the
-researcher's context; the digest is hard-capped in words and ends with
-one fenced JSON block. The ledger note (assistant_calls.jsonl) replaces
-the DB rows; the world itself is the record of what work changed —
-post-hoc readable, never audited in-flight.
+The four durable roles share this runtime, but every engagement gets a fresh
+Claude trajectory and an attributable id. Cognitive roles receive read-only
+capabilities; Executor alone receives editing and shell capabilities. Raw
+trajectories use the legacy ``.scientist/assistant`` archive path and never
+enter the Scientist's active context.
 """
 from __future__ import annotations
 
@@ -22,67 +12,18 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .collaboration import ROLE_NAMES, build_collaboration_prompt
+
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
-# The consult channel carries no world-writing tools: the boundary is
-# claude's own tool list, nothing else (there is no second layer).
-_CONSULT_TOOLS = "Read,Grep,Glob,WebSearch,WebFetch,Task"
-_WORK_TOOLS = "Read,Grep,Glob,Edit,Write,Bash,WebSearch,WebFetch"
-
-_CONSULT_PROMPT = """You are the research assistant of a scientist who owns this investigation.
-They are asking you a question; you are not the researcher of record.
-
-Question:
-{question}
-
-Context they gave you:
-{context}
-{world_note}
-Answer with a distilled judgment — at most {cap} words. Do the searching
-and the weighing yourself (you may use web search and subagents); return
-only the conclusion and what it stands on. End your reply with exactly
-one fenced JSON block:
-
-```json
-{{"answer_digest": "<= {cap} words, your distilled answer>",
-  "sources": ["what you based it on, one line each"]}}
-```
-
-If the honest answer is "unknown / no evidence", say exactly that.
-"""
-
-_WORK_PROMPT = """You are the hands of a scientist who owns this investigation.
-Work INSIDE this world — the directory tree you start in is the world
-itself (writable; build and self-measure in place; there is no version
-control here, the files you leave ARE the record).
-{measure_note}
-Your scientist's instruction:
-{instruction}
-
-When done, reply with a distilled report — the diff summary and your
-self-report TOGETHER must stay under {cap} words (the raw detail stays in
-the world; your scientist can read the code). End with exactly one fenced
-JSON block:
-
-```json
-{{"diff_summary": "what changed in the world",
-  "self_report_digest": "what you did, why, what still needs verifying",
-  "metrics": {{"self_measured": "key numbers from your own runs"}}}}
-```
-
-If the instruction cannot be completed, say so plainly in
-self_report_digest and leave the world in a state that compiles.
-"""
-
-_BENCHMARK_NOTE = (
-    "\nThis task has a benchmark: self-measure in the world (the "
-    "eval scripts are there) and report the numbers you measured."
-)
+_COGNITIVE_TOOLS = "Read,Grep,Glob,WebSearch,WebFetch,Task"
+_EXECUTOR_TOOLS = "Read,Grep,Glob,Edit,Write,Bash,WebSearch,WebFetch"
 
 
 def _cap_words(text: str, cap: int) -> tuple[str, bool]:
@@ -127,6 +68,11 @@ def _decode_stream(stdout: str) -> tuple[str, object]:
     return text, usage
 
 
+# Hard ceiling for any single Executor engagement, in minutes — the default bounds
+# only jobs that do not ask for more; a per-job timeout may run longer.
+_WORK_TIMEOUT_MAX_MINUTES = 180
+
+
 @dataclass
 class AssistantConfig:
     command: str = "claude"
@@ -137,6 +83,8 @@ class AssistantConfig:
     distill_word_cap: int = 300
     consult_timeout_seconds: int = 900
     work_default_minutes: int = 30
+    goal: str = ""
+    gate_block: str = ""
 
     @classmethod
     def from_spec(cls, spec: dict) -> "AssistantConfig":
@@ -157,13 +105,16 @@ class AssistantConfig:
             work_default_minutes=int(
                 (spec.get("budget") or {}).get(
                     "work_default_minutes", 30)),
+            goal=str(spec.get("goal") or ""),
+            gate_block=str(spec.get("gate_block") or ""),
         )
 
 
 @dataclass
 class _Job:
-    """One dispatched background work call, until its report lands."""
+    """One dispatched role engagement, until its report lands."""
     call_id: str
+    role: str
     instruction: str
     mode: str
     fresh_note: str
@@ -178,12 +129,7 @@ class _Job:
 
 
 class InWorldAssistant:
-    """consult / work as claude subprocesses inside the lived-in world.
-
-    consult is synchronous (a question blocks the decision that asked
-    it); work is dispatched to the background — the strongest executor
-    there is should never make you wait — and its report is pumped back
-    into the conversation by ``poll`` between model calls."""
+    """Shared Claude subprocess runtime behind the four research roles."""
 
     def __init__(
         self,
@@ -213,49 +159,6 @@ class InWorldAssistant:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def _run_claude(
-        self, call_id: str, *, prompt: str, cwd: Path,
-        allowed_tools: str, timeout: int, label: str,
-    ) -> tuple[str, object, str]:
-        """Run one claude call; returns (text, usage, error). ``error`` is
-        empty on success — failures return as observations, not crashes:
-        the seat sees the failure and decides what it means."""
-        payload = [
-            self.config.command, "-p",
-            "--input-format", "text",
-            "--output-format", "stream-json",
-            "--verbose",
-            "--allowedTools", allowed_tools,
-        ]
-        if self.config.model:
-            payload += ["--model", self.config.model]
-        if self.config.effort:
-            payload += ["--effort", self.config.effort]
-
-        env = dict(os.environ)
-        if self.config.env:
-            env.update(
-                {str(k): str(v) for k, v in self.config.env.items()})
-        print(f"[assistant] {label} {call_id} started "
-              f"(timeout={timeout}s)", flush=True)
-        try:
-            completed = subprocess.run(
-                payload, cwd=str(cwd), input=prompt, text=True,
-                capture_output=True, timeout=timeout, env=env,
-            )
-        except subprocess.TimeoutExpired:
-            return "", None, f"{label} timed out after {timeout}s"
-        except OSError as exc:
-            return "", None, f"{label} failed to start: {exc}"
-        stdout = completed.stdout or ""
-        if completed.returncode != 0:
-            detail = (completed.stderr or "").strip()[:2000]
-            return stdout, None, (
-                f"{label}: claude exited {completed.returncode}: {detail}"
-            )
-        text, usage = _decode_stream(stdout)
-        return text, usage, ""
-
     def _persist_raw(self, call_id: str, prompt: str, raw: str,
                      digest: dict) -> None:
         d = self._raw_dir(call_id)
@@ -275,83 +178,6 @@ class InWorldAssistant:
             "question_digest": digest[:400],
             "usage": usage if isinstance(usage, dict) else None,
         })
-
-    # -- consult (belief channel: never writes the world) ------------------
-
-    def consult(self, action: dict) -> dict:
-        question = action.get("question")
-        if not isinstance(question, str) or not question.strip():
-            return {"ok": False,
-                    "error": "consult.question must be non-empty"}
-        read = action.get("read", "none")
-        if read not in {"none", "node", "lab"}:
-            return {
-                "ok": False,
-                "error": f"consult.read must be none|node|lab, got {read!r}",
-            }
-        context = action.get("context") or ""
-        if not isinstance(context, str):
-            return {"ok": False, "error": "consult.context must be a string"}
-        call_id = self._next_call_id("consult")
-
-        cwd = self.world.scratch
-        world_note = ""
-        if read == "node":
-            if self.config.node_world is None:
-                return {
-                    "ok": False,
-                    "error": "no pristine node world is available in "
-                             "this run (read=node needs one)",
-                }
-            cwd = Path(self.config.node_world)
-            world_note = (
-                "\nThe pristine copy of the world under study is the "
-                "tree you start in."
-            )
-        elif read == "lab":
-            cwd = self.world.work
-            world_note = (
-                "\nThe scientist's current laboratory (work in progress) "
-                "is the tree you start in."
-            )
-
-        cap = self.config.distill_word_cap
-        prompt = _CONSULT_PROMPT.format(
-            question=question.strip(), context=context or "(none)",
-            world_note=world_note, cap=cap,
-        )
-        raw, usage, error = self._run_claude(
-            call_id, prompt=prompt, cwd=cwd,
-            allowed_tools=_CONSULT_TOOLS,
-            timeout=self.config.consult_timeout_seconds, label="consult",
-        )
-        if error:
-            self._persist_raw(call_id, prompt, raw, {"error": error})
-            self._note(call_id, "consult", question, usage)
-            return {"ok": False, "status": "failed", "error": error,
-                    "call_id": call_id}
-        tail = _parse_tail(raw) or {}
-        digest = str(tail.get("answer_digest") or raw or "").strip()
-        digest, truncated = _cap_words(digest, cap)
-        sources = tail.get("sources") or []
-        self._persist_raw(call_id, prompt, raw, {
-            "answer_digest": digest, "sources": sources,
-            "truncated": truncated,
-        })
-        self._note(call_id, "consult", f"{question} -> {digest}", usage)
-        return {
-            "ok": True,
-            "call_id": call_id,
-            # The belief-channel stamp: this is the assistant's opinion,
-            # not verified fact — adopting it is the seat's judgment.
-            "channel": "belief",
-            "answer_digest": digest,
-            "sources": sources,
-            "truncated": truncated,
-        }
-
-    # -- work (the lab channel, async: dispatch, keep working, report
-    #    arrives later as its own message) -----------------------------------
 
     def _command_payload(self, allowed_tools: str) -> list[str]:
         payload = [
@@ -380,87 +206,135 @@ class InWorldAssistant:
                 {str(k): str(v) for k, v in self.config.env.items()})
         raw_path = self._raw_dir(call_id) / "raw.txt"
         handle = raw_path.open("wb")
-        print(f"[assistant] {label} {call_id} dispatched "
+        print(f"[research-team] {label} {call_id} dispatched "
               f"(background)", flush=True)
         proc = subprocess.Popen(
             self._command_payload(allowed_tools),
             cwd=str(cwd), stdin=subprocess.PIPE, stdout=handle,
             stderr=subprocess.STDOUT, env=env, text=True,
+            # own process group: a time-box kill must take the whole
+            # tree (claude's bash/bench children), not just the CLI —
+            # orphaned grandchildren keep burning CPU and pollute the
+            # measurements of everything still running
+            start_new_session=True,
         )
         proc.stdin.write(prompt)
         proc.stdin.close()
         return proc, raw_path, handle
 
-    def work(self, action: dict) -> dict:
-        """Dispatch a job to the assistant; returns a receipt at once.
+    def engage(self, role: str, action: dict) -> dict:
+        """Open one fresh, asynchronous role engagement."""
+        if role not in ROLE_NAMES:
+            return {"ok": False, "error": f"unknown collaborator role: {role}"}
 
-        The report arrives later, as its own message, when ``poll``
-        finalizes the job. The time box is infrastructure (config), not
-        something the seat sees or sizes."""
-        instruction = action.get("instruction")
-        if not isinstance(instruction, str) or not instruction.strip():
-            return {"ok": False,
-                    "error": "work.instruction must be non-empty"}
-        mode = action.get("mode", "continue")
-        if mode not in {"continue", "fresh"}:
-            return {
-                "ok": False,
-                "error": f"work.mode must be continue|fresh, got {mode!r}",
-            }
-        call_id = self._next_call_id("work")
-        timeout = max(60, int(self.config.work_default_minutes * 60))
-
-        work_dir = self.world.work
-        fresh_note = ""
-        side_dir: Path | None = None
-        if mode == "fresh":
-            source = (
-                self.config.node_world
-                if self.config.node_world is not None else self.world.work
-            )
-            if self.config.node_world is None:
-                fresh_note = (
-                    " (copied from the CURRENT world — no pristine copy is "
-                    "available in this run)"
+        evidence_index = self.ledger.neutral_experiment_index()
+        selected_experiments: list[dict] = []
+        if not (role == "proposer" and action.get("scope") == "open"):
+            for experiment_id in action.get("experiment_ids") or []:
+                result = self.ledger.inspect_experiment(
+                    {"experiment_id": experiment_id}
                 )
-            side_dir = self.world.scratch / f"fresh-{call_id}"
-            shutil.copytree(source, side_dir, dirs_exist_ok=False)
-            work_dir = side_dir
+                if result.get("ok"):
+                    selected_experiments.append(result)
+        try:
+            prompt = build_collaboration_prompt(
+                role,
+                action,
+                goal=self.config.goal or "(no goal stated)",
+                gate_block=self.config.gate_block or "(no constraints stated)",
+                current_judgment=self.ledger.current_judgment(),
+                evidence_index=evidence_index,
+                selected_experiments=selected_experiments,
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
 
-        cap = self.config.distill_word_cap
-        measure_note = _BENCHMARK_NOTE if self.has_benchmark else ""
-        prompt = _WORK_PROMPT.format(
-            measure_note=measure_note, instruction=instruction.strip(),
-            cap=cap,
-        )
+        collaborator_id = self._next_call_id(role)
+        work_dir = self.world.work
+        side_dir: Path | None = None
+        workspace = "read-only"
+        allowed_tools = _COGNITIVE_TOOLS
+        timeout = self.config.consult_timeout_seconds
+
+        if role == "searcher":
+            read = action.get("read", "none")
+            if read not in {"none", "node", "lab"}:
+                return {"ok": False, "error": "searcher.read must be none|node|lab"}
+            if read == "none":
+                work_dir = self.world.scratch
+            elif read == "node":
+                if self.config.node_world is None:
+                    return {"ok": False, "error": "searcher read=node requires a node world"}
+                work_dir = Path(self.config.node_world)
+            workspace = str(read)
+        elif role == "executor":
+            workspace = str(action.get("workspace") or "current")
+            if workspace not in {"current", "isolated"}:
+                return {
+                    "ok": False,
+                    "error": "executor.workspace must be current|isolated",
+                }
+            allowed_tools = _EXECUTOR_TOOLS
+            requested_minutes = action.get("timeout_minutes")
+            try:
+                minutes = int(requested_minutes) if requested_minutes else (
+                    self.config.work_default_minutes
+                )
+            except (TypeError, ValueError):
+                minutes = self.config.work_default_minutes
+            timeout = max(1, min(minutes, _WORK_TIMEOUT_MAX_MINUTES)) * 60
+            if workspace == "isolated":
+                source = self.config.node_world or self.world.work
+                side_dir = self.world.scratch / f"fresh-{collaborator_id}"
+                # .scientist MUST be excluded: side_dir lives inside the
+                # source tree, and copying the ledger/scratch into the
+                # walk means copytree chases its own destination until
+                # NAME_MAX (first live isolated dispatch died this way).
+                # An isolated collaborator gets the world, not the PI's
+                # records.
+                shutil.copytree(
+                    source, side_dir, dirs_exist_ok=False,
+                    ignore=shutil.ignore_patterns(".scientist"),
+                )
+                work_dir = side_dir
+
         proc, raw_path, handle = self._spawn(
-            call_id, prompt=prompt, cwd=work_dir,
-            allowed_tools=_WORK_TOOLS, label="work",
+            collaborator_id,
+            prompt=prompt,
+            cwd=work_dir,
+            allowed_tools=allowed_tools,
+            label=role,
         )
+        brief = str(action.get("brief") or "").strip()
         self._jobs.append(_Job(
-            call_id=call_id, instruction=instruction.strip(), mode=mode,
-            fresh_note=fresh_note, work_dir=work_dir, side_dir=side_dir,
-            prompt=prompt, proc=proc, raw_path=raw_path,
-            stdout_handle=handle, started=time.time(),
+            call_id=collaborator_id,
+            role=role,
+            instruction=brief,
+            mode=workspace,
+            fresh_note="",
+            work_dir=work_dir,
+            side_dir=side_dir,
+            prompt=prompt,
+            proc=proc,
+            raw_path=raw_path,
+            stdout_handle=handle,
+            started=time.time(),
             timeout_seconds=timeout,
         ))
         self.ledger.note_assistant_call({
-            "call_id": call_id,
+            "call_id": collaborator_id,
+            "collaborator_id": collaborator_id,
             "episode_id": self.episode_id,
-            "kind": "work",
+            "kind": role,
             "status": "dispatched",
-            "question_digest": instruction.strip()[:400],
+            "question_digest": brief[:400],
         })
         return {
             "ok": True,
-            "call_id": call_id,
             "status": "running",
-            "mode": mode + fresh_note,
+            "role": role,
+            "collaborator_id": collaborator_id,
             "outstanding_jobs": [job.call_id for job in self._jobs],
-            "note": "your assistant took the brief and works on its own; "
-                    "keep reading and thinking — its report arrives as its "
-                    "own message when the job is done (jobs not yet "
-                    "reported are still running; wait for one with wait)",
         }
 
     def finished_pending(self) -> int:
@@ -471,6 +345,21 @@ class InWorldAssistant:
         it never delivers mail itself."""
         return sum(
             1 for job in self._jobs if job.proc.poll() is not None)
+
+    @staticmethod
+    def _kill_tree(job: "_Job") -> None:
+        """Kill the engagement's whole process group and reap it."""
+        try:
+            os.killpg(job.proc.pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            try:
+                job.proc.kill()
+            except OSError:
+                pass
+        try:
+            job.proc.wait(timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
     def poll(self) -> list[dict]:
         """Finalize finished/timed-out jobs; return their reports.
@@ -484,10 +373,9 @@ class InWorldAssistant:
                 if time.time() - job.started <= job.timeout_seconds:
                     still.append(job)
                     continue
-                job.proc.kill()
-                job.proc.wait()
+                self._kill_tree(job)
                 reports.append(self._finalize(
-                    job, error=f"work {job.call_id} exceeded its time box "
+                    job, error=f"{job.role} {job.call_id} exceeded its time box "
                     f"({job.timeout_seconds}s) and was stopped"))
             elif job.proc.returncode != 0:
                 reports.append(self._finalize(
@@ -498,13 +386,13 @@ class InWorldAssistant:
         return reports
 
     def shutdown(self) -> int:
-        """Abandon outstanding jobs (episode exit); returns how many."""
+        """Abandon outstanding jobs (episode exit); returns how many.
+        The transcript and any side-dir artifacts survive for recovery —
+        a crash or cut_off must not destroy evidence that a resumed run
+        or a successor could use."""
         abandoned = len(self._jobs)
         for job in self._jobs:
-            try:
-                job.proc.kill()
-            except OSError:
-                pass
+            self._kill_tree(job)
             try:
                 job.stdout_handle.close()
             except OSError:
@@ -512,12 +400,10 @@ class InWorldAssistant:
             self.ledger.note_assistant_call({
                 "call_id": job.call_id,
                 "episode_id": self.episode_id,
-                "kind": "work",
+                "kind": job.role,
                 "status": "abandoned",
                 "question_digest": job.instruction[:400],
             })
-            if job.side_dir is not None:
-                shutil.rmtree(job.side_dir, ignore_errors=True)
         self._jobs = []
         return abandoned
 
@@ -530,39 +416,74 @@ class InWorldAssistant:
             raw = job.raw_path.read_text(encoding="utf-8")
         except OSError:
             raw = ""
-        if job.side_dir is not None:
+        if error and job.side_dir is not None:
+            # A failed engagement's artifacts are recoverable evidence —
+            # keep the side dir and hand the PI pointers. Interpretation
+            # stays with the Scientist (it may hand the pointers to a
+            # Challenger or a fresh engagement); the harness never
+            # summarizes what the trajectory "means".
+            pass
+        elif job.side_dir is not None:
             shutil.rmtree(job.side_dir, ignore_errors=True)
         if error:
             self._persist_raw(job.call_id, job.prompt, raw,
                               {"error": error})
-            self._note(job.call_id, "work",
+            self._note(job.call_id, job.role,
                        f"{job.instruction} -> {error}", None)
             return {"ok": False, "call_id": job.call_id,
-                    "status": "failed", "error": error}
+                    "collaborator_id": job.call_id, "role": job.role,
+                    "status": "failed", "error": error,
+                    "evidence": {
+                        "transcript": (
+                            f"/work/.scientist/assistant/{job.call_id}/"
+                            "raw.txt"),
+                        "prompt": (
+                            f"/work/.scientist/assistant/{job.call_id}/"
+                            "prompt.txt"),
+                        "artifacts": (
+                            "/work/.scientist/scratch/fresh-"
+                            f"{job.call_id}" if job.side_dir is not None
+                            else "/work"),
+                        "ran_for_seconds": round(time.time() - job.started),
+                    }}
         cap = self.config.distill_word_cap
         text, usage = _decode_stream(raw)
         tail = _parse_tail(text) or {}
         diff_summary, d_trunc = _cap_words(
             str(tail.get("diff_summary") or ""), cap)
-        self_report, s_trunc = _cap_words(
-            str(tail.get("self_report_digest") or text or ""), cap)
+        self_report, s_trunc = _cap_words(str(
+            tail.get("report_digest")
+            or tail.get("self_report_digest")
+            or tail.get("answer_digest")
+            or text
+            or ""
+        ), cap)
         metrics = tail.get("metrics") if isinstance(
             tail.get("metrics"), dict) else {}
         self._persist_raw(job.call_id, job.prompt, raw, {
             "mode": job.mode + job.fresh_note,
+            "role": job.role,
+            "collaborator_id": job.call_id,
             "diff_summary": diff_summary,
             "self_report_digest": self_report,
             "metrics": metrics,
         })
-        self._note(job.call_id, "work",
+        self._note(job.call_id, job.role,
                    f"{job.instruction} -> {self_report}", usage)
         return {
             "ok": True,
             "call_id": job.call_id,
+            "collaborator_id": job.call_id,
+            "role": job.role,
             "status": "done" if tail else "unparsed",
             "mode": job.mode + job.fresh_note,
             "diff_summary": diff_summary,
             "self_report_digest": self_report,
+            "report_digest": self_report,
+            "evidence": tail.get("evidence") or [],
+            "artifacts": tail.get("artifacts") or [],
+            "uncertainty": tail.get("uncertainty") or "",
+            "recommended_follow_up": tail.get("recommended_follow_up") or "",
             "metrics": metrics,
             "truncated": bool(d_trunc or s_trunc),
             # The world itself is the truth channel; these numbers are the

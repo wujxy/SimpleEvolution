@@ -50,7 +50,7 @@ from scientist.native_tools import (
     NATIVE_TOOLS,
     native_actions,
 )
-from scientist.host.scientist import (
+from simpleevo.host.scientist import (
     _COLD_START,
     _PROTOCOL_BLOCK,
     _RUNTIME_BOUNDARIES,
@@ -60,7 +60,7 @@ from scientist.host.scientist import (
     _build_system_prompt,
     _seat_identity_block,
 )
-from scientist.memory.context import build_generation_context
+from simpleevo.memory.context import build_generation_context
 from scientist.prompts import load_semantic
 
 

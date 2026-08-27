@@ -80,7 +80,7 @@ def test_write_read_round_trip(tmp_path):
 def _run_experiment_worker(tmp_path, monkeypatch, argv) -> dict:
     """Run the experiment worker in-process against a manifest that infra-fails fast
     (repo path missing), then return the parsed result envelope."""
-    from scientist.assistant import cli as experiment_cli
+    from simpleevo.assistant import cli as experiment_cli
 
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True)

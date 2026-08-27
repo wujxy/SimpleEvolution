@@ -9,14 +9,16 @@ from. This module owns that collapsed tool surface:
   local (executed in-container, no border to cross)
       bash / read_file / write_file          — the world IS the filesystem
   forwarded (executed by the host wrapper over RPC)
-      consult / work                         — the assistant (B class)
-      update_research_state, search_experiments, inspect_experiment,
-      inspect_originating_research_state, use_research_skill   (C class)
-  terminal (forwarded; ends the lease)
+      searcher / proposer / executor / challenger
+      research judgment and experiment-memory channels
+  terminal (forwarded; ends the run)
       deliver_world / abstain
 
-Tool descriptions keep the seat-v2 voice from RESEARCH_TOOL_SPECS — the
-identity lives in the system prompt, the usage semantics live here.
+One voice across every surface: the reader is the principal investigator;
+Searcher, Proposer, Executor, and Challenger are colleagues; the harness is
+the mechanical environment. Tool descriptions say when each colleague is
+the right one to open work with — the identity lives in the system prompt,
+the usage semantics live here.
 """
 from __future__ import annotations
 
@@ -45,32 +47,35 @@ def _fn(name: str, description: str, properties: dict,
 
 BASH_TOOL = _fn(
     "bash",
-    "Bounded shell command in your laboratory — for what the dedicated "
-    "tools cannot do: compiling, running, measuring, git. You live inside "
-    "this world; the shell sees the same filesystem you do, at the real "
-    "paths named in your runtime boundaries. workdir (absolute, in your "
-    "laboratory or scratch root) is remembered across calls. Git history "
-    "is readable; you cannot commit — creating artifacts is the "
-    "executor's job.",
+    "Run a bounded shell command in the live workspace when direct "
+    "inspection or a small discriminating probe requires it. Use your "
+    "shell to stay grounded and audit decisive evidence; substantial "
+    "implementation, debugging, and measurement campaigns normally belong "
+    "to an Executor.",
     {
         "command": {"type": "string"},
         "workdir": {
             "type": "string",
-            "description": "absolute directory to run in, in your "
-                           "laboratory or scratch root; remembered across "
+            "description": "absolute directory to run in, in the "
+                           "workspace or scratch root; remembered across "
                            "calls",
         },
-        "timeout_seconds": {"type": "integer", "minimum": 1},
+        "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "per-call override in seconds; when omitted the "
+                           "world default applies, and an explicit value "
+                           "may exceed it up to a hard 3600s ceiling",
+        },
     },
     ["command"],
 )
 
 READ_FILE_TOOL = _fn(
     "read_file",
-    "Read one file with line numbers (path absolute in your laboratory, "
-    "repo, or scratch root — the boundaries block names them; offset "
-    "1-based; limit default 400, max 2000). Reach for read_file before "
-    "shelling out cat/sed/head.",
+    "Read one file with line numbers (path absolute in the workspace, "
+    "repo, or scratch root — World Contact and Evaluation names them; "
+    "offset 1-based; limit default 400, max 2000).",
     {
         "path": {"type": "string"},
         "offset": {"type": "integer", "minimum": 1},
@@ -83,7 +88,7 @@ WRITE_FILE_TOOL = _fn(
     "write_file",
     "Write a file with exactly this content (heredoc quoting in a shell "
     "command corrupts code — use this for scripts and notes). Scratch is "
-    "freely writable; in your laboratory only the editable paths accept "
+    "freely writable; in the live workspace only the editable paths accept "
     "writes and the rest refuse at the filesystem.",
     {
         "path": {"type": "string"},
@@ -93,138 +98,143 @@ WRITE_FILE_TOOL = _fn(
 )
 
 
-# --- forwarded B/C tools (host executes; identical semantics to the
-#     host-side specs in research_tools.py — descriptions kept in sync) -----
+# --- forwarded tools (the host wrapper executes these over RPC) ------------
+#
+# SimpleEvolution's supervisor carries its own JSON-protocol specs for the
+# same colleagues (simpleevo/host/research_tools.py); this is the native
+# surface, not a mirror of that one.
 
-CONSULT_TOOL = _fn(
-    "consult",
-    "Ask your assistant Claude Code (问/辩/审). It searches the web and "
-    "the literature through its own subagents, reads code fast, and "
-    "argues back; it never touches your world. read=node shows it the "
-    "pristine world under study, read=lab "
-    "your work in progress, read=none nothing. The return is a distilled "
-    "BELIEF — adopting it is your judgment. For 辩 state your hypothesis "
-    "and demand refutation, not agreement.",
+SEARCHER_TOOL = _fn(
+    "searcher",
+    "Open work with a fresh Searcher colleague on a factual question about "
+    "what is already known — literature, precedent, or the code in this "
+    "world. They investigate independently and report sources, findings, "
+    "disagreements, and uncertainty. Returns a receipt; the report arrives "
+    "later.",
     {
-        "question": {"type": "string"},
-        "context": {"type": "string"},
+        "brief": {"type": "string"},
         "read": {"type": "string", "enum": ["none", "node", "lab"]},
+        "experiment_ids": {
+            "type": "array", "items": {"type": "string"},
+        },
+        "timeout_minutes": {
+            "type": "integer", "minimum": 1, "maximum": 180,
+            "description": "engagement time box; when omitted a short "
+                           "default applies",
+        },
     },
-    ["question"],
+    ["brief"],
 )
 
-WORK_TOOL = _fn(
-    "work",
-    "Your assistant Claude Code — the strongest coding agent there is — "
-    "at work in this world (做): implementation, refactors, "
-    "instrumentation, measurement campaigns, long-horizon coding tasks. "
-    "It starts at once and works on its own while you keep reading and "
-    "thinking; the result arrives as its own message when the job is "
-    "done. continue works in your main world (your edits and its edits "
-    "share it); fresh runs a throwaway side world. It solves the "
-    "implementation details on its own — reading, debugging, choosing "
-    "methods, better than your own hands would; what the brief states "
-    "is all it knows of your intent, so the brief's precision is the "
-    "ceiling of what you get back: "
-    "self-contained, exact files and mechanism, the definition of done, "
-    "what to self-measure. Its numbers are its own report; your "
-    "verification remains yours.",
+PROPOSER_TOOL = _fn(
+    "proposer",
+    "Open work with a fresh Proposer colleague to look for explanations "
+    "or research directions. scope=open receives the goal, the live "
+    "world, and neutral experiment evidence — not your Current Research "
+    "Judgment or prior reasoning; use it when the research question "
+    "itself deserves reconsideration. scope=directed works inside a "
+    "region you name.",
     {
-        "instruction": {"type": "string"},
-        "mode": {"type": "string", "enum": ["continue", "fresh"]},
+        "brief": {"type": "string"},
+        "scope": {"type": "string", "enum": ["open", "directed"]},
+        "region": {"type": "string"},
+        "experiment_ids": {
+            "type": "array", "items": {"type": "string"},
+        },
+        "timeout_minutes": {
+            "type": "integer", "minimum": 1, "maximum": 180,
+            "description": "engagement time box; when omitted a short "
+                           "default applies",
+        },
     },
-    ["instruction"],
+    ["brief", "scope"],
+)
+
+EXECUTOR_TOOL = _fn(
+    "executor",
+    "Open work with a fresh Executor colleague for substantial "
+    "implementation, debugging, measurement, or experiment work — anything "
+    "beyond a small discriminating probe. Give research intent, "
+    "constraints, and a definition of done; they own how the work is "
+    "carried through and return artifacts and evidence.",
+    {
+        "brief": {"type": "string"},
+        "definition_of_done": {"type": "string"},
+        "workspace": {
+            "type": "string", "enum": ["current", "isolated"],
+        },
+        "timeout_minutes": {
+            "type": "integer", "minimum": 1, "maximum": 180,
+        },
+    },
+    ["brief", "definition_of_done"],
+)
+
+CHALLENGER_TOOL = _fn(
+    "challenger",
+    "Open work with a fresh Challenger colleague to attack the current "
+    "judgment or a specific claim — counterexamples, hidden assumptions, "
+    "rival explanations, discriminating tests. Give the claim, its "
+    "evidence, and the important uncertainty.",
+    {
+        "brief": {"type": "string"},
+        "experiment_ids": {
+            "type": "array", "items": {"type": "string"},
+        },
+        "timeout_minutes": {
+            "type": "integer", "minimum": 1, "maximum": 180,
+            "description": "engagement time box; when omitted a short "
+                           "default applies",
+        },
+    },
+    ["brief"],
 )
 
 WAIT_TOOL = _fn(
     "wait",
-    "Block until your assistant's next report lands, or the given "
-    "seconds pass. A dispatched job that has not reported back is still "
-    "running; you will see its message the moment it lands. Reach for "
-    "this when the productive next move depends on a running job and "
-    "nothing else is worth doing meanwhile — waiting on your assistant "
-    "is a legitimate move, not idling.",
+    "Block until the next collaborator report lands, or the given "
+    "seconds pass. An engagement that has not reported back is still "
+    "running; you will see its message the moment it lands. Use this when "
+    "the productive next move depends on running work and nothing else is "
+    "worth doing meanwhile.",
     {"timeout_seconds": {"type": "integer", "minimum": 1}},
     [],
 )
 
 
-UPDATE_RESEARCH_STATE_TOOL = _fn(
-    "update_research_state",
-    "Upsert your lease's ONE evolving research state (six blocks), "
-    "written to the ledger immediately; revision increments each write. "
-    "Evidence you author is belief; verified is harness-awarded, never "
-    "yours to claim. Revise after every work cycle and before any "
-    "conclusion.",
+REVISE_RESEARCH_JUDGMENT_TOOL = _fn(
+    "revise_research_judgment",
+    "Revise your Current Research Judgment at a real research junction — "
+    "when the working model, decisive evidence, or key uncertainty "
+    "materially changes.",
     {
-        "working_model": {"type": "string"},
+        "judgment": {"type": "string"},
+        "revision_reason": {"type": "string"},
         "evidence_refs": {"type": "array", "items": {"type": "string"}},
-        "evidence": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "claim": {"type": "string"},
-                    "how": {"type": "string"},
-                    "numbers": {"type": "object"},
-                    "source": {"type": "string"},
-                    "status": {
-                        "type": "string",
-                        "enum": ["belief", "verified"],
-                    },
-                },
-                "required": ["claim", "how", "source", "status"],
-            },
-        },
-        "experiment_log": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "intent": {"type": "string"},
-                    "sha": {"type": "string"},
-                    "numbers": {"type": "object"},
-                    "verdict": {"type": "string"},
-                },
-                "required": ["intent"],
-            },
-        },
-        "deliverables": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "world_sha": {"type": "string"},
-                    "material_difference": {"type": "string"},
-                },
-                "required": ["world_sha", "material_difference"],
-            },
-        },
-        "conclusion": {
-            "type": "object",
-            "properties": {
-                "type": {
-                    "type": "string",
-                    "enum": ["delivered", "empty", "cut_off"],
-                },
-                "exhaustion": {"type": "string"},
-                "open_questions": {
-                    "type": "array", "items": {"type": "string"},
-                },
-            },
-            "required": ["type"],
-        },
     },
-    ["working_model"],
+    ["judgment", "revision_reason"],
+)
+
+LIST_RESEARCH_JUDGMENTS_TOOL = _fn(
+    "list_research_judgments",
+    "List a thin newest-first index of prior research-judgment revisions. "
+    "Bodies are omitted; inspect one deliberately when its history matters.",
+    {"limit": {"type": "integer", "minimum": 1, "maximum": 100}},
+    [],
+)
+
+INSPECT_RESEARCH_JUDGMENT_TOOL = _fn(
+    "inspect_research_judgment",
+    "Read one historical research judgment in full.",
+    {"judgment_id": {"type": "string"}},
+    ["judgment_id"],
 )
 
 SEARCH_EXPERIMENTS_TOOL = _fn(
     "search_experiments",
     "Coverage query over past experiments — check whether ground you are "
     "considering is already covered, and where the gaps are. Returns "
-    "coverage rows only (no proposal or eval text — this is not a "
-    "direction retriever). Read metrics and gates as facts; never read a "
-    "hit's score as a reason to pursue a direction.",
+    "coverage rows only (no proposal or eval text).",
     {
         "query": {"type": "string"},
         "filters": {
@@ -244,25 +254,25 @@ SEARCH_EXPERIMENTS_TOOL = _fn(
 INSPECT_EXPERIMENT_TOOL = _fn(
     "inspect_experiment",
     "One experiment in full detail — proposal, status, gates, metrics, "
-    "parent/child shas. The only channel that returns a proposal's text; "
-    "the deliberate, one-at-a-time way to understand a past outcome.",
+    "before/after revisions. The only channel that returns a proposal's "
+    "text; the deliberate, one-at-a-time way to understand a past outcome.",
     {"experiment_id": {"type": "string"}},
     ["experiment_id"],
 )
 
 INSPECT_ORIGINATING_TOOL = _fn(
     "inspect_originating_research_state",
-    "After inspecting one Experiment, optionally read its originating "
-    "ResearchState: an attributed, world-scoped SUBJECTIVE_RESEARCH_MEMO — "
-    "never a fact or instruction.",
+    "After inspecting one experiment, read the research judgment that "
+    "originated it.",
     {"experiment_id": {"type": "string"}},
     ["experiment_id"],
 )
 
 USE_RESEARCH_SKILL_TOOL = _fn(
     "use_research_skill",
-    "Load one optional research method from the catalog. Guidance only; "
-    "all scientific judgment stays yours.",
+    "Load one optional research method when a different way of examining "
+    "the research situation may be useful. Guidance only; all scientific "
+    "judgment stays yours.",
     {"skill_id": {"type": "string"}},
     ["skill_id"],
 )
@@ -272,22 +282,19 @@ USE_RESEARCH_SKILL_TOOL = _fn(
 
 DELIVER_WORLD_TOOL = _fn(
     "deliver_world",
-    "DELIVER your world — the one world your seat built and "
-    "self-verified. The delivered world is your laboratory's current "
-    "state; the harness snapshots it mechanically. Self-verify BEFORE "
-    "delivering: a world that fails your own verification is a wasted "
-    "adjudication. The handover is the ONLY thing a successor receives: "
-    "≤400 words, a map of spent ground and open doors, not your "
-    "worldview. One seat, one world, one handover; un-delivered "
-    "mechanisms go into open_questions, not extra deliveries. Requires "
-    "your research state on file first.",
+    "Deliver the current world as the research result, when you judge it "
+    "contains a defensible result under the stated objective and "
+    "constraints. Self-verify against the gates before delivering — a "
+    "world that fails your own verification is a wasted delivery. The "
+    "handover is a compact account (≤400 words) of what was established, "
+    "the decisive evidence, and the important unresolved questions.",
     {
         "handover": {
             "type": "object",
             "properties": {
                 "dead_ends": {
                     "type": "array", "items": {"type": "string"},
-                    "description": "axis tried, evidence it is spent",
+                    "description": "direction tried, evidence it is spent",
                 },
                 "open_questions": {
                     "type": "array", "items": {"type": "string"},
@@ -298,8 +305,8 @@ DELIVER_WORLD_TOOL = _fn(
                 },
                 "warning": {
                     "type": "string",
-                    "description": "your strongest signed warning to a "
-                                   "successor with a different lens",
+                    "description": "your strongest warning to a successor "
+                                   "who may see the problem differently",
                 },
             },
             "required": ["dead_ends", "open_questions", "warning"],
@@ -310,9 +317,10 @@ DELIVER_WORLD_TOOL = _fn(
 
 ABSTAIN_TOOL = _fn(
     "abstain",
-    "The empty-seat exit, when your lens provably has no ore here. "
-    "Requires your research state on file first; an abstain with no "
-    "registered state is a protocol violation.",
+    "Conclude the run without delivering. Use only when you judge that "
+    "the available evidence does not support a defensible result and that "
+    "no remaining inquiry merits further effort. A stable Current "
+    "Research Judgment is not required.",
     {
         "reason": {"type": "string"},
         "axes_checked": {
@@ -326,26 +334,24 @@ ABSTAIN_TOOL = _fn(
 
 NOTE_TOOL = _fn(
     "note",
-    "Append one line to your persistent working notes (timestamped, "
-    "append-only, survives compaction and resume). This is where "
-    "understanding lives between your ears and your context: a map you "
-    "just established, a measurement, a decision and its reason — jot it "
-    "the moment you know it, then stop re-reading to hold it. Your "
-    "research state is the revised model; notes are the cheap running "
-    "log. Keep each note one dense line or short block.",
+    "Append a short factual or working note worth preserving across "
+    "compaction or resume — observations, references, measurements, small "
+    "reminders. Notes are a research log, not your Current Research "
+    "Judgment.",
     {"text": {"type": "string"}},
     ["text"],
 )
 
 
 NATIVE_TOOLS: tuple[dict, ...] = (
-    # Order is the priority declaration: assistant first, the ledger
-    # rhythm second, own eyes after, hands and record last — mirroring
-    # the seat-v2 tool block order.
-    CONSULT_TOOL,
-    WORK_TOOL,
+    # Order is the priority declaration: colleagues first, the judgment
+    # rhythm second, own eyes after, records and exits last.
+    SEARCHER_TOOL,
+    PROPOSER_TOOL,
+    EXECUTOR_TOOL,
+    CHALLENGER_TOOL,
     WAIT_TOOL,
-    UPDATE_RESEARCH_STATE_TOOL,
+    REVISE_RESEARCH_JUDGMENT_TOOL,
     NOTE_TOOL,
     READ_FILE_TOOL,
     BASH_TOOL,
@@ -353,6 +359,8 @@ NATIVE_TOOLS: tuple[dict, ...] = (
     SEARCH_EXPERIMENTS_TOOL,
     INSPECT_EXPERIMENT_TOOL,
     INSPECT_ORIGINATING_TOOL,
+    LIST_RESEARCH_JUDGMENTS_TOOL,
+    INSPECT_RESEARCH_JUDGMENT_TOOL,
     USE_RESEARCH_SKILL_TOOL,
     DELIVER_WORLD_TOOL,
     ABSTAIN_TOOL,
@@ -367,8 +375,10 @@ NATIVE_TOOL_NAMES = frozenset(t["function"]["name"] for t in NATIVE_TOOLS)
 NATIVE_LOCAL_ACTIONS = frozenset(
     {"bash", "read_file", "write_file", "note", "wait"})
 NATIVE_FORWARDED_ACTIONS = frozenset({
-    "consult", "work", "update_research_state", "search_experiments",
+    "searcher", "proposer", "executor", "challenger",
+    "revise_research_judgment", "search_experiments",
     "inspect_experiment", "inspect_originating_research_state",
+    "list_research_judgments", "inspect_research_judgment",
     "use_research_skill",
 })
 NATIVE_TERMINAL_ACTIONS = frozenset({"deliver_world", "abstain"})
@@ -385,59 +395,91 @@ FORWARDABLE_ACTIONS = NATIVE_FORWARDED_ACTIONS
 # surviving protocol content, and the boundaries of the world the body
 # lives in.
 
-NATIVE_TOOL_BLOCK = (
-    "Your instruments are attached to this conversation as tools, in the "
-    "order you should reach for them (your assistant first — it is your "
-    "default limb; your own eyes and hands after; the record when you "
-    "need what is already known). Each tool's description says what it "
-    "does; the order above is your priority. Call them directly — the "
-    "platform carries your calls; no envelope, no prose protocol."
-)
+NATIVE_RUNTIME_BLOCK = """# Working with the Team
 
-NATIVE_PROTOCOL_BLOCK = """Working protocol:
-- You may call several tools in one turn; they run in order and each
-  answer returns to you. Plain text alongside a call is your own
-  trajectory note — not a substitute for acting.
-- work() returns immediately with a receipt: your assistant takes the
-  brief and works on its own. Keep reading, thinking, dispatching — its
-  result arrives later as its own message in the conversation, labelled
-  with the call id. A job that has not reported back is still running.
-  When the next move depends on a running job and nothing else is worth
-  doing, wait for it (wait) — that is a legitimate move, not idling.
-- A ResearchState is your lease's ONE evolving understanding. Revisit it
-  with update_research_state after every work cycle and whenever your
-  model materially changes; it must carry ≥1 revision before any exit —
-  an exit with nothing on file is a protocol violation.
-- Terminal tools (exactly one concludes the lease): deliver_world
-  delivers the one world your seat built and self-verified — the
-  delivered world is your laboratory's current state, snapshotted
-  mechanically by the harness, and its handover (≤400 words) is the ONLY
-  thing a successor receives. abstain is the empty-seat exit, when your
-  lens provably has no ore here.
-- If the budget runs out before you conclude, the harness concludes the
-  lease as cut_off — what is on file survives, but the conclusion is not
-  yours. Concluding well is part of the work.
+The collaborator functions attached to this conversation are how you open
+work with Searcher, Proposer, Executor, and Challenger. The functions are a
+communication mechanism; the collaborators are members of your research
+team.
+
+Opening an engagement returns a receipt immediately. The collaborator then
+works independently and reports back when the assignment is complete. You
+may open several engagements and keep reading, reasoning, or directing
+other work while they run. If your next decision depends on a running
+engagement and nothing else is worth doing meanwhile, wait for its report.
+
+Each engagement is handled by a fresh collaborator. They may work through a
+long internal trajectory of searching, reading, coding, debugging, or
+measurement, but that private trajectory does not become your memory. What
+returns to you is an attributable report: what was found or built, the
+evidence and artifacts behind it, and what remains uncertain.
+
+A report is testimony from a colleague. Read it critically; inspect
+decisive evidence yourself when the decision matters. Agreement, confident
+prose, or a completed artifact is not proof.
 """
 
-_BOUNDARIES_TEMPLATE = """Runtime boundaries:
-- You are INSIDE this world: {work} is your writable laboratory (the
-  accepted source tree's editable paths, read-write; disposable — nothing
-  you write here becomes an artifact; everything else in the tree is
-  visible read-only). {scratch} is temporary writable space. {repo} is the
-  read-only Git repository: `git show/diff/log` over any prior
-  experiment's source; you cannot commit — creating artifacts is the
-  executor's job.
-- bash, read_file, and write_file see one filesystem — yours. Read
-  before you shell: navigate with read_file first; the shell is for what
-  reading cannot do (compile, run, measure, git).
-- Anything you measure in your lab is for YOUR understanding —
-  navigation, not verdicts. Whether a change is faster or correct is the
-  Harness's verdict, not yours. Use the lab to understand and to design
-  better questions.
-- You cannot call the executor or Harness, edit candidates, choose a
-  parent, or declare evaluation and Gate facts. Only Harness records are
-  authoritative.
-""".strip()
+# Temporary compatibility name for imports outside the PI prompt assembler.
+NATIVE_TOOL_BLOCK = NATIVE_RUNTIME_BLOCK
+
+NATIVE_CONCLUDING_BLOCK = """# Concluding the Research Run
+
+Use deliver_world when you judge that the current world contains a
+defensible research result under the stated objective and constraints.
+Self-verify against the gates before delivering; the handover briefly
+explains what was established, the decisive evidence, and the important
+questions that remain.
+
+Use abstain when you judge that the available evidence does not support a
+defensible research result and that no remaining inquiry merits further
+effort. A stable Current Research Judgment is not required to conclude
+either way.
+
+The harness may end the run externally at any point; such a run is
+recorded as cut_off: the research record survives, but no scientific
+conclusion is invented on your behalf.
+"""
+
+NATIVE_PROTOCOL_BLOCK = """# Runtime Mechanics
+
+- Call tools directly, without a prose envelope. You may call several in
+  one turn; they run in order and each answer returns to you. Plain text
+  alongside a call is your own trajectory note — not a substitute for
+  acting.
+- An engagement receipt means the work is running. Its attributed report
+  arrives later as a message labelled with the call id; an engagement that
+  has not reported back is still running. wait blocks until the next
+  report lands.
+- revise_research_judgment replaces the judgment note in your active
+  context in place; historical judgments are reachable only through the
+  research-record channels.
+- The terminal tools are exactly deliver_world and abstain; one of them
+  concludes the run.
+"""
+
+_BOUNDARIES_TEMPLATE = """# World Contact and Evaluation
+
+You can inspect the live world directly and run small probes when they
+help you understand or audit the research. Direct inspection, small
+discriminating probes, and independent checks are appropriate PI work.
+Production implementation, long debugging, and measurement campaigns
+should normally be carried by an Executor, so they do not consume the
+context your judgment needs.
+
+The world on disk: {work} is the live workspace — only its editable paths
+accept writes; everything else in the tree is visible read-only.
+{scratch} is temporary writable space. Git history of prior experiments
+is readable through {repo} (`git show/diff/log`).
+
+Measurements you make yourself are provisional evidence: they may guide
+the research, and you should make them when they sharpen a decision. The
+harness gates and the exit evaluation are authoritative for whether a
+change is accepted and for its official score.
+
+The harness is part of the environment, not a research collaborator. It
+applies the fixed evaluation contract; it does not decide what results
+mean or which direction the research should take.
+"""
 
 
 def render_native_boundaries(work: str, repo: str, scratch: str) -> str:
@@ -476,8 +518,14 @@ def native_actions(reply: ModelReply) -> list[dict]:
 
 
 def wire_assistant_message(reply: ModelReply, actions: list[dict]) -> dict:
-    """The assistant turn in OpenAI wire format (for the messages list)."""
-    return {
+    """The assistant turn in OpenAI wire format (for the messages list).
+
+    ``reasoning_content`` rides along when the provider returned one:
+    thinking-mode APIs (DeepSeek) require it on replayed assistant turns
+    in multi-turn tool loops — dropping it 400s the run intermittently
+    (a live arm died at step 32 before this).
+    """
+    message = {
         "role": "assistant",
         "content": reply.text or None,
         "tool_calls": [
@@ -492,6 +540,13 @@ def wire_assistant_message(reply: ModelReply, actions: list[dict]) -> dict:
             for call in reply.tool_calls
         ],
     }
+    if reply.reasoning:
+        # Blank receipt: the validator wants the KEY present on turns
+        # that thought; the content never enters the replayed context
+        # (zero inflation — verified live that "" passes where absence
+        # 400s). The verbatim reasoning is not part of the record.
+        message["reasoning_content"] = ""
+    return message
 
 
 def wire_tool_result(tool_call_id: str, observation: dict) -> dict:
