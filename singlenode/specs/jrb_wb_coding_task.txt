@@ -1,0 +1,11 @@
+You are working on JunoResBench white-box electron reconstruction in /work. Improve the solver in src/ — lower energy_res on the labeled val split (ties broken by vertex_res_cm, then timing_res_ns) while keeping the prediction contract valid: `python3 src/solve.py --data <npz> --train <npz> --out <pred.npz>` writes E_rec, x_rec, y_rec, z_rec, t0_rec (t0 measured from window start), and must also run on test.npz, which carries no truth.
+
+This is the white-box task: the complete numpy-only forward model that produced the data ships in benchmarks/whitebox_task_electron/ (stages 1-5 + generate_dataset.py; read its TASK.md). You may read, run and modify it — generate unlimited labeled data under your own seeds, derive features from the known CE(theta), eps(r), per-PMT calibration and trigger models, build forward likelihoods and fit (E, vertex, t0) per event. Recovering t0 means correcting the vertex-dependent trigger latency; stored waveforms are a random channel subset (pmt_offsets gives the hit count).
+
+The evaluation scripts and the task package are fixed; only src/ is writable (the filesystem enforces this). The harness runs, in order:
+  bash scripts/check_verify.sh   (VERIFY gate: solver runs on val, emits a well-formed in-range prediction npz)
+  bash scripts/bench.sh          (objective: energy_res on val, lower is better; SANITY floors reject val-truth copying)
+
+Calibration on this population: the charge-centroid baseline (src/solve.py as shipped) scores energy_res~0.158, vertex_res_cm~1225, timing_res_ns~8.9 on val. The detector's photostatistical design floor is ~3%/sqrt(E) energy, ~10 cm vertex, ~1 ns timing. At the exit the harness re-runs your final solver on the held-out test.npz and scores it against truth you never see.
+
+Measure your own progress with the two scripts; work in /work (generated data and outputs go to /scratch — the package filesystem is read-only). python3 is 3.9 with numpy 2.0 only. When you are done, leave the best solver in src/solve.py and finish with a short summary of what you tried and the final val scores.

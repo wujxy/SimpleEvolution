@@ -68,7 +68,10 @@ PY
 . /tmp/creds.sh && rm -f /tmp/creds.sh
 out=$(claude -p --output-format stream-json --verbose "Reply with exactly OK" 2>/dev/null | tail -1)
 echo "$out" | grep -q "\"type\":\"result\"" && echo "$out" | grep -q "OK"'
-check S7-bench 'bash /work/scripts/check_verify.sh 2>&1 | grep -q "verify: PASS" && bash /work/scripts/bench.sh 2>&1 | grep -E "lookups_per_sec=[0-9]" | grep -q . && echo BENCH-OK'
+# S7 is benchmark-specific (the one check that knows the metric names):
+# S7_BENCH_CMD overrides the default xsbench command for other benchmarks.
+S7_DEFAULT='bash /work/scripts/check_verify.sh 2>&1 | grep -q "verify: PASS" && bash /work/scripts/bench.sh 2>&1 | grep -E "lookups_per_sec=[0-9]" | grep -q . && echo BENCH-OK'
+check S7-bench "${S7_BENCH_CMD:-$S7_DEFAULT}"
 check_inv S8-tmp ': > /tmp/.smoke && rm /tmp/.smoke && echo tmp-ok'
 check S9-isolation '[ ! -e /datafs ] && [ ! -e '"$REPO_ROOT"' ] && [ ! -e /root/runs ] && ! ls / | grep -qE "^(datafs|lustrefs|cvmfs)$"'
 
