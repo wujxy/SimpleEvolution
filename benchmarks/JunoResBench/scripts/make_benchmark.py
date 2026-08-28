@@ -5,22 +5,23 @@ Produces (following the waverec blind-task pattern), for --name NAME:
   blind_task_NAME/train|val|test  splits (+ TASK.md, evaluate.py)
   blind_truth_NAME/test_full.npz  private test truth + reference score
 
-Full-readout era (--full-readout --drift --out-format dir):
-  zero-suppressed readout (rows = hit ∪ in-window-dark channels), slow
-  calibration drift on the run clock, splits as dirs {meta.json,
-  data.npz, adc.npy(memmap-able)}, and --interleave mixes train/val/test
-  through the run so train labels span the whole drift history.
+Full-readout era (--full-readout --out-format dir):
+  zero-suppressed readout (rows = hit ∪ in-window-dark channels) and
+  splits as dirs {meta.json, data.npz, adc.npy(memmap-able)}. The detector
+  is STATIC (JUNO-MC convention: fixed per-PMT calibration drawn once +
+  stochastic response; no environmental drift — that is a calibration-
+  operations problem, not detection physics).
 
 Shipped meta carries ONLY the readout contract (layout, n_pmt, radius,
 window, waveform keys, readout block) — no seed, no detector_config.
 The v1 leak class ("answer written on the riddle": meta constants +
 offsets that count hits the waveforms never show) dies here: full-readout
-test splits ship waveforms, adc_pmt_ids, wf_offsets and t_run_s only.
+test splits ship waveforms, adc_pmt_ids and wf_offsets only.
 
 Usage:
-  python3 scripts/make_benchmark.py --name electron_full --events 960 \
-      --seed <60-bit> --particle-type electron --full-readout --drift \
-      --out-format dir --interleave --train-events 600 --val-events 120
+  python3 scripts/make_benchmark.py --name electron_static --events 960 \
+      --seed <60-bit> --particle-type electron --full-readout \
+      --out-format dir --train-events 600 --val-events 120
 (seeds are large random values: the white-box packages ship the generator,
 so seed search must be computationally dead)
 """
@@ -42,7 +43,6 @@ TRUTH_RAGGED_PMT = ("pmt_ids", "n_pe_pmt")
 TRUTH_RAGGED_PE = ("t_emit_ns", "t_tof_ns", "t_rel_ns", "q_pe", "pe_step")
 TRUTH_RAGGED_STEP = ("step_pos", "step_e_dep", "step_e_vis", "step_t_ns",
                      "step_dir", "step_kind")
-EVENT_LEVEL = ("t_run_s",)   # unprefixed event-level arrays (DAQ timestamps)
 
 
 class Subsetter:
@@ -75,7 +75,7 @@ class Subsetter:
                 # and correct on interleaved ones where it was not)
                 counts = np.diff(d[k])[keep]
                 out[k] = np.concatenate(([0], np.cumsum(counts)))
-            elif k.startswith("evt_") or k in EVENT_LEVEL:
+            elif k.startswith("evt_"):
                 out[k] = d[k][keep]
         sel_ev = np.where(keep)[0]
 
@@ -147,7 +147,7 @@ def scrub_meta(meta: dict) -> dict:
         WaveGenConfig)
     wf = WaveGenConfig()
     keep = ("layout", "n_pmt", "radius_m", "truth_only", "full_readout",
-            "drift", "max_wf_per_event", "skip_per_pe", "particle_type",
+            "max_wf_per_event", "skip_per_pe", "particle_type",
             "mix", "direction", "t0_range_ns", "particle_mix",
             "waveform_keys")
     out = {k: meta[k] for k in keep if k in meta}
@@ -189,7 +189,6 @@ ortho-positronium component for ~55% of annihilations).
         e_note = "  - visible energy E_rec (MeV)"
         data_note = "  train  waveforms + truth (calibrate on this)"
         byline = ""
-    run_note = ""
     if meta.get("full_readout"):
         readout_note = f"""Per event you receive the digitized waveforms of
 every channel that pulsed in the readout window (zero-suppressed full
@@ -199,10 +198,6 @@ channels are not stored — their absence is itself the measurement "quiet".
 `wf_offsets` maps events to their adc rows and `adc_pmt_ids` names each
 row's channel. Which pulsed channels carry physics photoelectrons and which
 carry dark noise is not labeled — that separation is part of the task."""
-        run_note = """
-Each event carries `t_run_s`, its timestamp in seconds from the start of
-the continuous run the dataset was taken as. Nothing about the detector is
-guaranteed stationary over the run."""
     else:
         readout_note = f"""Per event you receive up to {max_wf_per_event} digitized channel
 waveforms (1 GSa/s, 14-bit, negative pulses on a positive baseline; the
@@ -226,7 +221,7 @@ with vertex position, light-collection statistics and dark noise. Waveforms
 also contain uncorrelated dark-noise pulses; the per-PE truth arrays in
 train/val cover physics photoelectrons only (dark pulses are in the
 waveforms but not in the truth lists).
-{run_note}
+
 ## Your task
 
 From the waveforms alone, reconstruct per event:
@@ -269,16 +264,8 @@ def main():
     ap.add_argument("--full-readout", action="store_true",
                     help="zero-suppressed full readout (hit ∪ dark rows; "
                          "use --max-wf-per-event 0)")
-    ap.add_argument("--drift", action="store_true",
-                    help="slow calibration drift on the run clock "
-                         "(ships t_run_s timestamps)")
-    ap.add_argument("--run-gap-s", type=float, default=10.0)
     ap.add_argument("--out-format", choices=["npz", "dir"], default="npz",
                     help="parent + splits format; dir = memmap-able adc.npy")
-    ap.add_argument("--interleave", action="store_true",
-                    help="randomly interleave splits through the run "
-                         "(train labels span the whole drift history) "
-                         "instead of contiguous blocks")
     ap.add_argument("--train-events", type=int, default=None,
                     help="explicit train size (default 40%%)")
     ap.add_argument("--val-events", type=int, default=None,
@@ -317,11 +304,10 @@ def main():
             "--max-wf-per-event", str(args.max_wf_per_event),
             "--out-format", args.out_format,
         ]
-        for flag in ("full-readout", "drift"):
+        for flag in ("full-readout",):
             if getattr(args, flag.replace("-", "_")):
                 cmd.append(f"--{flag}")
         cmd += [
-            "--run-gap-s", str(args.run_gap_s),
             "--optics-mode", args.optics_mode,
             "--particle-type", args.particle_type, "--mix", args.mix,
             "--direction", args.direction,
@@ -343,16 +329,9 @@ def main():
         n_val = args.val_events
     else:
         n_val = int(0.2 * n)
-    if args.interleave:
-        # seeded shuffle, then sort within each split: time order survives
-        perm = np.random.default_rng([args.seed, 0x51A7]).permutation(n)
-        idx = {"train": np.sort(perm[:n_tr]),
-               "val": np.sort(perm[n_tr:n_tr + n_val]),
-               "test": np.sort(perm[n_tr + n_val:])}
-    else:
-        idx = {"train": np.arange(0, n_tr),
-               "val": np.arange(n_tr, n_tr + n_val),
-               "test": np.arange(n_tr + n_val, n)}
+    idx = {"train": np.arange(0, n_tr),
+           "val": np.arange(n_tr, n_tr + n_val),
+           "test": np.arange(n_tr + n_val, n)}
 
     blind = BENCH / f"blind_task_{args.name}"
     private = BENCH / f"blind_truth_{args.name}"

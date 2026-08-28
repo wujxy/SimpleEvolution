@@ -15,10 +15,20 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 BENCH = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(scope="module")
+def d(tmp_path_factory):
+    """Small mixed dataset for the invariant/hygiene tests (pytest entry;
+    the __main__ runner builds the same dict inline)."""
+    p = tmp_path_factory.mktemp("particles") / "mixed_small.npz"
+    _generate(p)
+    return np.load(p, allow_pickle=False)
 
 
 def _generate(path, n=30):

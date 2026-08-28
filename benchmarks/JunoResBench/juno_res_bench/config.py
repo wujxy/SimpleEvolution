@@ -153,22 +153,6 @@ class DetectorConfig:
     # hit ∪ dark-channel set per event.
     full_readout: bool = False
 
-    # ---- slow calibration drift (run clock; see drift.py) -------------------
-    # OU wander of the per-PMT calibration over the dataset's lifetime.
-    # No per-event common mode anywhere: that is exactly degenerate with
-    # energy and would be a floor, not a calibration problem. Drawn from a
-    # dedicated drift RNG (only when drift=True), so v1 streams are frozen.
-    drift: bool = False
-    drift_gain_ou_sigma: float = 0.02       # per-PMT gain wander
-    drift_gain_ou_tau_s: float = 2700.0
-    drift_gain_event_jitter: float = 0.002  # per-PMT per-event HV noise
-    drift_pde_ou_sigma: float = 0.01        # per-PMT efficiency wander
-    drift_pde_ou_tau_s: float = 2700.0
-    drift_pde_global_sigma: float = 0.01    # slow common light-yield mode
-    drift_pde_global_tau_s: float = 2400.0
-    drift_dcr_log_sigma: float = 0.15       # global dark-rate temperature mode
-    drift_dcr_log_tau_s: float = 1800.0
-
     def mu_pe_ratio(self, r_m: float) -> float:
         """Relative light collection vs radius (1.0 at center)."""
         u = r_m / self.nonuniform_radius_m

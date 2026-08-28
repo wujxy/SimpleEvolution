@@ -4,7 +4,7 @@ dir format (the full-readout era):
 
     <split>/meta.json    shipped meta (no seed, no detector_config)
     <split>/data.npz     every array except adc (labels, ragged truth,
-                         wf_offsets, adc_pmt_ids, t_run_s, ...)
+                         wf_offsets, adc_pmt_ids, ...)
     <split>/adc.npy      uint16 [n_rows, n_samples] — memmap-able, so
                          multi-GB waveform sets never sit in RAM
 

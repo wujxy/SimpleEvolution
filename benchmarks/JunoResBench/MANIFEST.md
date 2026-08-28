@@ -134,3 +134,35 @@ Notes:
 - The golden-digest lock in tests/test_stage0.py is numpy-build dependent:
   python 3.11.10 / numpy 1.26.4 (this host). Regenerate the digests together
   with the full e- anchor suite if the build changes.
+
+### electron_static (seed 276263006192544257) — zero-suppressed FULL readout, STATIC detector
+
+`--full-readout --out-format dir --train-events 600 --val-events 120
+--max-wf-per-event 0 --optics-mode trace`, 960 events (600/120/240,
+contiguous). Rows = hit ∪ in-window-dark channels; silent channels
+omitted. NO drift, no run clock, no t_run_s — the static-detector
+convention (JUNO MC): per-PMT calibration (gain 15% / PDE 8% / time
+offset 1 ns Gaussian) drawn once and fixed; difficulty is detection
+physics only (statistics-starved per-PMT calibration from 600 train
+events, physics-vs-dark pulse separation, trigger-latency t0). Splits
+are dirs {meta.json, data.npz, adc.npy(memmap)}; shipped meta = readout
+contract only (no seed, no detector_config, no drift flag); test strips
+pmt_offsets (hit identity from waveforms) and ships adc_pmt_ids +
+wf_offsets only. train 600 ev / 2,963,025 rows (2,778,661 hit + 184,364
+dark-only); val 120 ev / 604,353 rows (567,963 + 36,390); test 240 ev /
+1,182,945 rows. Baseline (world solve.py): val 13.1% / 608 cm / 4.9 ns,
+test 12.7% / 600 cm / 6.2 ns. Supersedes electron_full's drift
+machinery, which was removed from the generator (environmental physics
+is a calibration-operations problem, not detection physics; four of its
+five OU modes were statistically invisible anyway).
+
+```
+269b1a9d274f983f2344ac101c446e81655f77b213c17f23766066b2ab1bfba2  blind_task_electron_static/train/data.npz
+c4a786815986eaa38d610579f62da87af6fbbc407b1b37015f951169fed91fa1  blind_task_electron_static/train/meta.json
+8cdb7ea86b8c721116f7d543aa98112379e7f4d2cbc7a5ab530be84b5718be21  blind_task_electron_static/val/data.npz
+c4a786815986eaa38d610579f62da87af6fbbc407b1b37015f951169fed91fa1  blind_task_electron_static/val/meta.json
+97fc5cf5be631b980654957421c848d501388c96afa6612d75943dcaf2d9a205  blind_task_electron_static/test/data.npz
+c4a786815986eaa38d610579f62da87af6fbbc407b1b37015f951169fed91fa1  blind_task_electron_static/test/meta.json
+21d252c33dbaeaf50ee89751abff95b0897c8f99cc4d16e7ca2e6808ab45a5b9  blind_truth_electron_static/test_full.npz
+```
+

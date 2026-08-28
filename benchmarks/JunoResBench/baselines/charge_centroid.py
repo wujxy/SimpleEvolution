@@ -47,7 +47,7 @@ def event_features(d, wave_cfg, pos):
     q_ch = np.clip(base - adc, 0, None).sum(axis=1).astype(np.float64)
 
     meta = json.loads(str(d["meta"]))
-    if "wf_offsets" in d.files:
+    if "wf_offsets" in d:
         # authoritative event -> adc-row map (full readout stores every
         # channel, so the charge sum already covers the whole detector)
         rows_per_ev = np.diff(d["wf_offsets"]).astype(np.int64)
@@ -143,7 +143,7 @@ def main():
     n_tr = min(args.n_train, len(q_tr) // 2)
     # calibrate against the scored reference (e+ includes 1.022 MeV
     # annihilation light, matching the evaluate.py convention)
-    e_ref_tr = (d_tr["evt_e_scored"] if "evt_e_scored" in d_tr.files
+    e_ref_tr = (d_tr["evt_e_scored"] if "evt_e_scored" in d_tr
                 else d_tr["evt_e_true"])
     k = float(np.sum(e_ref_tr[:n_tr] * q_tr[:n_tr])
               / np.sum(q_tr[:n_tr] ** 2))

@@ -89,13 +89,6 @@ def main():
     ap.add_argument("--max-wf-per-event", type=int, default=0,
                     help="cap stored waveforms at N random hit channels "
                          "per event (0 = keep all hit channels)")
-    ap.add_argument("--drift", action="store_true",
-                    help="enable slow calibration drift on the run clock "
-                         "(per-PMT gain/PDE OU + global PDE/dcr modes; "
-                         "ships an unprefixed t_run_s timestamp per event)")
-    ap.add_argument("--run-gap-s", type=float, default=10.0,
-                    help="mean event spacing on the run clock in seconds "
-                         "(exponential gaps; only used with --drift)")
     ap.add_argument("--out-format", choices=["npz", "dir"], default="npz",
                     help="npz = single compressed file (legacy); dir = "
                          "{meta.json, data.npz, adc.npy} with adc.npy "
@@ -107,8 +100,7 @@ def main():
     args = ap.parse_args()
 
     cfg = DetectorConfig(optics_mode=args.optics_mode,
-                         full_readout=args.full_readout,
-                         drift=args.drift)
+                         full_readout=args.full_readout)
     layout = (
         PMTLayout.from_juno_csv() if args.layout == "juno"
         else PMTLayout.uniform(args.n_pmt, cfg.detector_radius_m)
@@ -132,13 +124,6 @@ def main():
     dirs = (sample_isotropic_dirs(rng, args.events) if args.direction == "isotropic"
             else np.tile(np.array([0.0, 0.0, 1.0]), (args.events, 1)))
     t0s = rng.uniform(args.t0_min, args.t0_max, args.events)
-    # run-clock gaps drawn LAST (v1 streams stay byte-stable); only the
-    # drift era consumes them
-    if args.drift:
-        t_runs = np.concatenate(
-            ([0.0], np.cumsum(rng.exponential(args.run_gap_s, args.events - 1))))
-    else:
-        t_runs = None
 
     out_rows = {k: [] for k in (
         "x_m y_m z_m e_true e_dep e_vis e_escaped e_scored particle_type "
@@ -171,7 +156,6 @@ def main():
             with_waveforms=not args.truth_only,
             direction=tuple(dirs[i]),
             particle_type=types[i],
-            run_time_s=(float(t_runs[i]) if t_runs is not None else None),
         )
         out_rows["x_m"].append(ev.x_m);   out_rows["y_m"].append(ev.y_m)
         out_rows["z_m"].append(ev.z_m);   out_rows["e_true"].append(ev.e_true_mev)
@@ -251,10 +235,6 @@ def main():
            if not args.skip_per_pe else {}),
         **({"wf_offsets": np.asarray(wf_off, dtype=np.int64)}
            if not args.truth_only else {}),
-        # unprefixed on purpose: the run timestamp is DAQ bookkeeping, not
-        # truth — it ships with every split, blind included
-        **({"t_run_s": t_runs.astype(np.float64)}
-           if t_runs is not None else {}),
     }
     meta = {
         "detector_config": asdict(cfg),
@@ -264,7 +244,6 @@ def main():
         "seed": args.seed,
         "truth_only": args.truth_only,
         "full_readout": args.full_readout,
-        "drift": args.drift,
         "max_wf_per_event": args.max_wf_per_event,
         "skip_per_pe": args.skip_per_pe,
         "particle_type": args.particle_type,
@@ -280,8 +259,6 @@ def main():
             "wf_offsets (int64, per-event adc row offsets — the authoritative"
             " event→row map; full readout rows = hit ∪ in-window-dark"
             " channels per event)",
-            "t_run_s (float64, seconds into the run — DAQ timestamp; present"
-            " in the drift era)",
         ]
         if not args.truth_only else [],
     }

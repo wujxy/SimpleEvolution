@@ -44,18 +44,14 @@ def run_s5(
     wavegen,
     rng: np.random.Generator,
     with_waveforms: bool = True,
-    dark_rate_scale: float = 1.0,
 ):
-    """Returns dict with ragged truth (in-window only) + optional adc list.
-
-    dark_rate_scale: the slow drift multiplier on the dark rate (drift.py);
-    1.0 in the frozen v1 contract."""
+    """Returns dict with ragged truth (in-window only) + optional adc list."""
     t0 = float(event.t0_ns)
 
     # ---- dark noise: all channels, extended span (E4) --------------------
     span_lo = t0 - cfg.dark_span_pre_ns
     span_hi = t0 + cfg.dark_span_post_ns
-    mu_dark = cfg.dark_rate_hz * dark_rate_scale * (span_hi - span_lo) * 1e-9
+    mu_dark = cfg.dark_rate_hz * (span_hi - span_lo) * 1e-9
     n_dark_ch = rng.poisson(mu_dark, len(calib.gain))
     n_dark = int(n_dark_ch.sum())
     dark_t = rng.uniform(span_lo, span_hi, n_dark)
