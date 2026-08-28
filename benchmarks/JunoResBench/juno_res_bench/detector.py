@@ -51,6 +51,7 @@ class DetectorSim:
     ):
         self.cfg = config
         self.layout = layout
+        self.seed = seed
         self.rngs = make_rngs(seed)
 
         from ._vendor.wavegen_v1 import WaveGenConfig
@@ -62,6 +63,7 @@ class DetectorSim:
         self.calib = build_calibration(
             config, layout, self.wave_cfg.gain_spread, self.rngs["calibration"]
         )
+        self._drift = None       # lazy DriftState when cfg.drift is on
         self._dir_grid = None    # lazy DirectionGrid for trace mode
 
     def _get_dir_grid(self):
@@ -71,8 +73,21 @@ class DetectorSim:
         return self._dir_grid
 
     # ------------------------------------------------------------------
-    def generate_event(self, event: EventInput, with_waveforms: bool = True) -> EventTruth:
+    def generate_event(self, event: EventInput, with_waveforms: bool = True,
+                       run_time_s: float = None) -> EventTruth:
         cfg = self.cfg
+        calib, dark_scale = self.calib, 1.0
+        if cfg.drift:
+            if run_time_s is None:
+                raise ValueError(
+                    "cfg.drift is on: every event needs its run_time_s "
+                    "(dataset clock, seconds)")
+            if self._drift is None:
+                from .drift import DriftState
+                self._drift = DriftState(cfg, self.layout.n_pmt, self.seed)
+            self._drift.advance(float(run_time_s))
+            calib = self._drift.effective_calibration(self.calib)
+            dark_scale = self._drift.dark_rate_scale
         s1 = s1_response.run_s1(event, cfg, self.rngs["s1_response"])
         photons = PhotonSoA.concatenate(
             [
@@ -91,7 +106,7 @@ class DetectorSim:
                 photons, s1, event, cfg, self.layout, self.rngs["s3_optics"]
             )
         s4 = s4_detection.run_s4(
-            s3, event, cfg, self.calib, self.rngs["s4_detection"],
+            s3, event, cfg, calib, self.rngs["s4_detection"],
             photon_type=photons.photon_type,
             photon_dir=photons.dir,
             layout=self.layout,
@@ -99,8 +114,8 @@ class DetectorSim:
                         if s1.steps is not None else None),
         )
         s5 = s5_electronics.run_s5(
-            s4, event, cfg, self.calib, self.wavegen, self.rngs["s5_electronics"],
-            with_waveforms=with_waveforms,
+            s4, event, cfg, calib, self.wavegen, self.rngs["s5_electronics"],
+            with_waveforms=with_waveforms, dark_rate_scale=dark_scale,
         )
 
         # per-PE photon identity: S4 order -> S3 order -> PhotonSoA order
@@ -130,6 +145,7 @@ class DetectorSim:
             t_rel_ns=s5["t_rel_ns"],
             q_pe=s5["q_pe"],
             adc=s5["adc"],
+            adc_ids=s5["adc_ids"],
             particle_type=event.particle_type,
             e_escape_mev=s1.e_escape_mev,
             step_pos_m=s1.steps.pos_m if s1.steps is not None else None,
@@ -153,6 +169,7 @@ class DetectorSim:
         with_waveforms: bool = True,
         direction=(0.0, 0.0, 1.0),
         particle_type: "ParticleType" = None,
+        run_time_s: float = None,
     ) -> EventTruth:
         """Backward-compatible convenience wrapper."""
         if particle_type is None:
@@ -166,4 +183,5 @@ class DetectorSim:
                 particle_type=particle_type,
             ),
             with_waveforms=with_waveforms,
+            run_time_s=run_time_s,
         )

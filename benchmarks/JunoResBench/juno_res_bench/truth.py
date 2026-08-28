@@ -242,6 +242,9 @@ class EventTruth:
 
     # ---- waveforms, aligned with pmt_ids (None when truth_only) ----------
     adc: Optional[list] = field(default=None)
+    # channel id of each adc row (== pmt_ids in hit-storage mode;
+    # sorted hit ∪ in-window-dark channels in full-readout mode)
+    adc_ids: Optional[np.ndarray] = field(default=None)
 
     # ---- v1 particle chain --------------------------------------------------
     particle_type: ParticleType = ParticleType.ELECTRON

@@ -20,6 +20,7 @@ Examples:
 
 import argparse
 import json
+import shutil
 import sys
 import time
 from dataclasses import asdict
@@ -81,16 +82,33 @@ def main():
                     help="primary direction: fixed (0,0,1) or per-event isotropic")
     ap.add_argument("--truth-only", action="store_true",
                     help="skip waveform synthesis and storage")
+    ap.add_argument("--full-readout", action="store_true",
+                    help="zero-suppressed full readout: every channel with "
+                         "at least one in-window pulse (physics PE or dark) "
+                         "is digitized; silent channels are omitted")
     ap.add_argument("--max-wf-per-event", type=int, default=0,
                     help="cap stored waveforms at N random hit channels "
                          "per event (0 = keep all hit channels)")
+    ap.add_argument("--drift", action="store_true",
+                    help="enable slow calibration drift on the run clock "
+                         "(per-PMT gain/PDE OU + global PDE/dcr modes; "
+                         "ships an unprefixed t_run_s timestamp per event)")
+    ap.add_argument("--run-gap-s", type=float, default=10.0,
+                    help="mean event spacing on the run clock in seconds "
+                         "(exponential gaps; only used with --drift)")
+    ap.add_argument("--out-format", choices=["npz", "dir"], default="npz",
+                    help="npz = single compressed file (legacy); dir = "
+                         "{meta.json, data.npz, adc.npy} with adc.npy "
+                         "memmap-able (multi-GB full-readout sets)")
     ap.add_argument("--skip-per-pe", action="store_true",
                     help="drop per-PE arrays (t_emit/t_tof/t_rel/q_pe/pe_step); "
                          "keeps only event-level and per-PMT quantities")
     ap.add_argument("--out", type=str, required=True)
     args = ap.parse_args()
 
-    cfg = DetectorConfig(optics_mode=args.optics_mode)
+    cfg = DetectorConfig(optics_mode=args.optics_mode,
+                         full_readout=args.full_readout,
+                         drift=args.drift)
     layout = (
         PMTLayout.from_juno_csv() if args.layout == "juno"
         else PMTLayout.uniform(args.n_pmt, cfg.detector_radius_m)
@@ -114,6 +132,13 @@ def main():
     dirs = (sample_isotropic_dirs(rng, args.events) if args.direction == "isotropic"
             else np.tile(np.array([0.0, 0.0, 1.0]), (args.events, 1)))
     t0s = rng.uniform(args.t0_min, args.t0_max, args.events)
+    # run-clock gaps drawn LAST (v1 streams stay byte-stable); only the
+    # drift era consumes them
+    if args.drift:
+        t_runs = np.concatenate(
+            ([0.0], np.cumsum(rng.exponential(args.run_gap_s, args.events - 1))))
+    else:
+        t_runs = None
 
     out_rows = {k: [] for k in (
         "x_m y_m z_m e_true e_dep e_vis e_escaped e_scored particle_type "
@@ -125,10 +150,18 @@ def main():
              "step_pos step_e_dep step_e_vis step_t_ns step_dir step_kind".split()}
     adc_blocks = []
     wf_pmt_ids = []
+    # dir format streams waveform bytes to a raw file (multi-GB readout
+    # sets never sit in RAM); adc.npy gets the .npy header prepended below
+    if args.out_format == "dir" and not args.truth_only:
+        Path(args.out).mkdir(parents=True, exist_ok=True)
+        raw_fh = open(Path(args.out) / "adc.u16", "wb")
+    else:
+        raw_fh = None
 
     pmt_off = [0]
     pe_off = [0]
     step_off = [0]
+    wf_off = [0]
     wf_count = 0
     t_start = time.time()
 
@@ -138,6 +171,7 @@ def main():
             with_waveforms=not args.truth_only,
             direction=tuple(dirs[i]),
             particle_type=types[i],
+            run_time_s=(float(t_runs[i]) if t_runs is not None else None),
         )
         out_rows["x_m"].append(ev.x_m);   out_rows["y_m"].append(ev.y_m)
         out_rows["z_m"].append(ev.z_m);   out_rows["e_true"].append(ev.e_true_mev)
@@ -183,12 +217,22 @@ def main():
                 sel_set = set(int(i) for i in sel)
             else:
                 sel_set = None
+            stored_ev = 0
+            ev_rows = []
             for k, wf in enumerate(ev.adc):
                 if sel_set is not None and k not in sel_set:
                     continue
-                adc_blocks.append(wf.astype(np.uint16))
-                wf_pmt_ids.append(ev.pmt_ids[k])
+                row = wf.astype(np.uint16)
+                if raw_fh is not None:
+                    ev_rows.append(row)
+                else:
+                    adc_blocks.append(row)
+                wf_pmt_ids.append(int(ev.adc_ids[k]))
                 wf_count += 1
+                stored_ev += 1
+            if raw_fh is not None and ev_rows:
+                raw_fh.write(np.stack(ev_rows).tobytes())
+            wf_off.append(wf_off[-1] + stored_ev)
 
         if (i + 1) % max(1, args.events // 10) == 0:
             rate = (i + 1) / (time.time() - t_start)
@@ -205,6 +249,12 @@ def main():
         **{k: np.concatenate(v) for k, v in steps.items()},
         **({k: np.concatenate(v) for k, v in pe.items()}
            if not args.skip_per_pe else {}),
+        **({"wf_offsets": np.asarray(wf_off, dtype=np.int64)}
+           if not args.truth_only else {}),
+        # unprefixed on purpose: the run timestamp is DAQ bookkeeping, not
+        # truth — it ships with every split, blind included
+        **({"t_run_s": t_runs.astype(np.float64)}
+           if t_runs is not None else {}),
     }
     meta = {
         "detector_config": asdict(cfg),
@@ -213,6 +263,8 @@ def main():
         "radius_m": float(layout.radius_m),
         "seed": args.seed,
         "truth_only": args.truth_only,
+        "full_readout": args.full_readout,
+        "drift": args.drift,
         "max_wf_per_event": args.max_wf_per_event,
         "skip_per_pe": args.skip_per_pe,
         "particle_type": args.particle_type,
@@ -222,26 +274,59 @@ def main():
         "particle_mix": {p.value: int(sum(1 for t in out_rows["particle_type"]
                                           if t == c))
                          for p, c in PARTICLE_TYPE_CODE.items()},
-        "waveform_keys": ["adc (uint16, one row per stored channel)",
-                          "adc_pmt_ids (int32, PMT id of each adc row)"]
+        "waveform_keys": [
+            "adc (uint16, one row per stored channel)",
+            "adc_pmt_ids (int32, PMT id of each adc row)",
+            "wf_offsets (int64, per-event adc row offsets — the authoritative"
+            " event→row map; full readout rows = hit ∪ in-window-dark"
+            " channels per event)",
+            "t_run_s (float64, seconds into the run — DAQ timestamp; present"
+            " in the drift era)",
+        ]
         if not args.truth_only else [],
     }
     arrays["meta"] = np.array(json.dumps(meta, sort_keys=True))
 
     if not args.truth_only:
-        arrays["adc"] = np.stack(adc_blocks) if adc_blocks else np.zeros(
-            (0, sim.wave_cfg.n_samples), dtype=np.uint16
-        )
-        arrays["adc_pmt_ids"] = (
-            np.asarray(wf_pmt_ids, dtype=np.int32)
-        )
+        arrays["adc_pmt_ids"] = np.asarray(wf_pmt_ids, dtype=np.int32)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(out, **arrays)
-    size_mb = out.stat().st_size / 1e6
-    print(f"wrote {out} ({size_mb:.1f} MB, {args.events} events, "
-          f"{wf_count} waveforms)")
+    if args.out_format == "dir":
+        # {meta.json, data.npz (small arrays), adc.npy (memmap-able)}.
+        # adc.npy = .npy header + the streamed raw bytes (no RAM spike).
+        out.mkdir(parents=True, exist_ok=True)
+        n_samples = sim.wave_cfg.n_samples
+        if raw_fh is not None:
+            raw_fh.close()
+            raw_path = out / "adc.u16"
+            n_rows = wf_count
+            with open(out / "adc.npy", "wb") as fh:
+                np.lib.format.write_array_header_2_0(
+                    fh, {"descr": "<u2", "fortran_order": False,
+                         "shape": (n_rows, n_samples)})
+                with open(raw_path, "rb") as src:
+                    shutil.copyfileobj(src, fh, length=1 << 24)
+            raw_path.unlink()
+        arrays.pop("adc", None)
+        arrays.pop("meta", None)
+        np.savez_compressed(out / "data.npz", **arrays)
+        (out / "meta.json").write_text(
+            json.dumps(meta, sort_keys=True, indent=1), encoding="utf-8")
+        adc_mb = ((out / "adc.npy").stat().st_size / 1e6
+                  if (out / "adc.npy").exists() else 0.0)
+        data_mb = (out / "data.npz").stat().st_size / 1e6
+        print(f"wrote {out}/ (data.npz {data_mb:.1f} MB + adc.npy "
+              f"{adc_mb:.1f} MB, {args.events} events, {wf_count} waveforms)")
+    else:
+        if not args.truth_only:
+            arrays["adc"] = np.stack(adc_blocks) if adc_blocks else np.zeros(
+                (0, sim.wave_cfg.n_samples), dtype=np.uint16
+            )
+        np.savez_compressed(out, **arrays)
+        size_mb = out.stat().st_size / 1e6
+        print(f"wrote {out} ({size_mb:.1f} MB, {args.events} events, "
+              f"{wf_count} waveforms)")
 
 
 if __name__ == "__main__":

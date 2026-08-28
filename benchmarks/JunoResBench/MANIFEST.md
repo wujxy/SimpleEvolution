@@ -49,6 +49,30 @@ dead — required by the white-box packages that ship the generator).
 | blind_task_mixed/test.npz | fbcf2849db5c5eddbf92f3e5fa64bcb8bec3f7f3f9769f391687372898b2ce9d | 240 events (77/90/73), adc only (meta seed stripped) |
 | blind_truth_mixed/test_full.npz | 18758db43414801c40e886c6ec9ab7fd116b2109687b83f48aa6f37de7f2da24 | PRIVATE: test truth |
 
+
+### electron_full (seed 1128258127999576769) — zero-suppressed FULL readout + calibration drift
+
+`--full-readout --drift --out-format dir --interleave --train-events 600
+--val-events 120 --max-wf-per-event 0 --optics-mode trace`, 960 events
+(600/120/240 interleaved through a continuous run, mean 10 s spacing).
+Rows = hit ∪ in-window-dark channels; silent channels omitted. Drift:
+per-PMT gain/PDE OU (2%/1%, tau 45 min) + per-event per-PMT gain jitter
+0.2% + global PDE slow mode (1%, tau 40 min) + global dark-rate log-OU
+(15%, tau 30 min); NO per-event common mode (degenerate with energy).
+Splits are dirs {meta.json, data.npz, adc.npy(memmap)}; shipped meta =
+readout contract only (no seed, no detector_config); test strips
+pmt_offsets (hit identity from waveforms) and ships t_run_s. train 600 ev / 2,969,516 rows (2,784,065 hit + 185,451 dark-only); val 120 ev / 625,403 rows (589,106 + 36,297); test 240 ev / 1,157,857 rows.
+
+| file | sha256 |
+|---|---|
+| blind_task_electron_full/train/data.npz | f8a9f4dae220381d97246a0a93a84d63e8043ffa4f27549020772f6cd850d179 |
+| blind_task_electron_full/train/adc.npy | 29ffcb91e845a2102cab31172037a61ea7414096a247c5bcc86bb4dbfe8fe54c |
+| blind_task_electron_full/val/data.npz | c322933134c4f0d5907f5ac820ef31342009ea7aef03e927623558f6a4e85a13 |
+| blind_task_electron_full/val/adc.npy | a29590d4fa1c9613c7e162a2e16366dcef4e5cc72eadd747782d482d3f48cd53 |
+| blind_task_electron_full/test/data.npz | 5814ed755478946c399e9847096cac2ed89a1d618fd41db8fe62c2de7b3f4964 |
+| blind_task_electron_full/test/adc.npy | 78489a048b03a1527b16d1e8679751ef4dff9168c93264b21e40900dd1eb9034 |
+| blind_truth_electron_full/test_full.npz | 02587c10ec16b309616145d58aaff00ed76a6c7b2c0245294c879d2d89e2c2e0 |
+| data/jrb_electron_full/data.npz | 84ac0159112b745ed867925abd7b11a2201edbe474dc0b746d9b1c5aeb99f11a |
 ### whitebox_task_electron/ — white-box variant (blind + generator source)
 
 Byte-identical data files and scorer as blind_task_electron (train/val/test

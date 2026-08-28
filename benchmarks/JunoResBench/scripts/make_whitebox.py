@@ -71,15 +71,26 @@ def main():
 
     blind = BENCH / f"blind_task_{args.name}"
     white = BENCH / f"whitebox_task_{args.name}"
-    if not (blind / "test.npz").exists():
-        sys.exit(f"missing {blind}/test.npz — build the blind package first")
+    dir_mode = (blind / "test").is_dir()
+    if not dir_mode and not (blind / "test.npz").exists():
+        sys.exit(f"missing {blind}/test — build the blind package first")
+    split_files = (["train", "val", "test"] if dir_mode
+                   else ["train.npz", "val.npz", "test.npz"])
 
+    if white.exists():
+        shutil.rmtree(white)
     white.mkdir(exist_ok=True)
 
     # 1. data + scorer: byte-identical copies from the blind package
-    for f in ("train.npz", "val.npz", "test.npz", "evaluate.py"):
-        data = (blind / f).read_bytes()
-        (white / f).write_bytes(data)
+    #    (dir splits copied with their adc.npy waveforms)
+    for f in split_files:
+        src = blind / f
+        dst = white / f
+        if src.is_dir():
+            shutil.copytree(src, dst)
+        else:
+            dst.write_bytes(src.read_bytes())
+    shutil.copyfile(blind / "evaluate.py", white / "evaluate.py")
 
     # 2. generator source (numpy-only, self-contained)
     src = white / "juno_res_bench"
@@ -98,9 +109,12 @@ def main():
     (white / "generate_dataset.py").write_text(gen)
 
     # 4. TASK.md = white-box preamble + the blind sheet body
-    meta = json.loads(str(np.load(blind / "test.npz")["meta"]))
+    if dir_mode:
+        meta = json.loads((blind / "test" / "meta.json").read_text())
+    else:
+        meta = json.loads(str(np.load(blind / "test.npz")["meta"]))
     body = build_task_md(meta["particle_type"], meta["mix"] or "1,1,1",
-                         meta["max_wf_per_event"], meta)
+                         meta.get("max_wf_per_event", 0), meta)
     task = body.replace(
         "# JunoResBench — reconstruction task",
         "# JunoResBench — reconstruction task (white-box)", 1
@@ -109,14 +123,25 @@ def main():
 
     # ---- self-checks -------------------------------------------------------
     ok = True
-    for f in ("train.npz", "val.npz", "test.npz", "evaluate.py"):
-        if sha256(blind / f) != sha256(white / f):
-            print(f"FAIL byte identity: {f}")
-            ok = False
-    for split in ("train", "val", "test"):
-        m = json.loads(str(np.load(white / f"{split}.npz")["meta"]))
+    check_files = [f for f in split_files] + ["evaluate.py"]
+    for f in check_files:
+        a, b = blind / f, white / f
+        pairs = ([(a / g, b / g) for g in
+                  sorted(p.name for p in a.iterdir())]
+                 if a.is_dir() else [(a, b)])
+        for pa, pb in pairs:
+            if sha256(pa) != sha256(pb):
+                print(f"FAIL byte identity: {f}/{pa.name}")
+                ok = False
+    for split in ([s for s in ("train", "val", "test")]):
+        m = (json.loads((white / split / "meta.json").read_text())
+             if dir_mode
+             else json.loads(str(np.load(white / f"{split}.npz")["meta"])))
         if m.get("seed") is not None:
-            print(f"FAIL seed leak in {split}.npz meta")
+            print(f"FAIL seed leak in {split} meta")
+            ok = False
+        if "detector_config" in m:
+            print(f"FAIL detector_config leak in {split} meta")
             ok = False
     # simulator smoke: runs standalone from a foreign cwd (no repo paths)
     with tempfile.TemporaryDirectory() as td:
@@ -131,10 +156,16 @@ def main():
     # the smoke run leaves __pycache__ inside the shipped source — drop it
     for pc in white.glob("**/__pycache__"):
         shutil.rmtree(pc, ignore_errors=True)
+    entries = []
+    for f in check_files + ["TASK.md", "generate_dataset.py"]:
+        p = white / f
+        if p.is_dir():
+            entries += [(f"{f}/{q.name}", q) for q in sorted(p.iterdir())]
+        else:
+            entries.append((f, p))
     print("\n".join(
-        f"{sha256(white / f)}  whitebox_task_{args.name}/{f}"
-        for f in ("train.npz", "val.npz", "test.npz", "evaluate.py",
-                  "TASK.md", "generate_dataset.py")))
+        f"{sha256(p)}  whitebox_task_{args.name}/{label}"
+        for label, p in entries))
     if not ok:
         sys.exit(1)
     print(f"built whitebox_task_{args.name}/ "

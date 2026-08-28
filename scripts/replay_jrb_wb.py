@@ -56,7 +56,11 @@ def load_manifest(snap_root: Path) -> dict[int, float]:
 
 
 def materialize(base: Path, snap_src: Path | None, dest: Path) -> None:
-    shutil.copytree(base, dest, ignore=shutil.ignore_patterns(".git"))
+    # hardlink the frozen side (the multi-GB task package never changes;
+    # only src/ is per-row state) — instant rows for full-readout repos.
+    # Requires the tempdir to share a filesystem with the base repo.
+    shutil.copytree(base, dest, ignore=shutil.ignore_patterns(".git"),
+                    copy_function=os.link)
     if snap_src is not None:
         shutil.rmtree(dest / "src")
         shutil.copytree(snap_src, dest / "src")
@@ -78,15 +82,25 @@ def parse(pattern: str, text: str) -> str:
 
 
 def judge_test(workdir: Path, truth: Path, env: dict) -> dict:
-    """Run the solver on test.npz, score against the hidden truth."""
-    pkg = workdir / "benchmarks" / "whitebox_task_electron"
+    """Run the solver on the test split, score against the hidden truth."""
+    bench = workdir / "benchmarks"
+    pkgs = sorted(bench.glob("whitebox_task_*")) if bench.is_dir() else []
+    if len(pkgs) != 1:
+        return {"error": f"expected one whitebox_task_* in {bench}, "
+                         f"found {[p.name for p in pkgs]}"}
+    pkg = pkgs[0]
+    # dir-format splits (full-readout era) or legacy single npz files
+    def split(name: str) -> Path:
+        p = pkg / name
+        return p if p.is_dir() else pkg / f"{name}.npz"
+
     with tempfile.TemporaryDirectory(prefix="jrbtest-") as td:
         pred = Path(td) / "pred_test.npz"
         score = Path(td) / "score.json"
         proc = subprocess.run(
             ["python3", "src/solve.py",
-             "--data", str(pkg / "test.npz"),
-             "--train", str(pkg / "train.npz"),
+             "--data", str(split("test")),
+             "--train", str(split("train")),
              "--out", str(pred)],
             cwd=workdir, env=env, text=True, capture_output=True,
             timeout=1800,
@@ -134,6 +148,11 @@ def main(argv: list[str] | None = None) -> int:
     if not (base / "scripts" / "bench.sh").exists():
         print(f"error: {base} is not the jrb whitebox repo", file=sys.stderr)
         return 1
+    # hardlink materialization needs a tempdir on the same filesystem as
+    # the base repo (see materialize)
+    tmp_root = REPO_ROOT / "runs" / ".replay_tmp"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    tempfile.tempdir = tmp_root
     env = dict(os.environ,
                PATH=f"{args.venv}:{os.environ.get('PATH', '')}",
                PYTHONDONTWRITEBYTECODE="1")

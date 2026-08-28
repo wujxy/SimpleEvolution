@@ -44,14 +44,18 @@ def run_s5(
     wavegen,
     rng: np.random.Generator,
     with_waveforms: bool = True,
+    dark_rate_scale: float = 1.0,
 ):
-    """Returns dict with ragged truth (in-window only) + optional adc list."""
+    """Returns dict with ragged truth (in-window only) + optional adc list.
+
+    dark_rate_scale: the slow drift multiplier on the dark rate (drift.py);
+    1.0 in the frozen v1 contract."""
     t0 = float(event.t0_ns)
 
     # ---- dark noise: all channels, extended span (E4) --------------------
     span_lo = t0 - cfg.dark_span_pre_ns
     span_hi = t0 + cfg.dark_span_post_ns
-    mu_dark = cfg.dark_rate_hz * (span_hi - span_lo) * 1e-9
+    mu_dark = cfg.dark_rate_hz * dark_rate_scale * (span_hi - span_lo) * 1e-9
     n_dark_ch = rng.poisson(mu_dark, len(calib.gain))
     n_dark = int(n_dark_ch.sum())
     dark_t = rng.uniform(span_lo, span_hi, n_dark)
@@ -93,8 +97,9 @@ def run_s5(
     dark_ch_w = dark_ch[dw]
 
     adc = None
+    adc_ids = None
     if with_waveforms:
-        adc = _synthesize_hits(
+        adc, adc_ids = _synthesize_hits(
             ids, n_pe_pmt, t_rel_w, q_pe, dark_t_w, dark_ch_w, calib, cfg,
             wavegen, rng,
         )
@@ -110,6 +115,7 @@ def run_s5(
         "sel_idx": sel_idx,          # per kept PE, index into S4 arrays
         "t_trigger": t_trig,
         "adc": adc,
+        "adc_ids": adc_ids,
     }
 
 
@@ -147,14 +153,37 @@ def _find_trigger(times, t0, cfg: DetectorConfig) -> float:
 
 def _synthesize_hits(ids, n_pe_pmt, t_rel, q_pe, dark_t, dark_ch, calib, cfg,
                      wavegen, rng):
+    """Waveform rows per channel. Returns (adc list, channel id per row).
+
+    Default (frozen v1 contract): rows = channels with physics PEs, so the
+    channel id per row IS ids. cfg.full_readout: zero-suppressed DAQ —
+    rows = every channel with at least one in-window pulse (physics PE or
+    dark); silent channels carry only the baseline+noise floor and are
+    omitted (their absence is itself the measurement "quiet"). Channel
+    iteration is ascending in both modes, so the RNG draw order per
+    channel (dark amplitudes -> afterpulse draws) is unchanged for the
+    default mode."""
     starts = np.concatenate(([0], np.cumsum(n_pe_pmt)))
     # dark hits grouped by channel (ids are sorted; dark_ch sorted to match)
     dord = np.argsort(dark_ch, kind="stable")
     dark_ch_s = dark_ch[dord]
     dark_t_s = dark_t[dord]
+    if cfg.full_readout:
+        channels = np.union1d(ids, dark_ch_s)
+        hit_at = np.searchsorted(ids, channels)
+    else:
+        channels = ids
+        hit_at = None
     adc = []
-    for k, pmt in enumerate(ids):
-        i0, i1 = int(starts[k]), int(starts[k + 1])
+    for k, pmt in enumerate(channels):
+        if hit_at is None:
+            i0, i1 = int(starts[k]), int(starts[k + 1])
+        else:
+            j = int(hit_at[k])
+            if j < len(ids) and ids[j] == pmt:
+                i0, i1 = int(starts[j]), int(starts[j + 1])
+            else:
+                i0 = i1 = 0
         times = [t_rel[i0:i1]]
         amps = [q_pe[i0:i1] * calib.gain[pmt]]
 
@@ -188,4 +217,4 @@ def _synthesize_hits(ids, n_pe_pmt, t_rel, q_pe, dark_t, dark_ch, calib, cfg,
         adc.append(
             wavegen._synthesize(np.concatenate(times), np.concatenate(amps))
         )
-    return adc
+    return adc, channels

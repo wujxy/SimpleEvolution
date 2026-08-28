@@ -40,18 +40,28 @@ def event_features(d, wave_cfg, pos):
     """Per-event (charge, centroid) from stored waveform channels."""
     adc = d["adc"]
     adc_ids = d["adc_pmt_ids"]
-    n_ev = len(d["pmt_offsets"]) - 1
+    n_ev = (len(d["wf_offsets"]) - 1 if "wf_offsets" in d
+            else len(d["pmt_offsets"]) - 1)
 
     base = int(round(wave_cfg.baseline_frac * ((1 << wave_cfg.adc_bits) - 1)))
     q_ch = np.clip(base - adc, 0, None).sum(axis=1).astype(np.float64)
 
     meta = json.loads(str(d["meta"]))
-    max_wf = meta.get("max_wf_per_event", 0) or len(adc_ids)
-    rows_per_ev = np.minimum(np.diff(d["pmt_offsets"]), max_wf).astype(np.int64)
-    rows_per_ev = np.minimum(
-        rows_per_ev,
-        len(adc_ids) - np.concatenate(([0], np.cumsum(rows_per_ev)))[:-1],
-    ).astype(np.int64)
+    if "wf_offsets" in d.files:
+        # authoritative event -> adc-row map (full readout stores every
+        # channel, so the charge sum already covers the whole detector)
+        rows_per_ev = np.diff(d["wf_offsets"]).astype(np.int64)
+        full = True
+    else:
+        max_wf = meta.get("max_wf_per_event", 0) or len(adc_ids)
+        rows_per_ev = np.minimum(
+            np.diff(d["pmt_offsets"]), max_wf).astype(np.int64)
+        rows_per_ev = np.minimum(
+            rows_per_ev,
+            len(adc_ids) - np.concatenate(
+                ([0], np.cumsum(rows_per_ev)))[:-1],
+        ).astype(np.int64)
+        full = False
     ev_of_row = np.repeat(np.arange(n_ev), rows_per_ev)
 
     q_evt = np.zeros(n_ev)
@@ -60,10 +70,13 @@ def event_features(d, wave_cfg, pos):
     w = q_ch[:, None]
     np.add.at(c, ev_of_row, pos[adc_ids] * w)
 
-    # stored channels are a random subset: rescale charge by stored fraction
-    n_hit = np.diff(d["pmt_offsets"]).astype(np.float64)
-    scale = np.where(rows_per_ev > 0, n_hit / np.maximum(rows_per_ev, 1.0), 0.0)
-    q_evt *= scale
+    # hit-storage mode: stored channels are a random subset — rescale
+    # charge by the stored fraction. Full readout: scale 1 by construction.
+    if not full:
+        n_hit = np.diff(d["pmt_offsets"]).astype(np.float64)
+        scale = np.where(
+            rows_per_ev > 0, n_hit / np.maximum(rows_per_ev, 1.0), 0.0)
+        q_evt *= scale
 
     tot = np.maximum(q_evt, 1e-9)[:, None]
     return q_evt, c / tot, ev_of_row
@@ -82,7 +95,8 @@ def leading_edge_times(d, wave_cfg, pos, centroid, ev_of_row):
     tof = np.linalg.norm(rel, axis=1) / (0.299792458 / 1.49)
     t_est = lead - tof
     ok = np.isfinite(t_est)
-    n_ev = len(d["pmt_offsets"]) - 1
+    n_ev = (len(d["wf_offsets"]) - 1 if "wf_offsets" in d
+            else len(d["pmt_offsets"]) - 1)
     t_evt = np.zeros(n_ev)
     cnt = np.zeros(n_ev)
     np.add.at(t_evt, ev_of_row[ok], t_est[ok])
@@ -90,19 +104,35 @@ def leading_edge_times(d, wave_cfg, pos, centroid, ev_of_row):
     return t_evt / np.maximum(cnt, 1.0), cnt
 
 
+def load_ds(path):
+    """npz file or dir split (full-readout era) -> NpzFile-like dict with
+    keys()/.files and 'adc' as a memmap."""
+    p = Path(path)
+    if not p.is_dir():
+        return np.load(p, allow_pickle=False)
+    z = np.load(p / "data.npz", allow_pickle=False)
+    out = {k: z[k] for k in z.files}
+    out["adc"] = np.load(p / "adc.npy", mmap_mode="r")
+    if (p / "meta.json").exists():
+        out["meta"] = np.array((p / "meta.json").read_text())
+    out["files"] = list(out.keys())
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", required=True, help="npz to predict on")
+    ap.add_argument("--data", required=True,
+                    help="split to predict on (dir or npz)")
     ap.add_argument("--train", default=None,
-                    help="truth-visible npz for calibration "
+                    help="truth-visible split for calibration "
                          "(default: --data itself, first --n-train events)")
     ap.add_argument("--out", required=True)
     ap.add_argument("--n-train", type=int, default=50)
     args = ap.parse_args()
 
     wave_cfg = WaveGenConfig()
-    d = np.load(args.data, allow_pickle=False)
-    d_tr = np.load(args.train, allow_pickle=False) if args.train else d
+    d = load_ds(args.data)
+    d_tr = load_ds(args.train) if args.train else d
 
     meta = json.loads(str(d["meta"]))
     pos = load_positions(meta)

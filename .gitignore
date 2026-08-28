@@ -10,3 +10,10 @@ run/
 *.log
 *.sif
 SimpleLoop/
+# jrb full-readout packages: multi-GB npz stay on disk only — regenerable
+# from the MANIFEST seed (sha256 recorded there for tamper detection)
+benchmarks/JunoResBench/data/jrb_electron_full.npz
+benchmarks/JunoResBench/data/jrb_electron_full/
+benchmarks/JunoResBench/blind_task_electron_full/
+benchmarks/JunoResBench/blind_truth_electron_full/
+benchmarks/JunoResBench/whitebox_task_electron_full/

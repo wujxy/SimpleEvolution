@@ -44,16 +44,25 @@ PTY_NAMES = {0: "electron", 1: "gamma", 2: "positron"}
 
 
 def load_xy(data_path, pred_path):
-    d = np.load(data_path, allow_pickle=False)
+    # truth source: single npz (private truth, legacy splits) or a dir
+    # split (full-readout era: meta.json + data.npz + adc.npy)
+    data_path = Path(data_path)
+    if data_path.is_dir():
+        d = np.load(data_path / "data.npz", allow_pickle=False)
+        meta = json.loads((data_path / "meta.json").read_text()) \
+            if (data_path / "meta.json").exists() else {}
+    else:
+        d = np.load(data_path, allow_pickle=False)
+        meta = json.loads(str(d["meta"])) if "meta" in d.files else {}
     p = np.load(pred_path, allow_pickle=False)
     e_ref = d["evt_e_scored"] if "evt_e_scored" in d.files else d["evt_e_true"]
     r_true = np.column_stack((d["evt_x_m"], d["evt_y_m"], d["evt_z_m"]))
     t0 = d["evt_t0"]
     if "evt_t_trigger" in d.files:
         # window-referenced event time: sample 0 sits at t_trigger - pre
-        meta = json.loads(str(d["meta"])) if "meta" in d.files else {}
-        pre = float(meta.get("detector_config", {}).get(
-            "pre_trigger_ns", 300.0))
+        pre = float(meta.get("readout", {}).get("pre_trigger_ns")
+                    or meta.get("detector_config", {}).get(
+                        "pre_trigger_ns", 300.0))
         t0 = t0 - (d["evt_t_trigger"] - pre)
     ptype = d["evt_particle_type"] if "evt_particle_type" in d.files else None
 
