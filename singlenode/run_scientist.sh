@@ -57,6 +57,14 @@ chmod 600 "$RUN_DIR/spec.json"
 # freeze the scientist package for this run (upgrade = re-copy)
 cp -a "$REPO_ROOT/scientist" "$RUN_DIR/pkg/scientist"
 
+# Task-specific one-time setup once the run dir, spec, and frozen package
+# all exist (e.g. the omilrec world pip-installs pytest into the run's
+# home for the cvmfs python its eval uses). Eval'd with node_container
+# available; empty for jrb/xsbench.
+if [ -n "${POST_PREPARE_HOOK:-}" ]; then
+    eval "$POST_PREPARE_HOOK"
+fi
+
 node_scientist_env
 
 # smoke gate (fail-closed), then optional stop
@@ -79,6 +87,7 @@ setsid nohup bash -c \
 AGENT=$!
 setsid nohup "$PY" "$REPO_ROOT/scripts/snapshot_world_loop.py" \
     --world "$RUN_DIR/world" --out "$RUN_DIR/snapshots" \
+    --subdir "${SNAPSHOT_SUBDIR:-src}" \
     --every 60 --max-seconds "$WALL" \
     >> "$RUN_DIR/snapshot.log" 2>&1 &
 SNAP=$!

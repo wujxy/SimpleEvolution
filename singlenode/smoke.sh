@@ -35,9 +35,14 @@ if [ -d "$RUN_DIR/pkg/scientist" ]; then
 else
     note "SKIP" "S1-import (no frozen scientist package — coding mode)"
 fi
-check S2-mounts '[ -d /work/src ] && [ -f /spec.json ] && [ -d /repo/scripts ] && [ -d /scratch ] && [ -w /scratch ] && [ -x /work/scripts/bench.sh ]'
-check S3-erofs-frozen-side 'for p in /work/scripts/.smoke /work/README.md /work/benchmarks/.smoke; do if : >> "$p" 2>/dev/null; then echo "UNEXPECTED WRITE SUCCEEDED: $p"; exit 1; fi; done; echo erofs-ok'
-check S3-erofs-editable-side ': > /work/src/.smoke_rw && rm /work/src/.smoke_rw'
+# S2/S3 are layout checks; every snippet below is the xsbench/jrb default
+# and a task launcher with a different shape overrides the env var.
+S2_CHECK=${S2_CHECK:-'[ -d /work/src ] && [ -f /spec.json ] && [ -d /repo/scripts ] && [ -d /scratch ] && [ -w /scratch ] && [ -x /work/scripts/bench.sh ]'}
+S3_FROZEN=${S3_FROZEN:-'/work/scripts/.smoke /work/README.md /work/benchmarks/.smoke'}
+S3_EDITABLE_RW=${S3_EDITABLE_RW:-'/work/src'}
+check S2-mounts "$S2_CHECK"
+check S3-erofs-frozen-side 'for p in '"$S3_FROZEN"'; do if : >> "$p" 2>/dev/null; then echo "UNEXPECTED WRITE SUCCEEDED: $p"; exit 1; fi; done; echo erofs-ok'
+check S3-erofs-editable-side 'for p in '"$S3_EDITABLE_RW"'; do : > "$p/.smoke_rw" && rm "$p/.smoke_rw"; done; echo rw-ok'
 check S4-git '[ "$(git -C /work rev-parse HEAD)" = "'"$BASE_SHA"'" ] && git -C /work log --oneline -1 | grep -q . && git -C /work var GIT_COMMITTER_IDENT | grep -q "@"'
 check S5-model 'python3 - <<"PY"
 import json, urllib.request
@@ -73,7 +78,15 @@ echo "$out" | grep -q "\"type\":\"result\"" && echo "$out" | grep -q "OK"'
 S7_DEFAULT='bash /work/scripts/check_verify.sh 2>&1 | grep -q "verify: PASS" && bash /work/scripts/bench.sh 2>&1 | grep -E "lookups_per_sec=[0-9]" | grep -q . && echo BENCH-OK'
 check S7-bench "${S7_BENCH_CMD:-$S7_DEFAULT}"
 check_inv S8-tmp ': > /tmp/.smoke && rm /tmp/.smoke && echo tmp-ok'
-check S9-isolation '[ ! -e /datafs ] && [ ! -e '"$REPO_ROOT"' ] && [ ! -e /root/runs ] && ! ls / | grep -qE "^(datafs|lustrefs|cvmfs)$"'
+# /cvmfs is forbidden by default (nothing in the jrb/xsbench worlds needs
+# it); a task that binds it explicitly (the JUNO toolchain) has declared
+# it, so it drops out of the forbidden set — the rest of the isolation
+# contract (no host repo, no runs, no datafs) never relaxes.
+S9_FORBIDDEN='^(datafs|lustrefs|cvmfs)$'
+case " $EXTRA_RO_BINDS " in
+    *" /cvmfs "*) S9_FORBIDDEN='^(datafs|lustrefs)$' ;;
+esac
+check S9-isolation '[ ! -e /datafs ] && [ ! -e '"$REPO_ROOT"' ] && [ ! -e /root/runs ] && ! ls / | grep -qE "'"$S9_FORBIDDEN"'"'
 
 note DONE "smoke suite complete"
 echo "smoke: all green -> $LOG"

@@ -26,20 +26,37 @@ node_unset_inherited_binds() {
         < <(env | grep -E '^(APPTAINERENV_|SINGULARITYENV_)' || true)
 }
 
+# The editable overlays: repo-relative paths bound :rw over the :ro /work
+# base (each later bind shadows the ro mount). Default is the xsbench/jrb
+# single-src layout; a task with a nested editable surface plus its own
+# build outputs (omilrec: OMILRECV2/src + build/ InstallArea/ TEMP/)
+# overrides WORLD_RW in its launcher.
+WORLD_RW=${WORLD_RW:-src .scientist .git}
+# Extra read-only host mounts the task's eval needs (e.g. "/cvmfs
+# /data/juno/dingxf/OMILREC_maps" for the JUNO toolchain and bench maps).
+# Bind exactly what the eval reads — never a wider tree than necessary
+# (sibling experiment output must stay invisible to the agent).
+EXTRA_RO_BINDS=${EXTRA_RO_BINDS:-}
+
 # The one-container argv. Requires RUN_DIR set by the caller. The frozen
 # scientist package binds only when present (the coding mode has none —
 # claude IS the agent there).
 node_container() {
-    local extra=()
+    local extra=() p
     if [ -d "$RUN_DIR/pkg/scientist" ]; then
         extra+=(--bind "$RUN_DIR/pkg/scientist:/opt/scientist/scientist:ro")
     fi
+    for p in $EXTRA_RO_BINDS; do
+        extra+=(--bind "$p:$p:ro")
+    done
+    local rw_binds=()
+    for p in $WORLD_RW; do
+        rw_binds+=(--bind "$RUN_DIR/world/$p:/work/$p:rw")
+    done
     apptainer exec --cleanenv --no-eval --userns --containall \
         --no-mount cwd,home,hostfs --cwd /work \
         --bind "$RUN_DIR/world:/work:ro" \
-        --bind "$RUN_DIR/world/src:/work/src:rw" \
-        --bind "$RUN_DIR/world/.scientist:/work/.scientist:rw" \
-        --bind "$RUN_DIR/world/.git:/work/.git:rw" \
+        "${rw_binds[@]}" \
         --bind "$NODE_TEMPLATE:/repo:ro" \
         --bind "$RUN_DIR/scratch:/scratch:rw" \
         --bind "$RUN_DIR/spec.json:/spec.json:ro" \
@@ -51,7 +68,16 @@ node_container() {
 # Runtime env injection (never credentials for the scientist CLI — those
 # ride in the spec; the coding mode calls node_coding_env instead).
 node_scientist_env() {
-    export APPTAINERENV_PYTHONPATH=/opt/scientist
+    # PREPEND /opt/scientist, never replace: an image may ship its own
+    # PYTHONPATH (the omilrec sif carries /usr/local/lib/cvmfs_python311_extra
+    # — pytest for the cvmfs python its eval uses; APPTAINERENV_* would
+    # silently clobber it and the gate suites would lose pytest). The
+    # xsbench/jrb images ship none, so the merge is a no-op there.
+    local image_path=""
+    image_path=$(apptainer exec --cleanenv --userns --containall \
+        --no-mount cwd,home,hostfs "$NODE_IMAGE" printenv PYTHONPATH \
+        2>/dev/null || true)
+    export APPTAINERENV_PYTHONPATH="/opt/scientist${image_path:+:$image_path}"
     export APPTAINERENV_PYTHONPYCACHEPREFIX=/scratch/pycache
     export APPTAINERENV_CLAUDE_CONFIG_DIR=/scratch/claude-config
     [ -n "${BENCH_PIN:-}" ] && export APPTAINERENV_BENCH_PIN="$BENCH_PIN"
@@ -73,7 +99,10 @@ node_prepare_run_dir() {
     mkdir -p "$RUN_DIR"/{scratch,snapshots,pkg,home} \
         "$RUN_DIR/scratch/claude-config"
     cp -a "$NODE_TEMPLATE" "$RUN_DIR/world"
-    mkdir -p "$RUN_DIR/world/.scientist"   # bind sources must exist
+    local p
+    for p in $WORLD_RW; do
+        mkdir -p "$RUN_DIR/world/$p"   # bind sources must exist
+    done
     git_name=$(git config --global user.name || echo wujxy)
     git_mail=$(git config --global user.email || echo "wujxy@st.usst.edu.cn")
     printf '[user]\n\tname = %s\n\temail = %s\n' "$git_name" "$git_mail" \
