@@ -1,9 +1,10 @@
 # scientist 研究记忆层设计（View / Research Memory / Evidence 三层）
 
-2026-08-29 定稿。来源：R7 生产 run（jrb-full-std-elec-r7-scientist，test 2.03% 全臂
+2026-08-29 定稿并实现（同日批实现；实现记录见 §10.1，测试 tests/scientist/
+test_research_memory.py）。来源：R7 生产 run（jrb-full-std-elec-r7-scientist，test 2.03% 全臂
 最优）暴露的认知持久化缺陷 → 与 HEP（Hypothesis Evolution Protocol，arXiv:2607.09195，
 东大生研所）对照 → 三方讨论收敛（本会话 + docs/chat/2026.8.29.19.02.gpt谈researchstate的
-缺陷.md 两轮往返）。本文档是实现前的定案：**实现未开工，批后动**。
+缺陷.md 两轮往返）。
 
 ---
 
@@ -212,7 +213,7 @@ reviewer 地板）、席位 7/7 高质量 fence、临终诚实——全部无变
 Resurface awareness cue（内容无关的存在提醒），而非新发明机制。建议先跑一次
 live 探针（一个上下文、一次调用，复刻 R7 场景给 PI 用新工具面）再上真 run。
 
-## 10. 实现面预览（批后动）
+## 10. 实现面预览（已实现，记录见 §10.1）
 
 - `scientist/ledger.py`：research_memory.jsonl 读写 + item/事件模型 + 检索三件套；
 - `scientist/native_tools.py`：remember / revise_research_state / 检索工具注册与
@@ -223,6 +224,38 @@ live 探针（一个上下文、一次调用，复刻 R7 场景给 PI 用新工�
   "Judgment to attack" 不变（view 即其对象）；
 - conclusion 走查阅/吸收语义，无导出路径；既有自测模式照第四轮七组先例扩组；
 - **v1 不实现** Resurface cue（§6 留位，验收②不过才启用）。
+
+### 10.1 实现记录（2026-08-29，批后同日落码）
+
+按 §10 五处全落，测试 `tests/scientist/test_research_memory.py`（七组 22 例）+
+全套 `tests/scientist/` 87/87 绿。与预览的三处实现裁量，均向后可追：
+
+1. **事实句落点在 `assistant_tools.engage()`，不在 collaboration.py**。预览把
+   mandate 事实句写在 collaboration，但事实句与席位工作区强相关（路径以工作区
+   为根），且 engage 本就有 workspace_note 追加机制——一句话、一处、全角色。
+   条件为真值：目标工作区里 `research_memory.jsonl` 存在才加（早 run 无记忆 →
+   无悬挂指针；searcher read=none 的裸 scratch、read=node 的素世界自然不加）。
+   `_ship_memory()` 保证 node_world 克隆的 isolated executor fork 也带记忆
+   （素世界克隆本不含本 run 记忆，公共知识层显式补运）。
+2. **close-scope / park-reason 在门口拒（结构校验非内容评审）**，与 handover
+   门同族：`close_scope` 缺失返回人话错误（"exactly what was tested and found
+   dead…not just the direction's name"），item 保持原状零半应用；scope 说什么
+   是 PI 的判断。update 路径先验证后落笔。
+3. **view 行形状零改动**：research_state.jsonl 行仍是 judgment_id/revision/
+   judgment/revision_reason/evidence_refs（simpleevo 读者与旧 run 兼容），变化
+   只在呈现层——marker 改 "[Current Research View]"、工具名
+   `revise_research_state`（入参 view + memory_updates）、旧名 dispatch 保留
+   为 legacy（旧 wire/探针不断）。`_upsert_judgment_message` 原位换入机制不变
+   （view 本来就该换）。
+4. 事件模型：create/revise/park/close/reopen 五事件，投影按文件序重放；item
+   带 `_seq`（最后事件位次）供 list/search 最近优先排序，内部字段不外泄；
+   R 编号从现存最大续。`revise_research_state` 的 view 部分原子，memory_updates
+   逐条独立报告（坏条目不伤 view——测试覆盖）。
+5. 顺手修复（预先红着的基线）：R7 加 reviewer 时漏更新的
+   `test_forwardable_set` 断言、marker 文本断言；以及第四轮同步化后遗留的 7 个
+   异步时代红测试（poll/shutdown/wait_for_reports 断言已删 API）——改写为同步
+   等价物（报告即 tool result 邻接、无孤儿席位、`_reconcile` 崩溃收割四例），
+   保护它们当年保护的真不变量。
 
 ## 附：讨论 provenance
 

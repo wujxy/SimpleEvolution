@@ -73,14 +73,19 @@ def test_proposer_has_open_and_directed_scope():
     assert scope["enum"] == ["open", "directed"]
 
 
-def test_judgment_channels_replace_mandatory_research_state_tool():
+def test_view_and_memory_channels_replace_mandatory_research_state_tool():
     schemas = _schemas()
     assert {
-        "revise_research_judgment",
+        "revise_research_state",
+        "remember",
+        "search_research_memory",
+        "list_research_memory",
+        "inspect_research_item",
         "list_research_judgments",
         "inspect_research_judgment",
     } <= set(schemas)
     assert "update_research_state" not in schemas
+    assert "revise_research_judgment" not in schemas
 
 
 def test_streamed_tool_calls_assemble_and_parse():
@@ -189,9 +194,11 @@ def test_native_actions_and_wire_helpers():
 
 def test_forwardable_set_excludes_local_and_terminal():
     assert FORWARDABLE_ACTIONS == {
-        "searcher", "proposer", "executor", "challenger",
-        "revise_research_judgment", "search_experiments",
+        "searcher", "proposer", "executor", "challenger", "reviewer",
+        "revise_research_state", "remember", "search_experiments",
         "inspect_experiment", "inspect_originating_research_state",
+        "search_research_memory", "list_research_memory",
+        "inspect_research_item",
         "list_research_judgments", "inspect_research_judgment",
         "use_research_skill",
     }

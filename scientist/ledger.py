@@ -9,10 +9,17 @@ Scientist believed, which role engagements it opened, what it spent — is answe
 from here.
 
 Files (all line-JSON, append-only where the scientist writes):
-- ``research_state.jsonl``  — append-only Current Research Judgment
+- ``research_state.jsonl``  — append-only Current Research View
                               revisions (rows seeded by the supervisor
                               generation may carry the older
                               ``working_model`` shape; reads tolerate it)
+- ``research_memory.jsonl`` — append-only research-memory events. Each
+                              item is a persistent identity (R1, R2, …)
+                              the Scientist writes in its own words;
+                              status changes are appended events, so a
+                              qualifier written at creation can never be
+                              compressed away later — the projection
+                              replays events, history is intrinsic
 - ``experiments.jsonl``     — the seeded experiment archive (read-only
                               for the scientist; the harness writes it
                               when it opens the world, from the lineage)
@@ -73,9 +80,14 @@ def _append_row_text(path: Path, text: str) -> None:
 class LocalLedger:
     """L1 judgment, pull-only history, and archive files for one world."""
 
+    # status semantics are the Scientist's alone: "do I keep attending to
+    # this?" — nothing here teaches research, and no transition is illegal.
+    MEMORY_STATUSES = ("active", "parked", "closed")
+
     def __init__(self, root: Path):
         self.root = Path(root)
         self.research_state_path = self.root / "research_state.jsonl"
+        self.research_memory_path = self.root / "research_memory.jsonl"
         self.experiments_path = self.root / "experiments.jsonl"
         self.assistant_calls_path = self.root / "assistant_calls.jsonl"
         self.usage_path = self.root / "usage.jsonl"
@@ -180,6 +192,328 @@ class LocalLedger:
 
     def state_on_file(self) -> bool:
         return bool(_read_rows(self.research_state_path))
+
+    # -- research memory (persistent items, append-only events) --------------
+
+    def _memory_items(self) -> dict[str, dict]:
+        """Project the append-only event log into current items.
+
+        File order is the whole truth: a create seeds the item, later
+        events revise content or move status, and nothing is ever
+        rewritten — so the qualifier written at creation survives every
+        later compression the Scientist's context goes through. Each
+        item carries ``_seq`` (its last event's position) for recency
+        ordering; it never leaves this class."""
+        items: dict[str, dict] = {}
+        for seq, event in enumerate(_read_rows(self.research_memory_path)):
+            kind = str(event.get("event") or "")
+            item_id = str(event.get("item_id") or "")
+            if not item_id:
+                continue
+            if kind == "create":
+                items[item_id] = {
+                    "item_id": item_id,
+                    "content": str(event.get("content") or ""),
+                    "status": str(event.get("status") or "active"),
+                    "evidence_refs": [
+                        str(ref) for ref in event.get("evidence_refs") or ()
+                    ],
+                    "note": str(event.get("note") or ""),
+                    "kind": str(event.get("kind") or ""),
+                    "history": [event],
+                    "_seq": seq,
+                }
+                continue
+            item = items.get(item_id)
+            if item is None:
+                continue  # an event for an unknown id: tolerated, ignored
+            item["history"].append(event)
+            item["_seq"] = seq
+            if kind == "revise":
+                if str(event.get("content") or "").strip():
+                    item["content"] = str(event["content"]).strip()
+                for ref in event.get("evidence_refs") or ():
+                    text = str(ref).strip()
+                    if text and text not in item["evidence_refs"]:
+                        item["evidence_refs"].append(text)
+                for field in ("note", "kind"):
+                    if str(event.get(field) or "").strip():
+                        item[field] = str(event[field]).strip()
+            elif kind in ("park", "close", "reopen"):
+                item["status"] = {
+                    "park": "parked",
+                    "close": "closed",
+                    "reopen": "active",
+                }[kind]
+        return items
+
+    def _next_memory_id(self) -> str:
+        highest = 0
+        for item_id in self._memory_items():
+            digits = item_id[1:] if item_id[:1] == "R" else ""
+            if digits.isdigit():
+                highest = max(highest, int(digits))
+        return f"R{highest + 1}"
+
+    @staticmethod
+    def _memory_row(item: dict) -> dict:
+        return {
+            "item_id": item["item_id"],
+            "status": item["status"],
+            "content": item["content"],
+            "evidence_refs": list(item.get("evidence_refs") or ()),
+        }
+
+    def remember(self, action: dict) -> dict:
+        """One cheap sidebar write to the long-term research memory:
+        record a new item, or update / re-status an existing one.
+
+        The only field-level hard convention lives here: closing an item
+        carries its scope, parking carries its reason — absence is
+        rejected at the door so it is visible, not silent. What the
+        scope or reason SAYS is the Scientist's judgment."""
+        item_id = str(action.get("item_id") or "").strip()
+        status = action.get("status")
+        if status is not None and status not in self.MEMORY_STATUSES:
+            return {
+                "ok": False,
+                "error": "status must be one of active|parked|closed",
+            }
+        content = action.get("content")
+        refs = action.get("evidence_refs", [])
+        if not isinstance(refs, list) or not all(
+            isinstance(ref, str) and ref.strip() for ref in refs
+        ):
+            return {
+                "ok": False,
+                "error": "evidence_refs must be a list of strings",
+            }
+        refs = [ref.strip() for ref in refs]
+        reason = str(action.get("park_reason") or "").strip()
+        scope = str(action.get("close_scope") or "").strip()
+
+        if not item_id:
+            if not isinstance(content, str) or not content.strip():
+                return {
+                    "ok": False,
+                    "error": "content is required when recording a new "
+                             "research-memory item",
+                }
+            if status == "parked" and not reason:
+                return {
+                    "ok": False,
+                    "error": "park_reason is required when parking: why "
+                             "this item is set aside",
+                }
+            if status == "closed" and not scope:
+                return {
+                    "ok": False,
+                    "error": "close_scope is required when closing: "
+                             "exactly what was tested and found dead "
+                             "(which formulation, under what condition) — "
+                             "not just the direction's name",
+                }
+            new_id = self._next_memory_id()
+            event = {
+                "event": "create",
+                "item_id": new_id,
+                "content": content.strip(),
+                "status": status or "active",
+            }
+            if refs:
+                event["evidence_refs"] = refs
+            for field in ("note", "kind"):
+                value = str(action.get(field) or "").strip()
+                if value:
+                    event[field] = value
+            if status == "parked":
+                event["park_reason"] = reason
+            if status == "closed":
+                event["close_scope"] = scope
+            _append_row(self.research_memory_path, event)
+            return {"ok": True, "item_id": new_id, "status": event["status"]}
+
+        item = self._memory_items().get(item_id)
+        if item is None:
+            return {
+                "ok": False,
+                "error": f"research memory item not found: {item_id}",
+            }
+        # validate everything BEFORE writing: a rejected call leaves no
+        # half-applied update behind
+        status_event = None
+        if status is not None and (
+            status != item["status"]
+            or (status == "parked" and reason)
+            or (status == "closed" and scope)
+        ):
+            if status == "parked" and not reason:
+                return {
+                    "ok": False,
+                    "error": "park_reason is required when parking: why "
+                             "this item is set aside",
+                }
+            if status == "closed" and not scope:
+                return {
+                    "ok": False,
+                    "error": "close_scope is required when closing: "
+                             "exactly what was tested and found dead "
+                             "(which formulation, under what condition) — "
+                             "not just the direction's name",
+                }
+            status_event = {
+                "parked": {"event": "park", "item_id": item_id,
+                           "park_reason": reason},
+                "closed": {"event": "close", "item_id": item_id,
+                           "close_scope": scope},
+                "active": {"event": "reopen", "item_id": item_id},
+            }[status]
+        revise: dict = {"event": "revise", "item_id": item_id}
+        if isinstance(content, str) and content.strip():
+            revise["content"] = content.strip()
+        if refs:
+            revise["evidence_refs"] = refs
+        for field in ("note", "kind"):
+            value = str(action.get(field) or "").strip()
+            if value:
+                revise[field] = value
+        if status_event is None and len(revise) == 2:
+            return {
+                "ok": False,
+                "error": "nothing to update: give content, status, "
+                         "evidence_refs, note, or kind",
+            }
+        if len(revise) > 2:
+            _append_row(self.research_memory_path, revise)
+        if status_event is not None:
+            _append_row(self.research_memory_path, status_event)
+        return {
+            "ok": True,
+            "item_id": item_id,
+            "status": status if status is not None else item["status"],
+        }
+
+    def search_research_memory(self, action: dict) -> dict:
+        query = str(action.get("query") or "")
+        status = action.get("status")
+        try:
+            limit = max(1, min(int(action.get("limit") or 10), 50))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "limit must be an integer"}
+        terms = _query_terms(query)
+        items = sorted(
+            self._memory_items().values(),
+            key=lambda item: item["_seq"], reverse=True)
+        matches = [
+            self._memory_row(item) for item in items
+            if (status in (None, "") or item["status"] == status)
+            and (not terms or all(
+                term in " ".join([
+                    item["content"], item.get("note") or "",
+                    item.get("kind") or "",
+                    *(item.get("evidence_refs") or ()),
+                ]).lower()
+                for term in terms))
+        ]
+        return {
+            "ok": True,
+            "results": matches[:limit],
+            "total_matches": len(matches),
+        }
+
+    def list_research_memory(self, action: dict) -> dict:
+        status = action.get("status")
+        try:
+            limit = max(1, min(int(action.get("limit") or 20), 100))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "limit must be an integer"}
+        items = sorted(
+            self._memory_items().values(),
+            key=lambda item: item["_seq"], reverse=True)
+        rows = [
+            self._memory_row(item) for item in items
+            if status in (None, "") or item["status"] == status
+        ]
+        return {"ok": True, "results": rows[:limit], "total": len(rows)}
+
+    def inspect_research_item(self, action: dict) -> dict:
+        item_id = str(action.get("item_id") or "").strip()
+        if not item_id:
+            return {"ok": False, "error": "item_id must be non-empty"}
+        item = self._memory_items().get(item_id)
+        if item is None:
+            return {
+                "ok": False,
+                "error": f"research memory item not found: {item_id}",
+            }
+        return {
+            "ok": True,
+            "kind": "RESEARCH_MEMORY_ITEM",
+            "item_id": item_id,
+            "content": item["content"],
+            "status": item["status"],
+            "tag": item.get("kind") or None,
+            "note": item.get("note") or None,
+            "evidence_refs": list(item.get("evidence_refs") or ()),
+            "history": [dict(event) for event in item["history"]],
+        }
+
+    def revise_research_state(self, action: dict) -> dict:
+        """The milestone act in two parts: rewrite the Current Research
+        View (the same append-only row the judgment channel always
+        wrote), and in the same breath record research-memory updates.
+        The view is all-or-nothing; each memory update lands or fails on
+        its own and is reported individually — a malformed sidebar entry
+        must not cost the view rewrite."""
+        view = action.get("view")
+        reason = action.get("revision_reason")
+        refs = action.get("evidence_refs", [])
+        if not isinstance(view, str) or not view.strip():
+            return {"ok": False, "error": "view must be a non-empty string"}
+        if not isinstance(reason, str) or not reason.strip():
+            return {
+                "ok": False,
+                "error": "revision_reason must be a non-empty string",
+            }
+        if not isinstance(refs, list) or not all(
+            isinstance(ref, str) and ref.strip() for ref in refs
+        ):
+            return {
+                "ok": False,
+                "error": "evidence_refs must be a list of strings",
+            }
+        revision = len(_read_rows(self.research_state_path)) + 1
+        row = {
+            "judgment_id": f"rj-{revision:04d}",
+            "revision": revision,
+            "judgment": view.strip(),
+            "revision_reason": reason.strip(),
+            "evidence_refs": [ref.strip() for ref in refs],
+        }
+        _append_row(self.research_state_path, row)
+        out = {"ok": True, "judgment_id": row["judgment_id"],
+               "revision": revision}
+        updates = action.get("memory_updates")
+        if updates:
+            recorded = []
+            if isinstance(updates, list):
+                for entry in updates:
+                    recorded.append(
+                        self.remember(entry)
+                        if isinstance(entry, dict)
+                        else {
+                            "ok": False,
+                            "error": "memory_updates entries must be "
+                                     "objects",
+                        })
+            else:
+                recorded.append({
+                    "ok": False,
+                    "error": "memory_updates must be a list of "
+                             "remember-shaped objects",
+                })
+            out["memory_updates"] = recorded
+        return out
 
     # -- the seeded experiment archive --------------------------------------
 

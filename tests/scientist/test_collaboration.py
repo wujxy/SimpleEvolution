@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import time
 
 from scientist.collaboration import build_collaboration_prompt
 from scientist.ledger import LocalLedger
@@ -158,7 +157,9 @@ def _runtime(tmp_path) -> InWorldAssistant:
     )
 
 
-def test_all_roles_are_async_and_reports_are_attributed(tmp_path):
+def test_all_roles_run_to_completion_and_reports_are_attributed(tmp_path):
+    """Synchronous seats (round 4): engage blocks through the whole
+    engagement and returns the attributed report itself."""
     runtime = _runtime(tmp_path)
     actions = {
         "searcher": {"brief": "find prior art"},
@@ -168,18 +169,8 @@ def test_all_roles_are_async_and_reports_are_attributed(tmp_path):
         },
         "challenger": {"brief": "attack the current explanation"},
     }
-    started = time.monotonic()
-    receipts = [runtime.engage(role, action) for role, action in actions.items()]
-    assert time.monotonic() - started < 0.8
-    assert all(receipt["status"] == "running" for receipt in receipts)
-    assert [receipt["role"] for receipt in receipts] == list(actions)
-
-    reports: list[dict] = []
-    for _ in range(100):
-        reports.extend(runtime.poll())
-        if len(reports) == 4:
-            break
-        time.sleep(0.05)
+    reports = [runtime.engage(role, action)
+               for role, action in actions.items()]
     assert {report["role"] for report in reports} == set(actions)
     assert all(report["collaborator_id"].startswith(report["role"] + "-")
                for report in reports)
@@ -192,7 +183,6 @@ def test_each_engagement_gets_a_fresh_instance(tmp_path):
     first = runtime.engage("proposer", {"brief": "scan", "scope": "open"})
     second = runtime.engage("proposer", {"brief": "scan again", "scope": "open"})
     assert first["collaborator_id"] != second["collaborator_id"]
-    runtime.shutdown()
 
 
 # --- interview probe fixtures (functional: contexts render as designed) ----

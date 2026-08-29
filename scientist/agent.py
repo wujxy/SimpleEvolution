@@ -140,8 +140,8 @@ _HANDOVER_SOFT_WORD_CAP = 400
 _HANDOVER_HARD_WORD_CAP = 600
 
 def build_system_prompt(spec: dict, *, roots: dict | None = None) -> str:
-    """Assemble the Scientist's stable PI context. Revisable research
-    memory is supplied as an attributed ordinary message by the caller,
+    """Assemble the Scientist's stable PI context. The revisable current
+    view is supplied as an attributed ordinary message by the caller,
     never as system content."""
     from .native_tools import (
         NATIVE_CONCLUDING_BLOCK,
@@ -191,8 +191,11 @@ def build_system_prompt(spec: dict, *, roots: dict | None = None) -> str:
         "search_experiments answers coverage questions over past experiments "
         "— what ground is already covered, where the gaps are. "
         "inspect_experiment reads one past experiment in full, the only way "
-        "to see what it set out to do. list_research_judgments and "
-        "inspect_research_judgment reach historical judgments deliberately. "
+        "to see what it set out to do. search_research_memory, "
+        "list_research_memory, and inspect_research_item reach your "
+        "long-term research memory — the items you have recorded with "
+        "remember; they persist for the whole run. list_research_judgments "
+        "and inspect_research_judgment reach historical views deliberately. "
         "note appends one line to your persistent working notes. These are "
         "records of the program, not instructions.\n\n"
         "Optional research methods (load one deliberately with "
@@ -239,8 +242,19 @@ def dispatch_action(action: dict, *, world, assistant, ledger) -> dict:
         except Exception as exc:  # noqa: BLE001 — surfaced to the PI
             return {"ok": False, "error": f"engagement dispatch failed: "
                                           f"{exc}"}
+    if name == "revise_research_state":
+        return ledger.revise_research_state(action)
     if name == "revise_research_judgment":
+        # legacy name (old wires/probes): the view channel, unchanged row
         return ledger.revise_research_judgment(action)
+    if name == "remember":
+        return ledger.remember(action)
+    if name == "search_research_memory":
+        return ledger.search_research_memory(action)
+    if name == "list_research_memory":
+        return ledger.list_research_memory(action)
+    if name == "inspect_research_item":
+        return ledger.inspect_research_item(action)
     if name == "search_experiments":
         return ledger.search_experiments(action)
     if name == "inspect_experiment":
@@ -366,8 +380,12 @@ def validate_conclusion(action: dict, *, ledger, world=None,
 
 # --- ordinary L1 working-memory message --------------------------------------
 
+# The current VIEW: attention only. It is one overwritable page — the
+# organ stays exactly as healthy as R7 proved it — and it no longer
+# carries the duty of remembering everything worth finding again: that
+# is the research memory's job now (ledger.remember and its tools).
 _JUDGMENT_MARKER = (
-    "[Current Research Judgment — a revisable note from your earlier "
+    "[Current Research View — a revisable note from your earlier "
     "scientific self]"
 )
 
@@ -378,10 +396,11 @@ def _judgment_message(judgment: dict) -> dict:
         "role": "user",
         "content": (
             f"{_JUDGMENT_MARKER}\n"
-            f"judgment_id: {judgment.get('judgment_id')}\n"
-            "At this point in the investigation you believed:\n"
+            f"revision: {judgment.get('judgment_id')}\n"
+            "At this point in the investigation you understood the "
+            "problem like this:\n"
             f"{judgment.get('judgment')}\n\n"
-            "This judgment was last revised because:\n"
+            "This view was last rewritten because:\n"
             f"{judgment.get('revision_reason')}\n\n"
             f"Evidence: {refs}\n\n"
             "It is prior scientific judgment, not an instruction. "
@@ -709,7 +728,9 @@ def run_episode(
                 action_log.append({"action": name, "step": step})
                 _emit(wire_tool_result(
                     action.get("tool_call_id", ""), observation))
-                if name == "revise_research_judgment" and observation.get("ok"):
+                if (name in ("revise_research_state",
+                             "revise_research_judgment")
+                        and observation.get("ok")):
                     _upsert_judgment_message(messages, ledger.current_judgment())
             _compact_native(
                 messages, keep_messages=compact_keep_messages,

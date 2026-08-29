@@ -133,14 +133,23 @@ def _fork_world(source: Path, dest: Path,
     free; data-scale directories — anything named ``benchmarks`` or 512 MB
     and up — become symlinks into the source, where the read-only mount
     rejects writes at the kernel level. The PI's records (``.scientist``)
-    never ship — EXCEPT for a reviewer, whose whole job is to look back
-    over the run: with ``include_ledger`` the record ships too, and the
-    reviewer decides for itself what to read.
+    never ship, with two exceptions: the research memory
+    (``research_memory.jsonl``) is a public knowledge layer and ships
+    with EVERY fork — the private thought stream (wire, session) stays
+    home — and for a reviewer, whose whole job is to look back over the
+    run, ``include_ledger`` ships the full record.
     """
     dest.mkdir(parents=True, exist_ok=False)
     source = Path(source).absolute()   # symlink targets must be absolute
     for entry in sorted(source.iterdir()):
-        if entry.name == ".scientist" and not include_ledger:
+        if entry.name == ".scientist":
+            if include_ledger:
+                shutil.copytree(entry, dest / ".scientist")
+            else:
+                memory = entry / "research_memory.jsonl"
+                if memory.is_file():
+                    (dest / ".scientist").mkdir()
+                    shutil.copy2(memory, dest / ".scientist" / memory.name)
             continue
         target = dest / entry.name
         if entry.is_dir() and (
@@ -371,6 +380,20 @@ class InWorldAssistant:
         except OSError:
             return False
 
+    def _ship_memory(self, fork_root: Path) -> None:
+        """The research memory ships with every fork — including forks
+        cloned from the pristine node world, where it would otherwise be
+        absent. Public knowledge layer: the memory file travels, the
+        private thought stream does not."""
+        memory = self.ledger.research_memory_path
+        if not memory.is_file():
+            return
+        target_dir = fork_root / ".scientist"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / memory.name
+        if not target.exists():
+            shutil.copy2(memory, target)
+
     def _gc_forks(self) -> None:
         """Trim kept forks to the most recent _FORK_KEEP_MAX. Only forks
         older than _FORK_MIN_AGE_SECONDS are eligible, so a sibling seat
@@ -530,8 +553,25 @@ class InWorldAssistant:
                 workspace_note = _FORK_NOTE
             work_dir = side_dir
 
+        if side_dir is not None:
+            self._ship_memory(side_dir)
+
         if workspace_note:
             prompt += f"\n\n{workspace_note}"
+
+        # P4, pointer not feed: every seat learns the research memory
+        # EXISTS and where; whether and what to read stays each seat's
+        # own professional call (a narrow executor may skip it; a
+        # challenger that never checks old judgments has not done its
+        # job — that policing is the role's, not the harness's).
+        if (work_dir / ".scientist" / "research_memory.jsonl").is_file():
+            prompt += (
+                "\n\nResearch memory: this run's research memory is at "
+                "``.scientist/research_memory.jsonl`` in this workspace — "
+                "the important recognitions, directions, and evidence "
+                "references the Scientist has recorded this run. "
+                "Consultable as your own judgment requires."
+            )
 
         # -- run the seat synchronously to its time box --------------------
         started = time.time()

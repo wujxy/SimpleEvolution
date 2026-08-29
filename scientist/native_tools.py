@@ -10,7 +10,7 @@ from. This module owns that collapsed tool surface:
       bash / read_file / write_file          — the world IS the filesystem
   forwarded (executed by the host wrapper over RPC)
       searcher / proposer / executor / challenger
-      research judgment and experiment-memory channels
+      research view, research-memory, and experiment-archive channels
   terminal (forwarded; ends the run)
       deliver_world / abstain
 
@@ -190,17 +190,135 @@ CHALLENGER_TOOL = _fn(
     ["brief"],
 )
 
-REVISE_RESEARCH_JUDGMENT_TOOL = _fn(
-    "revise_research_judgment",
-    "Revise your Current Research Judgment at a real research junction — "
-    "when the working model, decisive evidence, or key uncertainty "
-    "materially changes.",
+REVISE_RESEARCH_STATE_TOOL = _fn(
+    "revise_research_state",
+    "Rewrite your Current Research View — the one page of how you "
+    "understand the problem now — at a real research junction where your "
+    "working understanding, decisive evidence, or key uncertainty "
+    "materially changes. The new view replaces the old one in your "
+    "active context; prior versions remain reachable through the "
+    "research-record channels. memory_updates, when given, records "
+    "research-memory items in the same act (same fields as remember).",
     {
-        "judgment": {"type": "string"},
+        "view": {"type": "string"},
         "revision_reason": {"type": "string"},
         "evidence_refs": {"type": "array", "items": {"type": "string"}},
+        "memory_updates": {
+            "type": "array",
+            "description": "research-memory writes to make alongside the "
+                           "view rewrite (same fields as remember)",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "item_id": {
+                        "type": "string",
+                        "description": "existing item to update; omit to "
+                                       "record a new one",
+                    },
+                    "content": {"type": "string"},
+                    "status": {
+                        "type": "string",
+                        "enum": ["active", "parked", "closed"],
+                    },
+                    "park_reason": {"type": "string"},
+                    "close_scope": {"type": "string"},
+                    "evidence_refs": {
+                        "type": "array", "items": {"type": "string"},
+                    },
+                    "note": {"type": "string"},
+                    "kind": {"type": "string"},
+                },
+            },
+        },
     },
-    ["judgment", "revision_reason"],
+    ["view", "revision_reason"],
+)
+
+REMEMBER_TOOL = _fn(
+    "remember",
+    "Your long-term research memory: one call records a new item — a "
+    "recognition, a direction, a result, an open question — or updates "
+    "and re-statuses an existing one. Items persist for the whole run, "
+    "independently of the view in your context and of compaction, and "
+    "are searchable at any time (search_research_memory / "
+    "list_research_memory / inspect_research_item).",
+    {
+        "item_id": {
+            "type": "string",
+            "description": "existing item to update; omit to record a "
+                           "new one",
+        },
+        "content": {
+            "type": "string",
+            "description": "the item, in your own words, stated so it "
+                           "can be found again",
+        },
+        "status": {
+            "type": "string", "enum": ["active", "parked", "closed"],
+            "description": "whether it deserves continued attention; "
+                           "parking carries park_reason, closing carries "
+                           "close_scope",
+        },
+        "park_reason": {
+            "type": "string",
+            "description": "required with status=parked — why it is set "
+                           "aside",
+        },
+        "close_scope": {
+            "type": "string",
+            "description": "required with status=closed — exactly what "
+                           "was tested and found dead, not just the "
+                           "direction's name",
+        },
+        "evidence_refs": {
+            "type": "array", "items": {"type": "string"},
+            "description": "what backs it: call ids, experiment ids, "
+                           "file paths",
+        },
+        "note": {
+            "type": "string",
+            "description": "optional annotation — relations to other "
+                           "items, caveats",
+        },
+        "kind": {
+            "type": "string",
+            "description": "optional free tag, e.g. finding / question / "
+                           "idea",
+        },
+    },
+    [],
+)
+
+SEARCH_RESEARCH_MEMORY_TOOL = _fn(
+    "search_research_memory",
+    "Free-text search over your long-term research memory (every term "
+    "must appear). Returns matching items with status and evidence "
+    "references.",
+    {
+        "query": {"type": "string"},
+        "status": {"type": "string", "enum": ["active", "parked", "closed"]},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+    },
+    ["query"],
+)
+
+LIST_RESEARCH_MEMORY_TOOL = _fn(
+    "list_research_memory",
+    "Thin index of your research-memory items, most recently touched "
+    "first; inspect one deliberately for its full history.",
+    {
+        "status": {"type": "string", "enum": ["active", "parked", "closed"]},
+        "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+    },
+    [],
+)
+
+INSPECT_RESEARCH_ITEM_TOOL = _fn(
+    "inspect_research_item",
+    "One research-memory item in full — content, status, evidence, and "
+    "its event history (park reasons, close scopes, revisions).",
+    {"item_id": {"type": "string"}},
+    ["item_id"],
 )
 
 LIST_RESEARCH_JUDGMENTS_TOOL = _fn(
@@ -213,7 +331,8 @@ LIST_RESEARCH_JUDGMENTS_TOOL = _fn(
 
 INSPECT_RESEARCH_JUDGMENT_TOOL = _fn(
     "inspect_research_judgment",
-    "Read one historical research judgment in full.",
+    "Read one historical research view (a past research-state revision) "
+    "in full.",
     {"judgment_id": {"type": "string"}},
     ["judgment_id"],
 )
@@ -368,14 +487,15 @@ NOTE_TOOL = _fn(
 
 
 NATIVE_TOOLS: tuple[dict, ...] = (
-    # Order is the priority declaration: colleagues first, the judgment
-    # rhythm second, own eyes after, records and exits last.
+    # Order is the priority declaration: colleagues first, the view and
+    # memory rhythm second, own eyes after, records and exits last.
     SEARCHER_TOOL,
     PROPOSER_TOOL,
     EXECUTOR_TOOL,
     CHALLENGER_TOOL,
     REVIEWER_TOOL,
-    REVISE_RESEARCH_JUDGMENT_TOOL,
+    REVISE_RESEARCH_STATE_TOOL,
+    REMEMBER_TOOL,
     NOTE_TOOL,
     READ_FILE_TOOL,
     BASH_TOOL,
@@ -383,6 +503,9 @@ NATIVE_TOOLS: tuple[dict, ...] = (
     SEARCH_EXPERIMENTS_TOOL,
     INSPECT_EXPERIMENT_TOOL,
     INSPECT_ORIGINATING_TOOL,
+    SEARCH_RESEARCH_MEMORY_TOOL,
+    LIST_RESEARCH_MEMORY_TOOL,
+    INSPECT_RESEARCH_ITEM_TOOL,
     LIST_RESEARCH_JUDGMENTS_TOOL,
     INSPECT_RESEARCH_JUDGMENT_TOOL,
     USE_RESEARCH_SKILL_TOOL,
@@ -400,8 +523,10 @@ NATIVE_LOCAL_ACTIONS = frozenset(
     {"bash", "read_file", "write_file", "note", "wait"})
 NATIVE_FORWARDED_ACTIONS = frozenset({
     "searcher", "proposer", "executor", "challenger", "reviewer",
-    "revise_research_judgment", "search_experiments",
+    "revise_research_state", "remember", "search_experiments",
     "inspect_experiment", "inspect_originating_research_state",
+    "search_research_memory", "list_research_memory",
+    "inspect_research_item",
     "list_research_judgments", "inspect_research_judgment",
     "use_research_skill",
 })
@@ -477,9 +602,9 @@ NATIVE_PROTOCOL_BLOCK = """# Runtime Mechanics
 - A collaborator call returns when the engagement finishes; its result IS
   the attributable report (a killed or crashed engagement returns a
   salvaged partial report, marked as such).
-- revise_research_judgment replaces the judgment note in your active
-  context in place; historical judgments are reachable only through the
-  research-record channels.
+- revise_research_state replaces the current view note in your active
+  context in place; your long-term research memory (remember and its
+  search tools) is persistent and independent of that page.
 - The terminal tools are exactly deliver_world and abstain; one of them
   concludes the run.
 """

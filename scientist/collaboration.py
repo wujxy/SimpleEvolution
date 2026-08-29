@@ -109,10 +109,10 @@ def build_collaboration_prompt(
             "Mandate: look back over this research as a whole. The "
             "briefing you received is the Scientist's own account — a "
             "claim, not a fact. The workspace holds the world AND the "
-            "full run record (``.scientist/``: wire, judgments, "
-            "collaborator reports); verify the account against it, "
-            "judge the work on its merits, and name what you would dig "
-            "into next that the Scientist has not tried."
+            "full run record (``.scientist/``: wire, views, research "
+            "memory, collaborator reports); verify the account against "
+            "it, judge the work on its merits, and name what you would "
+            "dig into next that the Scientist has not tried."
         )
     elif role == "executor":
         done = str(action.get("definition_of_done") or "").strip()

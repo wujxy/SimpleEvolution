@@ -334,7 +334,7 @@ def test_judgment_message_is_replaced_and_survives_compaction():
     _compact_native(messages, keep_messages=4, max_chars=1000)
     blocks = [
         message for message in messages
-        if "Current Research Judgment" in str(message.get("content"))
+        if "Current Research View" in str(message.get("content"))
     ]
     assert len(blocks) == 1
     assert "new" in blocks[0]["content"] and "old" not in blocks[0]["content"]
@@ -364,9 +364,10 @@ def _fake_claude(tmp_path: Path) -> Path:
     return script
 
 
-def test_executor_async_receipt_then_report(tmp_path: Path):
-    import time as _time
-
+def test_executor_engagement_returns_report_when_done(tmp_path: Path):
+    """Synchronous seats (round 4): engage blocks to completion and the
+    report IS the return value — attributed, digested, and on the
+    ledger, with nothing left running after it returns."""
     from scientist.assistant_tools import AssistantConfig, InWorldAssistant
 
     world = _world(tmp_path)
@@ -377,122 +378,65 @@ def test_executor_async_receipt_then_report(tmp_path: Path):
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
-    receipt = assistant.engage("executor", {
+    report = assistant.engage("executor", {
         "brief": "instrument the kernel",
         "definition_of_done": "report changes and measurements",
     })
-    assert receipt["ok"] and receipt["status"] == "running"
-
-    reports: list[dict] = []
-    for _ in range(200):
-        reports = assistant.poll()
-        if reports:
-            break
-        _time.sleep(0.05)
-    assert reports, "dispatched job never finished"
-    report = reports[0]
-    assert report["ok"]
-    assert report["collaborator_id"] == receipt["collaborator_id"]
+    assert report["ok"] and report["status"] == "done"
+    assert report["collaborator_id"].startswith("executor-t-")
     assert report["diff_summary"] == "changed a.c"
     assert report["metrics"] == {"speed": 2}
     digest_path = (world.work / ".scientist" / "assistant"
-                   / receipt["collaborator_id"] / "digest.json")
+                   / report["collaborator_id"] / "digest.json")
     assert digest_path.exists()
     rows = [json.loads(line)
             for line in ledger.assistant_calls_path.read_text().splitlines()]
-    assert any(r.get("status") == "dispatched" for r in rows)
     assert any(r.get("question_digest", "").endswith("ran benches")
                for r in rows)
-    # nothing left running
-    assert assistant.shutdown() == 0
+    # nothing left running: the pid receipt is reaped
+    assert not list((world.work / ".scientist" / "assistant")
+                    .rglob("proc.pid"))
 
 
-def test_engagement_receipt_lists_outstanding(tmp_path: Path):
-    import time as _time
-
+def test_engagements_run_sequentially_and_leave_nothing_running(
+        tmp_path: Path):
+    """The sync-era orphan invariant: once engage returns, the seat is
+    finished — no background job survives the call, and the next
+    engagement gets a fresh, distinct identity."""
     from scientist.assistant_tools import AssistantConfig, InWorldAssistant
 
     world = _world(tmp_path)
     ledger = LocalLedger(world.work / ".scientist")
-    quick = tmp_path / "quick.sh"
-    quick.write_text("#!/bin/sh\ncat >/dev/null\nsleep 5\n", encoding="utf-8")
-    quick.chmod(0o755)
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(quick),
-                               work_default_minutes=10),
+        config=AssistantConfig(command=str(_fake_claude(tmp_path)),
+                               work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
     first = assistant.engage("executor", {
         "brief": "a", "definition_of_done": "done a",
     })
-    assert first["outstanding_jobs"] == [first["collaborator_id"]]
-    _time.sleep(0.1)
     second = assistant.engage("searcher", {"brief": "b"})
-    assert second["outstanding_jobs"] == [first["collaborator_id"],
-                                          second["collaborator_id"]]
-    assistant.shutdown()
+    assert first["ok"] and second["ok"]
+    assert first["collaborator_id"] != second["collaborator_id"]
+    assert not list((world.work / ".scientist" / "assistant")
+                    .rglob("proc.pid"))
 
 
-def test_wait_blocks_until_report(tmp_path: Path):
-    import time as _time
-
-    from scientist.agent import wait_for_reports
-    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
-
-    world = _world(tmp_path)
-    ledger = LocalLedger(world.work / ".scientist")
-    # finishes after ~0.6s
-    script = tmp_path / "soon.sh"
-    script.write_text(
-        "#!/bin/sh\ncat >/dev/null\nsleep 0.6\ncat <<'JSONLINE'\n"
-        + json.dumps({"type": "result", "result": "ok", "usage": {}})
-        + "\nJSONLINE\n", encoding="utf-8")
-    script.chmod(0o755)
-    assistant = InWorldAssistant(
-        world=world,
-        config=AssistantConfig(command=str(script),
-                               work_default_minutes=1),
-        ledger=ledger, episode_id="t",
-    )
-    assistant.engage("executor", {
-        "brief": "quick job", "definition_of_done": "report completion",
-    })
-    started = _time.time()
-    observation = wait_for_reports(assistant, timeout_seconds=30.0)
-    assert observation["ok"] and observation.get("landed") == 1
-    assert _time.time() - started >= 0.5
-    # the single intake point finalizes and returns the report
-    reports = assistant.poll()
-    assert reports and reports[0]["ok"]
-    # nothing outstanding anymore: a further wait times out honestly
-    observation = wait_for_reports(assistant, timeout_seconds=0.2)
-    assert observation.get("timeout") is True
-    assert "still running" in observation["note"] or observation["note"]
-
-
-def test_wait_report_never_orphans_tool_result(tmp_path: Path):
-    """demo-2's death: a report delivered DURING a wait lands as a user
-    message between the assistant tool_calls message and its tool
-    result — a wire-invariant 400. Drive the real loop: work, wait
-    (report lands mid-wait), then one more model call whose incoming
-    messages must satisfy the invariant."""
+def test_seat_report_is_its_own_tool_result(tmp_path: Path):
+    """The sync-era wire invariant (demo-2's death was a report landing
+    as a user message between tool_calls and its result): a seat's
+    report arrives as the tool result of its OWN call, immediately
+    adjacent, and the next model call sees exactly that."""
     from scientist.agent import run_episode
     from scientist.assistant_tools import AssistantConfig, InWorldAssistant
     from scientist.model import ModelReply, ToolCall
 
     world = _world(tmp_path)
     ledger = LocalLedger(world.work / ".scientist")
-    # finishes ~0.5s after dispatch — during the wait turn
-    script = tmp_path / "soon.sh"
-    script.write_text(
-        "#!/bin/sh\ncat >/dev/null\nsleep 0.5\ncat <<'JSONLINE'\n"
-        + json.dumps({"type": "result", "result": "ok", "usage": {}})
-        + "\nJSONLINE\n", encoding="utf-8")
-    script.chmod(0o755)
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(script),
+        config=AssistantConfig(command=str(_fake_claude(tmp_path)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -506,22 +450,13 @@ def test_wait_report_never_orphans_tool_result(tmp_path: Path):
             self.seen.append([dict(m) for m in messages])
             self.turn += 1
             if self.turn == 1:
-                    return ModelReply(text="dispatch", tool_calls=(
-                        ToolCall(id="c1", name="executor", arguments={
-                            "brief": "instrument",
-                            "definition_of_done": "report the result",
-                        }),))
-            if self.turn == 2:
-                return ModelReply(text="wait", tool_calls=(
-                    ToolCall(id="c2", name="wait",
-                             arguments={"timeout_seconds": 30}),))
-            if self.turn == 3:
-                    return ModelReply(text="state", tool_calls=(
-                        ToolCall(id="c3", name="revise_research_judgment",
-                                 arguments={"judgment": "m",
-                                            "revision_reason": "probe"}),))
+                return ModelReply(text="dispatch", tool_calls=(
+                    ToolCall(id="c1", name="executor", arguments={
+                        "brief": "instrument",
+                        "definition_of_done": "report the result",
+                    }),))
             return ModelReply(text="stop", tool_calls=(
-                ToolCall(id="c4", name="abstain",
+                ToolCall(id="c2", name="abstain",
                          arguments={"reason": "probe",
                                     "axes_checked": ["a"]}),))
 
@@ -530,25 +465,21 @@ def test_wait_report_never_orphans_tool_result(tmp_path: Path):
         model=model, system_prompt="sys",
         messages=[{"role": "user", "content": "go"}],
         world=world, assistant=assistant, ledger=ledger,
-        steps_budget=6, wall_seconds=60.0,
+        steps_budget=4, wall_seconds=60.0,
     )
     assert result["outcome"] == "abstain"
 
-    # The messages seen by the call AFTER the wait turn: find the wait
-    # assistant message and assert its tool result follows immediately.
-    after_wait = model.seen[2]
-    idx = next(i for i, m in enumerate(after_wait)
+    after_dispatch = model.seen[1]
+    idx = next(i for i, m in enumerate(after_dispatch)
                if m.get("role") == "assistant" and m.get("tool_calls")
-               and m["tool_calls"][0]["function"]["name"] == "wait")
-    assert after_wait[idx + 1]["role"] == "tool", (
-        "user message sits between the wait tool_calls and its result "
-        "— the demo-2 wire bug")
-    delivered = [
-        m for m in after_wait[idx + 2:]
-        if m.get("role") == "user" and "Research collaborator report" in str(
-            m.get("content"))
-    ]
-    assert delivered, "the report never landed as its own message"
+               and m["tool_calls"][0]["function"]["name"] == "executor")
+    result_msg = after_dispatch[idx + 1]
+    assert result_msg["role"] == "tool", (
+        "the seat report did not arrive as the executor call's own tool "
+        "result")
+    assert result_msg["tool_call_id"] == "c1"
+    assert "Research collaborator report" in result_msg["content"]
+    assert "ran benches" in result_msg["content"]
 
 
 def test_wire_log_keeps_forwarded_calls_with_narration(
@@ -626,33 +557,50 @@ def test_wire_log_keeps_forwarded_calls_with_narration(
         "the wire lost the time box the PI chose")
 
 
-def test_engagement_shutdown_abandoned(tmp_path: Path):
-    import time as _time
+def test_reconcile_harvests_orphaned_seat_on_startup(tmp_path: Path):
+    """The one window sync cannot close: a SIGKILL of the scientist
+    itself leaves a seat running with no digest. On the next startup
+    _reconcile kills it (pid guarded by 'claude' in the cmdline) and
+    harvests a crash-salvaged digest — evidence must survive us."""
+    import subprocess
 
     from scientist.assistant_tools import AssistantConfig, InWorldAssistant
 
     world = _world(tmp_path)
     ledger = LocalLedger(world.work / ".scientist")
-    sleeper = tmp_path / "sleep_claude.sh"
-    sleeper.write_text("#!/bin/sh\ncat >/dev/null\nsleep 30\n",
-                       encoding="utf-8")
+    orphan_dir = world.work / ".scientist" / "assistant" / "executor-t-007"
+    orphan_dir.mkdir(parents=True)
+    sleeper = tmp_path / "fake_claude_orphan.sh"
+    sleeper.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
     sleeper.chmod(0o755)
-    assistant = InWorldAssistant(
+    proc = subprocess.Popen(
+        [str(sleeper)], start_new_session=True)
+    (orphan_dir / "proc.pid").write_text(str(proc.pid), encoding="utf-8")
+    (orphan_dir / "raw.txt").write_text(
+        '{"type": "assistant", "message": {"content": '
+        '[{"type": "text", "text": "partial diagnosis in hand"}]}}\n',
+        encoding="utf-8")
+
+    InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(sleeper),
-                               work_default_minutes=10),
+        config=AssistantConfig(command=str(sleeper)),
         ledger=ledger, episode_id="t",
     )
-    receipt = assistant.engage("executor", {
-        "brief": "slow job", "definition_of_done": "report completion",
-    })
-    assert receipt["status"] == "running"
-    _time.sleep(0.2)
-    assert assistant.poll() == []
-    assert assistant.shutdown() == 1
-    rows = [json.loads(line)
-            for line in ledger.assistant_calls_path.read_text().splitlines()]
-    assert any(r.get("status") == "abandoned" for r in rows)
+    proc.wait(timeout=10)   # killed by the reconcile pass
+    digest = json.loads((orphan_dir / "digest.json").read_text())
+    assert digest["status"] == "crash-salvaged"
+    assert "partial diagnosis in hand" in digest["self_report_digest"]
+    # the counter resumed past the orphan: a new call cannot truncate
+    # its still-growing raw.txt
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_fake_claude(tmp_path)),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+    report = assistant.engage("executor", {
+        "brief": "b", "definition_of_done": "d"})
+    assert int(report["collaborator_id"].rsplit("-", 1)[1]) > 7
 
 
 # --- compaction (native wire: never orphan a tool result) --------------------
