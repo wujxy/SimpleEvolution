@@ -756,3 +756,17 @@ PI 一个盒（480min 硬顶未动），salvage+墙钟看门狗兜底。
 runtime/concluding block 的角色列举同步；deliver_world 工具描述披露门规
 （程序透明）。六组自测过：prompt 反喂饭断言、fork 双模式、门检四路+
 熔断、弹药注无指令动词、_last_src_write 空世界 0.0、注册面。
+
+**第七轮补记（同日）**：(1) 措辞修正——reviewer 非出口专用，三个自然
+时机（大战役/里程碑后、疑向时、收笔前）；机制本就无时点限制，修的是
+描述与 runtime block 的框定。(2) **live 探针终验**（runs/probe-reviewer-
+live，真实 engage() 路径 + 终局 run 完整世界含 37M 记录 + PI 口径汇报，
+1132s done）：reviewer 重跑 solver 逐位复现三指标、亲测双 gate、逐条对
+digest 核 dead_ends；判词命中要害——"'energy is at its CHARGE-based
+floor'(真) 被硬化成 'energy is done'(假)"；且自带新实验产出：occupancy
+独立能量观测量（GLS 融合 2.08→1.92% truth-free 成立）、timing 6× 余量
+（0.97ns truth-free）、用噪声计算杀死 handover 留的 per-PMT 偏移杠杆
+（8.5ns 误差>>1ns 偏移，不可标定）。回心转意机制体外验证成立：此报告
+若落在 step 50 而非死后，6.9 天预算足以吃掉全部三条。七字段 fence 两
+字段未填（uncertainty/follow_up null）——单样本，暂不改文案，成惯例再
+点名。
