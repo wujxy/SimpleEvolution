@@ -725,3 +725,34 @@ PI 派单时按默认给盒，而默认值本身成了瓶颈。真实席位用�
 不贴中位数。searcher 30→60min、executor 60→120min、proposer/challenger
 90→180min；schema maximum 与 spec 钉值同步。代价不变：挂死席位最长占
 PI 一个盒（480min 硬顶未动），salvage+墙钟看门狗兜底。
+
+### 修正案第七轮（2026-08-29）：reviewer 席位 + 弹药可见性 + 听证门
+
+生产证据（jrb-full-std-elec-sync-scientist）：PI 在杠杆名单非空、预算用
+4% 时收笔（62/3000 步、3h/7d）；历史证据 seat-v2 cut_off→delivered
++36.8%——自判"完成"系统性偏早。三件套全部环境侧，零内容判断，遵守两
+条新原则（harness 只提供环境不插手内部决断、可强制知情程序；agent 不
+是婴儿、信息自取不喂饭）：
+
+1. **reviewer 席位**（第五角色，建议权）：PI 亲笔汇报入门（自由形式，
+   无四问 schema），全工具自由翻找；fork **包含** `.scientist` 运行记录
+   （`_fork_world(include_ledger=True)`，唯一带账本出海的席位——reviewer
+   的职责就是看历史，读多少它自己定）；prompt 零注入（无 judgment、无
+   证据索引——汇报是主张、工作区和记录是事实）；认知盒默认 180min。
+2. **弹药可见性**：`_budget_note` 剩余优先（"[budget] 91% of the run
+   remains: step 250/3000, 152.9h of the 168.0h wall left"），step 1 与
+   每 50 步 `_nudge` 一次。**零指令动词**——仓库先例（_KILL_KNOCK 注
+   释）：义务式/倒计时文本曾让 stopping 更糟被删；本注只陈述剩余，不
+   说该干什么。
+3. **听证门**（listen-before-deliver，Write 前必须 Read 的知情程序）：
+   `validate_conclusion` 扩展——deliver 须有 reviewer engagement 在
+   `src/` 最后改动之后 finalize（`reviewer_heard_after(_last_src_write)`，
+   纯时间戳；salvaged 也算听过）；拒绝消息人话+弹药快照；**三振熔断**
+   （同 episode 三次拒绝后 `listen_enforce=False` 放行，action_log 记
+   deliver_listen_overridden）——是回心转意的机会，不是硬闸门。abstain
+   不设此检；无 world/assistant 传入时门 inert（host 自测兼容）。
+
+接线：`NATIVE_TOOLS`/`NATIVE_FORWARDED_ACTIONS` 增 reviewer；cold start、
+runtime/concluding block 的角色列举同步；deliver_world 工具描述披露门规
+（程序透明）。六组自测过：prompt 反喂饭断言、fork 双模式、门检四路+
+熔断、弹药注无指令动词、_last_src_write 空世界 0.0、注册面。

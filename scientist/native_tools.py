@@ -120,7 +120,7 @@ SEARCHER_TOOL = _fn(
         "timeout_minutes": {
             "type": "integer", "minimum": 1, "maximum": 480,
             "description": "engagement time box in minutes; when omitted the "
-                           "role default applies (searcher 60, executor 120, proposer/challenger 180)",
+                           "role default applies (searcher 60, executor 120, proposer/challenger/reviewer 180)",
         },
     },
     ["brief"],
@@ -144,7 +144,7 @@ PROPOSER_TOOL = _fn(
         "timeout_minutes": {
             "type": "integer", "minimum": 1, "maximum": 480,
             "description": "engagement time box in minutes; when omitted the "
-                           "role default applies (searcher 60, executor 120, proposer/challenger 180)",
+                           "role default applies (searcher 60, executor 120, proposer/challenger/reviewer 180)",
         },
     },
     ["brief", "scope"],
@@ -184,7 +184,7 @@ CHALLENGER_TOOL = _fn(
         "timeout_minutes": {
             "type": "integer", "minimum": 1, "maximum": 480,
             "description": "engagement time box in minutes; when omitted the "
-                           "role default applies (searcher 60, executor 120, proposer/challenger 180)",
+                           "role default applies (searcher 60, executor 120, proposer/challenger/reviewer 180)",
         },
     },
     ["brief"],
@@ -275,7 +275,11 @@ DELIVER_WORLD_TOOL = _fn(
     "constraints. Self-verify against the gates before delivering — a "
     "world that fails your own verification is a wasted delivery. The "
     "handover is a compact account (≤400 words) of what was established, "
-    "the decisive evidence, and the important unresolved questions.",
+    "the decisive evidence, and the important unresolved questions. A "
+    "deliver is accepted only after a Reviewer has looked back at the "
+    "state you are delivering — a listening requirement, not an "
+    "approval: after hearing the report, the decision is entirely "
+    "yours.",
     {
         "handover": {
             "type": "object",
@@ -302,6 +306,35 @@ DELIVER_WORLD_TOOL = _fn(
     },
     ["handover"],
 )
+
+REVIEWER_TOOL = _fn(
+    "reviewer",
+    "Report your work to a fresh Reviewer for an advisory look-back. "
+    "The Reviewer digs freely through the workspace and the full run "
+    "record (.scientist/ — wire, judgments, collaborator reports) and "
+    "returns its own read: does the work hold up, and what is still "
+    "worth digging into. Advisory only — the judgment stays yours. "
+    "Natural before deliver_world, which is accepted only after a "
+    "Reviewer has looked back at the state being delivered.",
+    {
+        "brief": {
+            "type": "string",
+            "description": "your report of the work: what you set out "
+                           "to do, what you established, where you stand",
+        },
+        "experiment_ids": {
+            "type": "array", "items": {"type": "string"},
+        },
+        "timeout_minutes": {
+            "type": "integer", "minimum": 1, "maximum": 480,
+            "description": "engagement time box in minutes; when omitted "
+                           "the role default applies (searcher 60, "
+                           "executor 120, proposer/challenger/reviewer 180)",
+        },
+    },
+    ["brief"],
+)
+
 
 ABSTAIN_TOOL = _fn(
     "abstain",
@@ -338,6 +371,7 @@ NATIVE_TOOLS: tuple[dict, ...] = (
     PROPOSER_TOOL,
     EXECUTOR_TOOL,
     CHALLENGER_TOOL,
+    REVIEWER_TOOL,
     REVISE_RESEARCH_JUDGMENT_TOOL,
     NOTE_TOOL,
     READ_FILE_TOOL,
@@ -362,7 +396,7 @@ NATIVE_TOOL_NAMES = frozenset(t["function"]["name"] for t in NATIVE_TOOLS)
 NATIVE_LOCAL_ACTIONS = frozenset(
     {"bash", "read_file", "write_file", "note", "wait"})
 NATIVE_FORWARDED_ACTIONS = frozenset({
-    "searcher", "proposer", "executor", "challenger",
+    "searcher", "proposer", "executor", "challenger", "reviewer",
     "revise_research_judgment", "search_experiments",
     "inspect_experiment", "inspect_originating_research_state",
     "list_research_judgments", "inspect_research_judgment",
@@ -385,7 +419,7 @@ FORWARDABLE_ACTIONS = NATIVE_FORWARDED_ACTIONS
 NATIVE_RUNTIME_BLOCK = """# Working with the Team
 
 The collaborator functions attached to this conversation are how you open
-work with Searcher, Proposer, Executor, and Challenger. The functions are a
+work with Searcher, Proposer, Executor, Challenger, and Reviewer. The functions are a
 communication mechanism; the collaborators are members of your research
 team.
 
@@ -414,7 +448,10 @@ Use deliver_world when you judge that the current world contains a
 defensible research result under the stated objective and constraints.
 Self-verify against the gates before delivering; the handover briefly
 explains what was established, the decisive evidence, and the important
-questions that remain.
+questions that remain. Before you close, report your work to a
+Reviewer and hear the read — the door accepts a deliver only after
+that look-back, and it is advice, not a veto: the decision remains
+yours.
 
 Use abstain when you judge that the available evidence does not support a
 defensible research result and that no remaining inquiry merits further

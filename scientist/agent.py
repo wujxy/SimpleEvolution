@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from .native_tools import (
@@ -40,6 +41,52 @@ _IDLE_NUDGE = (
     "tool — restate your intent as the appropriate tool call, or conclude "
     "with a terminal tool (deliver_world / abstain)."
 )
+
+# Remaining-ammo visibility: a sparse, purely informational budget note.
+# Prior art (see the _KILL_KNOCK note above) is that obligation/countdown
+# texts made stopping WORSE — so this line carries no directive verb and
+# no deadline pressure: it states what is left, full stop, and the call
+# stays the scientist's.
+_BUDGET_NOTE_EVERY = 50
+
+# The listening door: three refusals in one episode and the deliver
+# passes on the PI's own authority — the requirement is a chance to
+# reconsider, never a hard block.
+_LISTEN_REFUSAL_MAX = 3
+_LISTEN_REJECTION = (
+    "No Reviewer has looked back at the state you are delivering "
+    "(no completed reviewer engagement after your last change to src/). "
+    "Open a reviewer engagement — report your work and hear the read — "
+    "then deliver; the decision remains yours. "
+)
+
+
+def _budget_note(step: int, steps_budget: int,
+                 remaining_wall: float, wall_seconds: float) -> str:
+    """What is left, said plainly — remaining first, never elapsed."""
+    if wall_seconds <= 0:
+        return ""
+    left = max(remaining_wall, 0.0)
+    pct = int(round(100.0 * left / wall_seconds))
+    return (f"[budget] {pct}% of the run remains: step {step}/"
+            f"{steps_budget}, {left / 3600.0:.1f}h of the "
+            f"{wall_seconds / 3600.0:.1f}h wall left.")
+
+
+def _last_src_write(world) -> float:
+    """When the deliverable tree was last touched — the moment a
+    look-back must postdate to have seen the delivered state."""
+    root = Path(world.work) / "src"
+    latest = 0.0
+    if root.is_dir():
+        for path in root.rglob("*"):
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if mtime > latest:
+                latest = mtime
+    return latest
 
 # --- ported standing texts (scientist.py, verbatim) -------------------------
 
@@ -80,7 +127,7 @@ _COLD_START = (
     "relevant to that judgment. Your own inspection and small "
     "discriminating probes serve your judgment; substantial "
     "investigations, implementations, and measurement campaigns are work "
-    "for Searcher, Proposer, Executor, or Challenger, and you may open "
+    "for Searcher, Proposer, Executor, Challenger, or Reviewer, and you may open "
     "them before any stable judgment exists. Preserve uncertainty when "
     "the evidence is insufficient."
 )
@@ -267,17 +314,28 @@ def _validate_handover(action: dict) -> tuple[dict | None, str]:
     return out, ""
 
 
-def validate_conclusion(action: dict, *, ledger) -> tuple[dict | None, str]:
+def validate_conclusion(action: dict, *, ledger, world=None,
+                        assistant=None, listen_enforce: bool = True,
+                        budget_note: str = "") -> tuple[dict | None, str]:
     """The door check for a terminal action: ``(conclusion, rejection)``.
 
     Exactly one of the two is non-empty. Deliver and abstain both
     require the research state on file — an exit with nothing on file is
-    a protocol violation."""
+    a protocol violation. A deliver additionally passes the listening
+    door: some Reviewer engagement must have finalized after the last
+    change to src/. That check is procedural — timestamps, never
+    content: it does not judge whether the work is done, only whether
+    it was heard."""
     name = action["action"]
     if name == "deliver_world":
         conclusion, rejection = _validate_handover(action)
         if conclusion is None:
             return None, rejection
+        if (listen_enforce and world is not None
+                and assistant is not None):
+            if not assistant.reviewer_heard_after(
+                    _last_src_write(world)):
+                return None, _LISTEN_REJECTION + budget_note
     elif name == "abstain":
         reason = action.get("reason")
         if not isinstance(reason, str) or not reason.strip():
@@ -533,6 +591,7 @@ def run_episode(
     action_log: list[dict] = []
     knocked = False
     idle_turns = 0
+    listen_refusals = 0
     outcome = "cut_off"
     conclusion: dict | None = None
     _upsert_judgment_message(messages, ledger.current_judgment())
@@ -571,6 +630,11 @@ def run_episode(
                      "concluding cut_off")
                 break
 
+            if step == 1 or step % _BUDGET_NOTE_EVERY == 0:
+                _nudge(_budget_note(
+                    step, steps_budget,
+                    deadline - time.monotonic(), wall_seconds))
+
             _log(f"step {step}/{steps_budget}: thinking")
             reply = model.complete(
                 system=system_prompt, messages=messages,
@@ -600,14 +664,32 @@ def run_episode(
                 action_log.append({"action": action["action"], "step": step})
                 _emit(wire_assistant_message(reply, actions))
                 conclusion, rejection = validate_conclusion(
-                    action, ledger=ledger)
+                    action, ledger=ledger, world=world, assistant=assistant,
+                    listen_enforce=listen_refusals < _LISTEN_REFUSAL_MAX,
+                    budget_note=_budget_note(
+                        step, steps_budget,
+                        deadline - time.monotonic(), wall_seconds))
                 if conclusion is not None:
+                    if (listen_refusals >= _LISTEN_REFUSAL_MAX
+                            and name == "deliver_world"):
+                        # Third refusal overridden: the listening door is
+                        # a chance to reconsider, never a hard block.
+                        action_log.append({
+                            "action": "deliver_listen_overridden",
+                            "step": step,
+                            "note": "listening refused three times — "
+                                    "delivered on the PI's own authority",
+                        })
                     outcome = conclusion["kind"]
                     return _result(
                         outcome, conclusion, step, usages, action_log,
                     )
                 # Rejected at the door: the rejection is the observation;
-                # the research continues.
+                # the research continues. Listening refusals accumulate
+                # across the episode — a handover fix between two refusals
+                # does not reset the count.
+                if rejection.startswith(_LISTEN_REJECTION):
+                    listen_refusals += 1
                 outcome = "cut_off"
                 conclusion = None
                 observation = {"ok": False, "error": rejection}

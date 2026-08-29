@@ -125,19 +125,22 @@ def _tree_bytes(path: Path) -> int:
     return total
 
 
-def _fork_world(source: Path, dest: Path) -> None:
+def _fork_world(source: Path, dest: Path,
+                include_ledger: bool = False) -> None:
     """Disposable copy of a world for a cognitive seat.
 
     Small trees (src/, scripts/, .git, docs) are copied so prototyping is
     free; data-scale directories — anything named ``benchmarks`` or 512 MB
     and up — become symlinks into the source, where the read-only mount
     rejects writes at the kernel level. The PI's records (``.scientist``)
-    never ship: a forked collaborator gets the world, not the ledger.
+    never ship — EXCEPT for a reviewer, whose whole job is to look back
+    over the run: with ``include_ledger`` the record ships too, and the
+    reviewer decides for itself what to read.
     """
     dest.mkdir(parents=True, exist_ok=False)
     source = Path(source).absolute()   # symlink targets must be absolute
     for entry in sorted(source.iterdir()):
-        if entry.name == ".scientist":
+        if entry.name == ".scientist" and not include_ledger:
             continue
         target = dest / entry.name
         if entry.is_dir() and (
@@ -145,8 +148,8 @@ def _fork_world(source: Path, dest: Path) -> None:
                 or _tree_bytes(entry) >= _FORK_SYMLINK_MIN_BYTES):
             target.symlink_to(entry, target_is_directory=True)
         elif entry.is_dir():
-            shutil.copytree(entry, target,
-                            ignore=shutil.ignore_patterns(".scientist"))
+            shutil.copytree(entry, target, ignore=None if include_ledger
+                            else shutil.ignore_patterns(".scientist"))
         else:
             shutil.copy2(entry, target)
 
@@ -354,10 +357,24 @@ class InWorldAssistant:
             payload += ["--effort", self.config.effort]
         return payload
 
+    def reviewer_heard_after(self, moment: float) -> bool:
+        """True if some Reviewer engagement finalized after ``moment``.
+
+        The listen-before-deliver door check: a look-back counts when it
+        finished after the last change to the world it is judging. A
+        salvaged report counts too — a partial reading was still heard.
+        """
+        root = self.world.work / ".scientist" / "assistant"
+        try:
+            digests = root.glob("reviewer-*/digest.json")
+            return any(p.stat().st_mtime > moment for p in digests)
+        except OSError:
+            return False
+
     def _gc_forks(self) -> None:
         """Trim kept forks to the most recent _FORK_KEEP_MAX. Only forks
         older than _FORK_MIN_AGE_SECONDS are eligible, so a sibling seat
-        running in a batch (box capped at 180 min) is never touched."""
+        running in a batch (box capped at 480 min) is never touched."""
         root = self.world.scratch
         now = time.time()
         try:
@@ -484,20 +501,34 @@ class InWorldAssistant:
                 _fork_world(Path(source), side_dir)
                 work_dir = side_dir
         else:
-            # proposer / challenger: full tools inside a disposable fork
-            # of the CURRENT world (not the pristine template — a
-            # proposal must see the incumbent solver). The briefs demand
-            # evidence; the fork guarantees the live world stays
-            # untouched; the digest is the only channel home. Longer box:
-            # evidence-backed proposing is the expensive part of a run.
+            # proposer / challenger / reviewer: full tools inside a
+            # disposable fork of the CURRENT world (not the pristine
+            # template — a proposal must see the incumbent solver). The
+            # briefs demand evidence; the fork guarantees the live world
+            # stays untouched; the digest is the only channel home.
+            # Longer box: evidence-backed proposing is the expensive part
+            # of a run.
             workspace = "fork"
             timeout = _box_from_action(
                 action, self.config.cognitive_timeout_seconds,
                 self.config.seat_timeout_max_minutes)
             side_dir = self.world.scratch / f"fresh-{collaborator_id}"
-            _fork_world(work_dir, side_dir)
+            if role == "reviewer":
+                # The one seat whose job is the run's history: the fork
+                # ships the record. What to read stays its own call.
+                _fork_world(work_dir, side_dir, include_ledger=True)
+                workspace_note = (
+                    "Workspace: a disposable copy of the current world "
+                    "INCLUDING the run record under .scientist/ (the "
+                    "wire, your predecessors' judgments, collaborator "
+                    "reports). Digs are free; your ONLY deliverable is "
+                    "the report you return — nothing you write here "
+                    "reaches the Scientist's live world."
+                )
+            else:
+                _fork_world(work_dir, side_dir)
+                workspace_note = _FORK_NOTE
             work_dir = side_dir
-            workspace_note = _FORK_NOTE
 
         if workspace_note:
             prompt += f"\n\n{workspace_note}"

@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 
 
-ROLE_NAMES = frozenset({"searcher", "proposer", "executor", "challenger"})
+ROLE_NAMES = frozenset({
+    "searcher", "proposer", "executor", "challenger", "reviewer"})
 
 # An open-scope proposer receives the neutral evidence index inline. A
 # long run accumulates hundreds of experiments; unbounded, that index
@@ -99,6 +100,19 @@ def build_collaboration_prompt(
             + _json(current_judgment or {
                 "status": "no stable current judgment",
             })
+        )
+    elif role == "reviewer":
+        # No judgment, no evidence index, no curated context — the
+        # briefing is the claim, the workspace and the run record are
+        # the facts, and this colleague digs for itself.
+        sections.append(
+            "Mandate: look back over this research as a whole. The "
+            "briefing you received is the Scientist's own account — a "
+            "claim, not a fact. The workspace holds the world AND the "
+            "full run record (``.scientist/``: wire, judgments, "
+            "collaborator reports); verify the account against it, "
+            "judge the work on its merits, and name what you would dig "
+            "into next that the Scientist has not tried."
         )
     elif role == "executor":
         done = str(action.get("definition_of_done") or "").strip()
