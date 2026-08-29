@@ -192,9 +192,9 @@ class AssistantConfig:
     node_world: Path | None = None      # pristine copy (harness-provided)
     env: dict | None = None             # merged over os.environ
     distill_word_cap: int = 1200
-    consult_timeout_seconds: int = 1800
-    cognitive_timeout_seconds: int = 5400
-    work_default_minutes: int = 60
+    consult_timeout_seconds: int = 3600
+    cognitive_timeout_seconds: int = 10800
+    work_default_minutes: int = 120
     seat_timeout_max_minutes: int = 480
     goal: str = ""
     gate_block: str = ""
@@ -217,13 +217,13 @@ class AssistantConfig:
                     "seat_timeout_max_minutes", 480)),
             consult_timeout_seconds=int(
                 (spec.get("budget") or {}).get(
-                    "consult_timeout_seconds", 1800)),
+                    "consult_timeout_seconds", 3600)),
             cognitive_timeout_seconds=int(
                 (spec.get("budget") or {}).get(
-                    "cognitive_timeout_seconds", 5400)),
+                    "cognitive_timeout_seconds", 10800)),
             work_default_minutes=int(
                 (spec.get("budget") or {}).get(
-                    "work_default_minutes", 60)),
+                    "work_default_minutes", 120)),
             goal=str(spec.get("goal") or ""),
             gate_block=str(spec.get("gate_block") or ""),
         )

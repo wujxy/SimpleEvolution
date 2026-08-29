@@ -120,7 +120,7 @@ SEARCHER_TOOL = _fn(
         "timeout_minutes": {
             "type": "integer", "minimum": 1, "maximum": 480,
             "description": "engagement time box in minutes; when omitted the "
-                           "role default applies (searcher 30, proposer/challenger 90)",
+                           "role default applies (searcher 60, executor 120, proposer/challenger 180)",
         },
     },
     ["brief"],
@@ -144,7 +144,7 @@ PROPOSER_TOOL = _fn(
         "timeout_minutes": {
             "type": "integer", "minimum": 1, "maximum": 480,
             "description": "engagement time box in minutes; when omitted the "
-                           "role default applies (searcher 30, proposer/challenger 90)",
+                           "role default applies (searcher 60, executor 120, proposer/challenger 180)",
         },
     },
     ["brief", "scope"],
@@ -184,7 +184,7 @@ CHALLENGER_TOOL = _fn(
         "timeout_minutes": {
             "type": "integer", "minimum": 1, "maximum": 480,
             "description": "engagement time box in minutes; when omitted the "
-                           "role default applies (searcher 30, proposer/challenger 90)",
+                           "role default applies (searcher 60, executor 120, proposer/challenger 180)",
         },
     },
     ["brief"],

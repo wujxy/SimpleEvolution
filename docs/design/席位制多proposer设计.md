@@ -715,3 +715,13 @@ evidence index 60→100 行（取最新）、PI bash 输出截 12k→40k 字符�
 wall 7d（本已宽裕）。风险如实记：同步模型下挂死席位最长占住 PI 一个盒
 （480min），墙钟看门狗与到期收割兜底。自测过（含 480 顶格与 700 钳制、
 fork 守卫>8h、新默认 dispatch）。
+
+### 修正案第六轮（2026-08-29）：默认盒再放大方一档
+
+生产证据（jrb-full-std-elec-sync-scientist）：executor-003 的 per-PMT 时间
+偏移标定 60min 默认盒装不下，撞盒 salvage 后该线留成 open question——
+PI 派单时按默认给盒，而默认值本身成了瓶颈。真实席位用时呈双峰：中位
+<40min 干净交付，长尾（标定类大活）>60min。裁决：默认值贴着长尾给，
+不贴中位数。searcher 30→60min、executor 60→120min、proposer/challenger
+90→180min；schema maximum 与 spec 钉值同步。代价不变：挂死席位最长占
+PI 一个盒（480min 硬顶未动），salvage+墙钟看门狗兜底。
