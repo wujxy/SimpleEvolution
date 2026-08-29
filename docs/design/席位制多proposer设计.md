@@ -770,3 +770,25 @@ floor'(真) 被硬化成 'energy is done'(假)"；且自带新实验产出：occ
 若落在 step 50 而非死后，6.9 天预算足以吃掉全部三条。七字段 fence 两
 字段未填（uncertainty/follow_up null）——单样本，暂不改文案，成惯例再
 点名。
+
+**第七轮生产终验（2026-08-29，runs/singlenode/jrb-full-std-elec-r7-scientist）**
+：三件套（reviewer+弹药注+听证门）首次同场实战，test **2.03%/59.7cm/
+0.553ns**——能量轴首次压过 coding 臂（2.05%）成全臂最优，timing 从两代
+弃权变真重建。链路全绿：
+
+- **reviewer 双用法齐备**。step 59 中途里程碑式（首战三席位整批归位后）：
+  PI 汇报词诚实上桌（含决策点"值得再挖吗/会不会在 test 上碎"），reviewer
+  27min 回读——独立复现、纠地板数（0.0149→0.0144）、杀三杠杆（SPE 计数
+  0.0315/prompt 门控无增益/drift 项过拟合）、旗 vertex 活口与 drift 风险；
+  step 68 收笔前：亲手测 val 更香的交互项（0.01748<0.0185）用 20-seed CV
+  杀掉，确认"可达地板"。PI 对 reviewer 判词的处置是本轮最好看的一笔：
+  004 的"能量地板"被 executor-006 的暗计数扣除推翻（0.0206→0.0185）——
+  判词是可证伪主张非圣旨，PI 拿它当矿图不当当票。
+- **门检零触发**：PI 在最后一次 src 改动后主动买票（原话 "as required
+  before deliver_world"），程序被内化成习惯——知情程序的最好执法是无需
+  执法。
+- **弹药注被自引**：PI 汇报词里出现 "~95% of budget left"。
+- 席位面：7 席（executor×3+proposer+challenger+reviewer×2）首购
+  proposer；同回合三席并行整批归位；零 salvage 零退回零异常；69 步
+  4h49m。转移自校准：handover 自报 ±0.0022，val 0.0185→test 0.0203
+  落带内。弱点：vertex 转移衰减（50.4→59.7），coding 33.8 仍领先。
