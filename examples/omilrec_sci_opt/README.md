@@ -38,6 +38,24 @@ bash examples/omilrec_sci_opt/launch_singlenode.sh scientist RUN_DIR
    **之后** eval（node_container 绑 /spec.json，早于落地即 FATAL）。
    机制保留（通用一次性准备钩子），本任务现无钩子。
 
+## 已知暴露面与事后审计（2026-08-30 定案：继续跑，记录在案）
+
+`/cvmfs` 全量绑定的既定事实与判读：
+
+- **优化目标 OMILRECV2 不在 release 里**——专家优化版只存在于 /datafs
+  （容器外）与 `examples/omilrec_opt/reference/`（从未进容器），答案未漏；
+- release 摊着**旧代前实现** `junosw/Reconstruction/OMILREC/`（同源
+  QMLE/QTMLE 上一代，源码全量）与 `InstallArea/include/OMILREC/`。
+  发射时两臂均未读过；用户裁定**不重启**：旧代属公开工具链（人类
+  专家同样可用），读没读可事后审计；
+- **事后审计方法**（run 终局时执行）：
+  `grep -c "Reconstruction/OMILREC" <run>/world/.scientist/session/wire.jsonl`
+  （scientist 臂）与 `grep -c "Reconstruction/OMILREC" <run>/trace.jsonl`
+  （coding 臂）——非零即读过旧代源码，成绩需打备注；
+- 若未来要根治：node_common 加 `EXTRA_MASK_BINDS`（空目录覆写）遮蔽
+  `junosw/Reconstruction/OMILREC` 与 `InstallArea/include/OMILREC`；
+  运行链已核实只经 Tutorial 包裹加载 CalibSvc，遮蔽不破 eval（S7 兜底）。
+
 ## 冒烟记录
 
 2026-08-29：`runs/singlenode/omilrec-v100-sci-smoke`，SMOKE_ONLY=1
