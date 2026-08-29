@@ -80,6 +80,7 @@ setsid nohup bash -c '
 AGENT=$!
 setsid nohup "$PY" "$REPO_ROOT/scripts/snapshot_world_loop.py" \
     --world "$RUN_DIR/world" --out "$RUN_DIR/snapshots" \
+    --subdir "${SNAPSHOT_SUBDIR:-src}" \
     --every 60 --max-seconds "$WALL" \
     >> "$RUN_DIR/snapshot.log" 2>&1 &
 SNAP=$!

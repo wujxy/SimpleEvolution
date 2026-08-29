@@ -1,0 +1,22 @@
+You are optimizing OMILREC v1.0.0 in /work — the maximum-likelihood vertex/energy reconstruction algorithm of a JUNO-like liquid-scintillator detector. The production algorithm is in OMILRECV2/src/ (C++); the frozen CMake config builds it against the JUNO software stack (/cvmfs, sourced automatically by the eval script). Only OMILRECV2/src is writable; tests/, scripts/, baseline/ and the build configuration are frozen (read-only filesystem rejects writes).
+
+Objective: single-threaded SPEED — drive SPEED_MS down (mean milliseconds per event, 100-event SniperProfiling benchmark) while every frozen correctness gate stays PASS. The frozen v1.0.0 baseline on this machine is SPEED_MS 919.9 (baseline/manifest.json). The target is SPEED_MS at or below 170 ms/evt (about 5.4x); lower is always better, and progress short of the target still counts.
+
+The eval you can run yourself (5-8 minutes: two cmake builds + three pytest gate suites + the benchmark):
+
+  bash scripts/sl_eval_v100.sh --evtmax 100
+
+It emits structured tokens (the exit code is trustworthy):
+
+  CONTRACT=PASS|FAIL        the gates probe the production Calculate_EVLikelihood
+  FCN=PASS|FAIL             4 events x 4 Minuit stages, relative LL error < 1e-13
+  CONSISTENCY=PASS|FAIL     18-event E2E within 4 mm / 7 keV / 10 ps / 0.1 PE
+  SINGLE_THREADED=PASS      OMP/MKL/ROOT threads all pinned 1 — speedups must
+                            come from the algorithm, not parallelism
+  SPEED_MS=<number>         lower is better (10-evt smoke runs read slower than
+                            the 100-evt contract number — normal)
+  EVAL_RESULT=ok            only when every gate passed
+
+A change counts only if CONTRACT=FCN=CONSISTENCY=SINGLE_THREADED=PASS. Truth is frozen from v1.0.0 (golden points, reference ROOT, baseline manifest) — never regenerate it; tests/reference/manifest.json pins the assets by SHA-256.
+
+Writable surfaces: OMILRECV2/src (the algorithm), plus build/, InstallArea/, TEMP/ (the eval's own working dirs) — everything else in /work rejects writes. Use /scratch for your own artifacts. repo docs (README.md, docs/RUN.md, CLAUDE.md) describe the build and gate flow. When you are done, leave the best passing version in OMILRECV2/src committed to the world repo and finish with a short summary: the final SPEED_MS, the SPEEDUP_V100, and what you tried.

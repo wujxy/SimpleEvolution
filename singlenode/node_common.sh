@@ -41,8 +41,16 @@ EXTRA_RO_BINDS=${EXTRA_RO_BINDS:-}
 # The one-container argv. Requires RUN_DIR set by the caller. The frozen
 # scientist package binds only when present (the coding mode has none —
 # claude IS the agent there).
+#
+# TASKSET_RANGE (optional): pin the whole container — apptainer and every
+# process inside it — to a host core set. For SPEED benchmarks run two
+# arms at once on one machine, disjoint per-socket ranges keep one arm's
+# build bursts and benches out of the other's timing.
 node_container() {
-    local extra=() p
+    local prefix=() extra=() p
+    if [ -n "${TASKSET_RANGE:-}" ]; then
+        prefix+=(taskset -c "$TASKSET_RANGE")
+    fi
     if [ -d "$RUN_DIR/pkg/scientist" ]; then
         extra+=(--bind "$RUN_DIR/pkg/scientist:/opt/scientist/scientist:ro")
     fi
@@ -53,7 +61,7 @@ node_container() {
     for p in $WORLD_RW; do
         rw_binds+=(--bind "$RUN_DIR/world/$p:/work/$p:rw")
     done
-    apptainer exec --cleanenv --no-eval --userns --containall \
+    "${prefix[@]}" apptainer exec --cleanenv --no-eval --userns --containall \
         --no-mount cwd,home,hostfs --cwd /work \
         --bind "$RUN_DIR/world:/work:ro" \
         "${rw_binds[@]}" \

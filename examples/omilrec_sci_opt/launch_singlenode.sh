@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Launch one singlenode scientist arm on the OMILREC v1.0.0 optimization
-# task: a PRODUCTION C++ maximum-likelihood reconstruction algorithm, a
-# frozen four-gate correctness contract, SPEED_MS minimization. The world
+# Launch one singlenode arm on the OMILREC v1.0.0 optimization task:
+# a PRODUCTION C++ maximum-likelihood reconstruction algorithm, a frozen
+# four-gate correctness contract, SPEED_MS minimization (target 170
+# ms/evt against the frozen 919.9 baseline on this machine). The world
 # is the task repo (examples/omilrec_opt/repo, v1.0.0 at 8bbf2f5); the
 # human-expert reference (examples/omilrec_opt/reference/) stays outside
 # every container view.
 #
 #   bash examples/omilrec_sci_opt/launch_singlenode.sh scientist RUN_DIR
+#   bash examples/omilrec_sci_opt/launch_singlenode.sh coding    RUN_DIR
 #
 # Differences from the JRB launcher, all in the container shape (the
 # generic hooks live in singlenode/node_common.sh + smoke.sh):
@@ -20,17 +22,28 @@
 #     data trees the eval reads (OMILREC_maps + inputs). The wider
 #     dingxf tree (prior experiment output) is NOT bound — the v3
 #     sibling-leak lesson, applied at the mount table;
-#   - the snapshot loop tracks OMILRECV2/src (not src/).
+#   - the snapshot loop tracks OMILRECV2/src (not src/);
+#   - TASKSET_RANGE pins each arm to one socket (this host is 2-socket /
+#     2-NUMA, 128 CPUs): scientist -> node 0, coding -> node 1. With two
+#     arms benchmarking concurrently, disjoint per-socket ranges keep one
+#     arm's build bursts and benches out of the other's timing — SPEED_MS
+#     is a wall-clock metric. Symmetric 32-core allowances keep the arms'
+#     build speeds comparable too.
 #
-# WALL defaults to the 7-day safety cap, not a target: the run ends when
-# the scientist concludes.
+# WALL defaults to the 7-day safety cap, not a target: the scientist arm
+# ends when the scientist concludes; the coding arm runs to its wall.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 
-ARM=${1:?usage: launch_singlenode.sh scientist RUN_DIR}
-RUN_DIR=${2:?usage: launch_singlenode.sh scientist RUN_DIR}
-[ "$ARM" = "scientist" ] || { echo "scientist arm only (this template has no coding variant)" >&2; exit 2; }
+ARM=${1:?usage: launch_singlenode.sh scientist|coding RUN_DIR}
+RUN_DIR=${2:?usage: launch_singlenode.sh scientist|coding RUN_DIR}
+case "$ARM" in
+    scientist) export TASKSET_RANGE=${TASKSET_RANGE:-"0-31,64-95"} ;;
+    coding)    export TASKSET_RANGE=${TASKSET_RANGE:-"32-63,96-127"}
+               export TASK_FILE="$HERE/coding_task.txt" ;;
+    *) echo "arm must be scientist or coding" >&2; exit 2 ;;
+esac
 
 export NODE_IMAGE="$REPO_ROOT/examples/omilrec_opt/apptainer.sif"
 export NODE_TEMPLATE="$REPO_ROOT/examples/omilrec_opt/repo"
@@ -53,4 +66,4 @@ export S3_EDITABLE_RW='/work/OMILRECV2/src /work/build /work/InstallArea /work/T
 # gate only requires EVAL_RESULT=ok.
 export S7_BENCH_CMD='bash /work/scripts/sl_eval_v100.sh --evtmax 10 2>&1 | tee /tmp/s7eval.log | tail -8 && grep -q "EVAL_RESULT=ok" /tmp/s7eval.log && echo BENCH-OK'
 
-exec bash "$REPO_ROOT/singlenode/run_scientist.sh" "$RUN_DIR"
+exec bash "$REPO_ROOT/singlenode/run_${ARM}.sh" "$RUN_DIR"
