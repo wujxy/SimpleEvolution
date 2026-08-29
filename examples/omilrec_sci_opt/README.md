@@ -52,6 +52,12 @@ bash examples/omilrec_sci_opt/launch_singlenode.sh scientist RUN_DIR
   `grep -c "Reconstruction/OMILREC" <run>/world/.scientist/session/wire.jsonl`
   （scientist 臂）与 `grep -c "Reconstruction/OMILREC" <run>/trace.jsonl`
   （coding 臂）——非零即读过旧代源码，成绩需打备注；
+  **锐利模式**（原始命中需人工核对，见下）：
+  `grep -cE "junosw/Reconstruction/OMILREC|Reconstruction/OMILREC/[A-Za-z_]+\.(cc|hh|cpp|h)"`；
+- **coding 臂终局审计（2026-08-30，run omilrec-v100-r1）**：原始 grep 两命中
+  均良性——①任务配置脚本内地图数据路径字符串 `data/Reconstruction/OMILREC/RecMap`
+  （非源码）；②`OMILRECCalibSvc` 头文件 find 列表（运行时合法依赖，前缀撞词）。
+  锐利模式 0 命中。**判定：从未读旧代源码，3.67× 成绩无备注。**
 - 若未来要根治：node_common 加 `EXTRA_MASK_BINDS`（空目录覆写）遮蔽
   `junosw/Reconstruction/OMILREC` 与 `InstallArea/include/OMILREC`；
   运行链已核实只经 Tutorial 包裹加载 CalibSvc，遮蔽不破 eval（S7 兜底）。

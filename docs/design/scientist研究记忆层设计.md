@@ -225,6 +225,18 @@ live 探针（一个上下文、一次调用，复刻 R7 场景给 PI 用新工�
 把先验推向"②大概率要启用 cue"，但**真 run（作者身份+全回路）才是②的裁判**
 ——按 §6，cue 等真 run 判。
 
+**R8 真 run 判决（2026-08-30，jrb-full-std-elec-r8-mem，72 步 deliver 4h29m）**：
+①**过**——remember×7（里程碑配方级：IRLS 球面拟合+time-walk 修正；五条死路
+全 close 带 scope）、view 两版在里程碑处重写（rj-0001 定策略/rj-0002 重瞄）、
+reviewer 听过后 deliver；②**不过**——检索三件套 0 次调用。72 步的 run 里
+view 始终装得下状态，未出现"必须翻账本"的时刻；与探针下界读数一致，
+**作者身份没有自发产生 recall 行为 → 按 §6 启用 Resurface awareness cue**
+（原则不变：只提醒存在、绝不指条）。③无回归——全程无坏写无半应用，test
+2.23%/-0.03pp/12.3cm/0.49ns（对 R7 2.03/59.7/0.55：vertex 4.9× 好、timing
+好、E_res 让 0.2pp——不同权衡点非回归；"E_res ~2% 地板"判断两 run 一致）。
+第二域旁证：omilrec sci 臂（生产 C++ 优化任务）同层活跃记账，R1-R7 把速度
+阶梯与调用数画像写入 memory，官方 488.8ms/1.88× 全绿——①跨域成立。
+
 ## 10. 实现面预览（已实现，记录见 §10.1）
 
 - `scientist/ledger.py`：research_memory.jsonl 读写 + item/事件模型 + 检索三件套；
