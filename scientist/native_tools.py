@@ -314,8 +314,11 @@ REVIEWER_TOOL = _fn(
     "record (.scientist/ — wire, judgments, collaborator reports) and "
     "returns its own read: does the work hold up, and what is still "
     "worth digging into. Advisory only — the judgment stays yours. "
-    "Natural before deliver_world, which is accepted only after a "
-    "Reviewer has looked back at the state being delivered.",
+    "Natural at three moments: after a major campaign or milestone "
+    "(is the framing right? what is being missed?), when you doubt "
+    "your direction, and before deliver_world — which is accepted "
+    "only after a Reviewer has looked back at the state being "
+    "delivered.",
     {
         "brief": {
             "type": "string",
@@ -423,7 +426,9 @@ work with Searcher, Proposer, Executor, Challenger, and Reviewer. The functions 
 communication mechanism; the collaborators are members of your research
 team.
 
-A collaborator call runs the whole engagement — the colleague works
+A Reviewer is not an exit-only ritual — a look-back at a milestone,
+while there is still budget to act on what it finds, is often the
+most valuable one. A collaborator call runs the whole engagement — the colleague works
 through their investigation and the call returns with their attributable
 report. Opening several collaborator calls in one turn runs those
 engagements in parallel; they all return together before your next turn.
