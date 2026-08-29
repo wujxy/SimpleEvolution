@@ -87,9 +87,11 @@ judgment 原封不动变成 view：触发时机不变（真实里程碑）、自
 `_upsert_judgment_message` 原位换入上下文不变（view 本来就该换）。R7 已证明这个
 器官健康。它唯一卸掉的职责：不再负责保存所有未来可能有用的历史认知——交给
 Memory。**这是一个器官兼任两职责的拆分，不是削弱。** view 的内容回到纯注意力：
-"我现在怎样理解这个问题，此刻哪些东西值得我关注"。solver 构成的复述应消失
-（代码是自己的 source of truth，判词指向工件不转述工件——R7 判词与 docstring
-数字失同步是实证）。
+"我现在怎样理解这个问题，此刻哪些东西值得我关注"。**View 不承担同步描述当前
+实现的义务**——代码是自己的 source of truth，与 docstring 失同步是"承担了该义务"
+的实证（R7 判词 50.4 vs docstring 53.0）；但 R7 也证明构成描述常常是 brief 的原料
+（executor-005 任务书整段引用判词物理）。所以只保留 Scientist 判断对当前科研
+决策有用的世界抽象——写什么，PI 定。
 
 ### 4.2 Research Memory：可关联的研究记忆，不是 formal research graph
 
@@ -137,18 +139,32 @@ truth。memory 是 semantic research memory，不是 episodic log：**不把历�
 - 工具描述措辞按 §3 纪律：只述事实（"这是你自己的长期研究记忆，跨整个 run 持久，
   随时可检索"），零程序性指令。
 
-## 6. 砍掉"修订即走查 parked 集"：理由与代价
+## 6. Resurface：架构承认，v1 不装
 
-砍的理由（提案 agent 终轮，认）：①它又在替 Scientist 设计科研 workflow；
-②R7 临终能重写 TOA open question 证明"它会想"，缺的是中途找得回，不是回想义务；
-③预装习惯会污染下一个 run 的实验——永远不知道裸能力够不够。顺序：**能力先行，
-习惯后置，证据不足不加**。
+R7 的双证据同时成立：PI **有能力**重新想到旧方向（临终 handover 重写出了 joint
+TOF+PE open question），却在真正需要它的中途里程碑**没有想到**（rec#133 选了
+safe lever）。所以问题不只 storage failure，还有明确的 **attention / recency
+failure**：
 
-代价（明写）：本设计最大的预期收益——里程碑时刻 parked 洞见自动回到桌上——从
-"机制保证"降为**行为假设**。两条补偿，均有实证：①R7 的 PI 在里程碑本来就主动问
+> Memory 存在 ≠ Memory 会在正确时刻进入注意力。
+
+据此分两层：
+
+- **架构层（承认问题在范围内）**：Persist → Research Memory ← Retrieve 之外，
+  预留 Resurface/awareness 环节，其原则现在定死——harness 最多提醒 Scientist
+  "**你的长期研究记忆存在，当前格局变化后它可能值得重新查阅**"；**绝不**告诉它
+  该看哪条、哪条重新升值、下一步做什么。若启用，触发必须稀疏、内容无关、零指令
+  动词（预算注/听证门同族：内容无关的知情提醒，非判断）。
+- **产品层（v1 先测纯检索）**：不装任何走查/提示/awareness cue。理由：①强制扫
+  parked 集是替 Scientist 设计科研 workflow；②预装习惯会污染下一个 run 的实验——
+  永远不知道裸检索够不够（KILL_KNOCK 先例：义务式文本让行为更糟）。
+
+代价（明写）：本设计最大的预期收益——里程碑时刻 parked 洞见回到桌上——在 v1 里
+是**行为假设**而非机制保证。两条补偿，均有实证：①R7 的 PI 在里程碑本来就主动问
 reviewer "what am I missing"（step 59 汇报词原文），求助反射在场；②challenger 带
 memory 后成为第二次召回机会（"你的 view 暗示 timing 无价值，但 R23 只测了 radial，
-R17 还站着"是真 challenger 的本职，不是 harness 在 challenge）。
+R17 还站着"是真 challenger 的本职，不是 harness 在 challenge）。验收指标②不过时，
+开启的是 §6 已定义的最后一环，不是临时发明新机制。
 
 ## 7. 席位接口：指针 + 事实句
 
@@ -163,8 +179,11 @@ R17 还站着"是真 challenger 的本职，不是 harness 在 challenge）。
 - **不给摘要、不预选节点、不替它读。**（P4）
 - canonical memory 只由 Scientist 写；席位报告是 evidence ref，不直接改 PI 的
   长期认知——Scientist 对研究判断负责，帮手是杠杆。
-- conclusion 的 dead_ends / open_questions 从 closed / open items 导出，不再是
-  临终作文（R7 的 handover 质量本来就高，从发挥变机械保证）。
+- **conclusion 查阅、引用、吸收 Memory，但不被 Memory 定义**——Memory 是输入，
+  不是 source of truth。memory 是选择性语义记忆，必有临终才成形、此前未 remember
+  的认识；机械导出会把 R7 已证明很强的临终诚实总结（6 死 4 开全带证据）降格为
+  库存清单，且本质是 harness 替 PI 写结题（违 P3）。最终科研总结始终由 Scientist
+  自己做。
 
 ## 8. R7 全程推演（新设计下的六幕，机制在场性检查已过）
 
@@ -189,9 +208,9 @@ reviewer 地板）、席位 7/7 高质量 fence、临终诚实——全部无变
 1. **memory 使用率**：记不记（notes.md 写一篇即弃是前科）；
 2. **里程碑 recall 行为**：里程碑/意外/饱和时刻用不用检索三件套。
 
-两条全过 → 设计成立；第②条不过（memory 在、从不翻）→ 才有理由加"修订时回顾"
-的认知习惯（角色文本，仍非执法）。建议先跑一次 live 探针（一个上下文、一次调用，
-复刻 R7 场景给 PI 用新工具面）再上真 run。
+两条全过 → 设计成立；第②条不过（memory 在、从不翻）→ 开启 §6 已定义的
+Resurface awareness cue（内容无关的存在提醒），而非新发明机制。建议先跑一次
+live 探针（一个上下文、一次调用，复刻 R7 场景给 PI 用新工具面）再上真 run。
 
 ## 10. 实现面预览（批后动）
 
@@ -202,13 +221,15 @@ reviewer 地板）、席位 7/7 高质量 fence、临终诚实——全部无变
 - `scientist/assistant_tools.py`：`_fork_world` 增加 memory 文件 include；
 - `scientist/collaboration.py`：各角色 mandate 加事实句；challenger 的
   "Judgment to attack" 不变（view 即其对象）；
-- conclusion 导出路径；既有自测模式照第四轮七组先例扩组。
+- conclusion 走查阅/吸收语义，无导出路径；既有自测模式照第四轮七组先例扩组；
+- **v1 不实现** Resurface cue（§6 留位，验收②不过才启用）。
 
 ## 附：讨论 provenance
 
 - 本会话：R7 失败分析（TOA 三重损失、记分牌诊断、五幕→六幕推演、四格→自由文本
   view 的让步、lineage 降级、砍重定价扫描）；
-- docs/chat/2026.8.29.19.02.gpt谈researchstate的缺陷.md：提案 agent 两轮
-  （三层架构、item 最小形态、persistent identity 解决关键一半、能力先行习惯后置、
-  最终原则表述）；
+- docs/chat/2026.8.29.19.02.gpt谈researchstate的缺陷.md：提案 agent 三轮
+  （第一轮三层架构与五类对象；第二轮 item 最小形态、persistent identity 解决
+  关键一半、能力先行习惯后置；第三轮终审——conclusion 是 Memory 的输入非定义、
+  Resurface 架构留位 + 内容无关提醒原则、View 不承担同步描述义务）；
 - HEP：arXiv:2607.09195（persistent hypothesis + append-only 事件史的价值证明）。
