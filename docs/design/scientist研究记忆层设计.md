@@ -213,6 +213,18 @@ reviewer 地板）、席位 7/7 高质量 fence、临终诚实——全部无变
 Resurface awareness cue（内容无关的存在提醒），而非新发明机制。建议先跑一次
 live 探针（一个上下文、一次调用，复刻 R7 场景给 PI 用新工具面）再上真 run。
 
+**探针 interview 读数（2026-08-29 实现当日，scripts/probe_memory_interview.py，
+真 R7 wire 前缀 + 新工具面 + 反事实记忆文件；deepseek-v4-flash@low，每点一次
+调用，A/B2 各采两样）**：①洞见时刻 remember：MISS 2/2（洞见留在对话流——R7
+病理原样），但第一样本在定位时**主动调了 list_research_memory**（不确定时摸
+记忆，通道在场且会被使用）；②里程碑检索：B1（报告落地）1/1 MISS、B2（收笔
+前）2/2 MISS——行为凹槽全被 R7 训练模式占据（验 gates→reviewer→deliver，皆
+健康合规行为，但收笔前不翻记忆）。两条软化注记：**探针 PI 是记忆的继承者非
+作者**（真 run 的 PI 亲手写过条目，"我记过它"本身可能是 recall 驱动——单次
+调用探针无法模拟，读数是②的下界）；探针不回工具结果，只能看第一反射。读数
+把先验推向"②大概率要启用 cue"，但**真 run（作者身份+全回路）才是②的裁判**
+——按 §6，cue 等真 run 判。
+
 ## 10. 实现面预览（已实现，记录见 §10.1）
 
 - `scientist/ledger.py`：research_memory.jsonl 读写 + item/事件模型 + 检索三件套；
