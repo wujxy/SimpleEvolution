@@ -614,3 +614,104 @@ NuclideGridPoint 通道前置 + 64B 对齐。被拒实验亦有账（对齐 load
 （单线中断即全停）、以及操作者盲区免疫。最小修正方向：把"再点火"做成
 harness 内的机械规则（班次结束 → 档案自动交接 → 新会话强制满班），
 议会收缩为"点火器 + 一两席对冲"。
+
+## 修正案（2026-08-29）：席位纪律改由工作区强制，不再靠弄瞎 agent
+
+**事故**：jrb-full-std 首对 std run（2026-08-28）里两次 proposer 会话
+全部烧毁——但根因不是 900s 太短。认知席位工具面是
+`Read,Grep,Glob,WebSearch,WebFetch,Task`（无 Bash/Write），而 brief 明令
+"establish with evidence ... prototype in /scratch and report"；npz 数据
+Read/Grep 读不了，python 全被 "requires approval" 挡死（002 撞墙 28 次、
+004 撞 34 次，各花 ~11 分钟 grep 自己的 transcript 调试权限系统），到点
+SIGKILL + `{"error": exceeded time box}`——**900 秒的思考一个字没收割**
+（004 的遗言本身是一段有价值的诊断）。对照组：executor（全工具）零拒绝、
+盒内交付 ×2，证明工具面是唯一变量。XSBench 那笔"900s consult timeout
+杀席位"的债，根因同源，至此还清。
+
+**修正（scientist/assistant_tools.py，用户拍板"隔离副本+全工具"）**：
+
+1. **全席位全工具**：`_COGNITIVE_TOOLS` 补齐 Edit/Write/Bash。席位身份
+   = prompt + 产出契约（digest 唯一回传通道），纪律 = 工作区。
+2. **认知席位跑世界的一次性 fork**（`_fork_world`）：小树（src/scripts/
+   .git/docs）真复制可自由改；数据级目录（`benchmarks` 或 ≥512MB）符号
+   链接进只读正本——**写穿透被内核 EROFS 拒绝**，9GB 包成本 0.01s。
+   .scientist 从不随 fork 出海（沿袭 executor-isolated 的"给世界不给账本"）。
+   proposer/challenger fork **当前**世界（提案必须看见现任 solver），
+   executor-isolated 同步升级为 fork（原 9GB copytree 太贵），searcher
+   read=lab 也走 fork（read=node 的 /repo 本就 ro-mount，直用）。
+3. **超时不再清零**：SIGTERM→10s 宽限→SIGKILL；`_partial_report` 从残
+   transcript 收割最后一段实质文本 + 工具计数，标 `timeout-salvaged`
+   （崩溃同理 `crash-salvaged`）作为报告交回 PI；仅当残卷无内容才落回
+   旧式裸 error。
+4. **认知席位时间盒 2700s**（spec `budget.cognitive_timeout_seconds` 可
+   调）：带证据的提案本来就是最贵的环节；searcher 维持 900s，executor
+   沿用按需 timeout_minutes。完全无盒不采纳——主循环 wait 停在同事身上，
+   一个挂死席位会悄悄冻住整个 scientist；有了收割，宽盒才安全。
+5. **席位契约随 prompt 声明**（`_FORK_NOTE` 等）：一次性副本、全工具、
+   只交报告——不再让模型靠撞墙发现边界。
+
+自测：fork 结构（symlink 绝对化后）/ .scientist 排除 / salvage 在真实
+被杀 transcript 上解出 105 工具调用 + 临终诊断。容器内 EROFS 语义由
+现有 ro-mount 契约保证（smoke S2/S9），无新机制。
+
+**第二轮（同日深夜）：全席位审计——接线清零**。顺着"权限是否配得上职责"
+过了一遍四角色，再修两处脏线：(1) **`_SEAT_TOOLS` 单一工具面**（executor
+也补上 Task；认知/执行不再有第二套常量）；(2) **`timeout_minutes` 四角色
+全认**——PI 侧 schema 早就给 searcher/proposer/challenger 暴露了这个参数，
+但 `engage()` 只读 executor 的：PI 买 60 分钟、席位 15 分钟死（接线谎言），
+现统一走 `_box_from_action`（clamp 1–180min，缺省=角色默认：searcher 900s
+/ 认知 2700s / executor 30min）。searcher read=none 的提示从"文件系统式
+声明"改为"任务式声明"（literature-only，不谎称做不到的隔离）。终态接线：
+**一个工具面、一个 fork 帮手、一个时间盒解析器；纪律=工作区+digest**。
+自测：stub ledger/world + 秒退假席位进程，四角色 engage→fork→spawn→poll
+全链 + 盒参数（默认/加购/顶格/非法 read 拒绝）全过。未开的三样与理由：
+无限时间盒（挂死席位会冻住主循环；180min 硬顶+salvage 已够）、
+distill_word_cap 300 词（上下文经济学非权限；全文在盘 PI 可读）、
+容器内代理（WebSearch 服务端执行必通；WebFetch 站点级自适配，不接脏线）。
+
+**第三轮（同日，返回值全链路 + 大项目连续性）**：顺着"返回值截断类风险"
+把席位→PI 的每条信道过了一遍，修四处：(1) **PI 消息丢指针**——
+`_collaborator_report_message` 此前不送 truncated 标志/全文路径/保留工作区/
+follow-up/超时标记，"PI 可读全文"是死接线；现全量入消息。(2) **artifacts
+路径造假**（硬编码 /work/.scientist/scratch，真实是 world.scratch=/scratch）
+→ 改用世界真值。(3) **结构化字段抽签**——_parse_tail 只认文末 json 围栏而
+席位 prompt 从没教过格式；现席位 prompt 显式规定文末 fenced JSON 七字段
+（report_digest/diff_summary/metrics/evidence/artifacts/uncertainty/
+recommended_follow_up，"prose outside is archived but not delivered"）。
+(4) **distill 默认 300→600 词**（spec 可调），且截流必附 transcript 指针。
+大项目连续性两件：**成功的 fork 不再删除**（续作席位拿到前任工作区指针；
+大项目=席位接力序列：摸底→提案→建造(executor-current 的 src/ 天然持久)→
+攻击）；**顶格时间盒改 spec 参数** `budget.seat_timeout_max_minutes`
+（默认 180，大项目写 480 即可买 8h 席位，代码不再藏顶）。salvage 加固：
+临终文本 <200 字符时自动并入前一段实质文本。五组自测全过（含
+prompt→_parse_tail 回环、消息完整性、成功 fork 保留）。
+
+**第四轮（2026-08-29 深夜终局）：协作者运行时重写为同步——根上消除整类病**。
+用户裁决正确：前三轮的补丁里，wait 执法、孤儿对账、shutdown 收尾修的全是
+**异步骨架自己的病**（席位后台跑+邮件回投）。实践中席位几乎全串行使用
+（jrb run 13 次 wait vs 5 次派遣），异步买到的并行是纸面的。重写为
+**同步**：`engage()` 阻塞跑完整个席位会话，报告**就是 tool result**——
+给命令→跑 claude→响应→返回内容，四步。构造上消失的病：超时执法点唯一
+（阻塞 wait 的 timeout 参数）；崩溃=finally 内联清理，无孤儿可对账
+（仅 SIGKILL 科学家本人留一个窗口，_reconcile 用 proc.pid+cmdline 守卫
+收割）；wire 不变量自动满足（tool_call/tool_result 原生配对）；PI 零新
+概念（席位=普通工具，不再学"邮件/wait"约定）。删掉：`_Job` 队列、poll
+泵、wait 工具、finished_pending、any_over_box、shutdown 整段。保留
+（正交好部件原样）：fork 工作区、四角色 mandate、fence 报告契约、
+salvage、三层时间盒、消息完整性、fork GC（加 3.5h 年龄守卫）。真并行
+保留在唯一被实际使用的形态：**同回合多席位调用线程池并行、整批归位**
+（~25 行，无常驻状态）。七组自测全过：正常返/超时收割（2s 盒 30s 睡
+席位 2.0s 返回+诊断 harvested）/崩溃收割/起不来回执/孤儿对账（counter
+跳过已用序号防 raw.txt 截断）/fork GC/同回合并行（2×3s 席位 3.0s 完成）。
+
+**第五轮（同日）：限额全面放宽——"放开手脚"姿态**。用户裁决：保守限额
+在扼杀长跑大项目。新默认（代码默认+std spec 同步+PI schema 上限）：
+searcher 盒 15→30min、proposer/challenger 45→90min、executor 默认 30→60min、
+单席位硬顶 180→**480min**（schema maximum 同步 480）、distill 300→1200 词、
+evidence index 60→100 行（取最新）、PI bash 输出截 12k→40k 字符、代码默认
+命令超时 360→1800s、fork 保留 12→24 份、GC 年龄守卫 3.5h→8.5h（必须大于
+最大盒）、salvage 切片 2k→4k。不动并说明理由：compaction（上下文管理非
+能力限制）、idle turns / handover 词帽（行为纪律与退出契约）、steps 3000 /
+wall 7d（本已宽裕）。风险如实记：同步模型下挂死席位最长占住 PI 一个盒
+（480min），墙钟看门狗与到期收割兜底。自测过（含 480 顶格与 700 钳制、
+fork 守卫>8h、新默认 dispatch）。

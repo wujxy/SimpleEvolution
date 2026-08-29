@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from .native_tools import (
     NATIVE_TERMINAL_ACTIONS,
@@ -392,48 +393,115 @@ def _compact_native(messages: list[dict], *, keep_messages: int,
         messages[:] = preamble + tail
 
 
-def wait_for_reports(assistant, *, timeout_seconds: float) -> dict:
-    """Park the loop until the next team engagement exits (or timeout).
 
-    Observation only: this NEVER finalizes a job and NEVER appends to
-    the conversation. There is exactly one intake point for collaborator
-    reports — the pump between model calls (``assistant.poll`` at loop
-    top) — so a user message can never land between a tool_calls
-    message and its tool result (the wire invariant demo-2 died
-    violating). The wait result just tells the seat mail has arrived;
-    the pump delivers it right before the seat's next thought."""
-    deadline = time.monotonic() + max(0.0, timeout_seconds)
-    while True:
-        landed = assistant.finished_pending()
-        if landed or time.monotonic() >= deadline:
-            break
-        time.sleep(0.5)
-    if landed:
-        return {"ok": True, "landed": landed,
-                "note": "its report arrives as its own message before "
-                        "your next thought"}
-    return {"ok": True, "timeout": True,
-            "note": "no report landed yet — dispatched jobs are still "
-                    "running"}
+
+def _seat_observation(report: dict) -> dict:
+    """A seat engagement's report, rendered for the tool-result channel."""
+    if not isinstance(report, dict):
+        return {"ok": False, "error": f"engagement failed: {report!r}"}
+    return {
+        "ok": bool(report.get("ok")),
+        "collaborator_id": report.get("collaborator_id"),
+        "status": report.get("status"),
+        "report": _collaborator_report_message(report),
+    }
+
+
+def _run_actions(actions: list[dict], *, world, assistant,
+                 ledger) -> dict[int, dict]:
+    """Execute one turn's tool actions; returns ``id(action) -> observation``.
+
+    Everything is sequential except SEAT actions: two or more collaborator
+    calls in the same turn run in parallel and return together — the one
+    concurrency the parliament actually uses, with no standing state (the
+    batch completes before the turn does)."""
+    seat_names = set(ROLE_NAMES)
+    seat_actions = [a for a in actions if a.get("action") in seat_names]
+    results: dict[int, dict] = {}
+    if len(seat_actions) >= 2:
+        with ThreadPoolExecutor(max_workers=len(seat_actions)) as pool:
+            futures = {
+                id(a): pool.submit(
+                    dispatch_action, a, world=world, assistant=assistant,
+                    ledger=ledger)
+                for a in seat_actions}
+            results = {key: future.result() for key, future in futures.items()}
+    for action in actions:
+        if id(action) in results:
+            continue
+        name = action.get("action")
+        if name in NATIVE_TERMINAL_ACTIONS:
+            results[id(action)] = {
+                "ok": False,
+                "error": "terminal actions are sent ALONE, never "
+                         "alongside other calls; re-send it as your "
+                         "only call",
+            }
+        elif "_arguments_raw" in action:
+            results[id(action)] = {
+                "ok": False,
+                "error": "tool arguments were not valid JSON: "
+                         f"{action['_arguments_raw'][:200]}",
+            }
+        else:
+            results[id(action)] = dispatch_action(
+                action, world=world, assistant=assistant, ledger=ledger)
+    return {
+        id(a): (_seat_observation(results[id(a)])
+                if a.get("action") in seat_names else results[id(a)])
+        for a in actions}
+
 
 
 def _collaborator_report_message(result: dict) -> str:
-    """Render one attributed team report as an ordinary user message."""
+    """Render one attributed team report as an ordinary user message.
+
+    Every line the PI needs to act or dig deeper must ride this message:
+    status (a timeout-salvaged report must be visibly one), the word-cap
+    truncation flag WITH the full-transcript pointer (the PI cannot read
+    a file it was never told about), the kept workspace for continuation,
+    and the recommended follow-up."""
     header = (
         f"[Research collaborator report | role={result.get('role')} | "
         f"collaborator_id={result.get('collaborator_id')}]"
     )
+    hev = result.get("harness_evidence") or {}
     if not result.get("ok"):
-        return f"{header}\nstatus: failed\nerror: {result.get('error') or 'engagement failed'}"
+        lines = [
+            header,
+            "status: failed",
+            f"error: {result.get('error') or 'engagement failed'}",
+        ]
+        if hev.get("transcript"):
+            lines.append(f"partial transcript: {hev['transcript']}")
+        return "\n".join(lines)
     metrics = json.dumps(result.get("metrics") or {}, ensure_ascii=False)
-    return (
-        f"{header}\n"
-        f"report: {result.get('report_digest') or result.get('self_report_digest')}\n"
-        f"artifacts: {result.get('artifacts') or result.get('diff_summary') or '(none)'}\n"
-        f"metrics: {metrics}\n"
-        f"uncertainty: {result.get('uncertainty') or '(not stated)'}\n"
-        "status: collaborator testimony; not Scientist judgment"
-    )
+    lines = [
+        header,
+        f"status: {result.get('status') or 'done'}"
+        + (f" — {result['note']}" if result.get("note") else ""),
+        "report: "
+        + (result.get("report_digest")
+           or result.get("self_report_digest") or "(no report text)"),
+    ]
+    if result.get("truncated"):
+        lines.append(
+            f"(report truncated at the word cap — full transcript: "
+            f"{hev.get('transcript')})")
+    elif hev.get("transcript"):
+        lines.append(f"full transcript: {hev['transcript']}")
+    lines += [
+        "artifacts: "
+        + str(result.get("artifacts") or result.get("diff_summary")
+              or "(none)"),
+        f"kept workspace: {hev.get('workspace') or '(the live world)'}",
+        f"metrics: {metrics}",
+        f"uncertainty: {result.get('uncertainty') or '(not stated)'}",
+        "follow-up: " + str(
+            result.get("recommended_follow_up") or "(none)"),
+        "status: collaborator testimony; not Scientist judgment",
+    ]
+    return "\n".join(lines)
 
 
 def _log(message: str) -> None:
@@ -485,18 +553,9 @@ def run_episode(
     def _nudge(text: str) -> None:
         _emit({"role": "user", "content": text})
 
-    def _deliver(report: dict) -> None:
-        _emit({"role": "user",
-               "content": _collaborator_report_message(report)})
-
     try:
         for index in range(steps_budget):
             step = index + 1
-            # Finished engagements land as messages before the next model call.
-            for report in assistant.poll():
-                _deliver(report)
-                _log(f"{report.get('role')} engagement "
-                     f"{report.get('collaborator_id')} finished")
             if not knocked and (
                     deadline - time.monotonic()
                     < min(600.0, 0.05 * wall_seconds)):
@@ -557,38 +616,14 @@ def run_episode(
                 continue
 
             _emit(wire_assistant_message(reply, actions))
+            observations = _run_actions(
+                actions, world=world, assistant=assistant, ledger=ledger)
             for action in actions:
                 name = action["action"]
-                if name in NATIVE_TERMINAL_ACTIONS:
-                    observation = {
-                        "ok": False,
-                        "error": "terminal actions are sent ALONE, never "
-                                 "alongside other calls; re-send it as your "
-                                 "only call",
-                    }
-                elif "_arguments_raw" in action:
-                    observation = {
-                        "ok": False,
-                        "error": "tool arguments were not valid JSON: "
-                                 f"{action['_arguments_raw'][:200]}",
-                    }
-                elif name == "wait":
-                    requested = action.get("timeout_seconds")
-                    try:
-                        seconds = min(float(requested or 600.0), 3600.0)
-                    except (TypeError, ValueError):
-                        seconds = 600.0
-                    wall_left = deadline - time.monotonic()
-                    observation = wait_for_reports(
-                        assistant,
-                        timeout_seconds=max(
-                            1.0, min(seconds, wall_left - 5.0)),
-                    )
-                else:
-                    observation = dispatch_action(
-                        action, world=world, assistant=assistant,
-                        ledger=ledger,
-                    )
+                observation = observations[id(action)]
+                if name in ROLE_NAMES:
+                    _log(f"step {step}: seat engagement finished "
+                         f"({observation.get('status')})")
                 action_log.append({"action": name, "step": step})
                 _emit(wire_tool_result(
                     action.get("tool_call_id", ""), observation))
@@ -605,9 +640,11 @@ def run_episode(
         return _result("cut_off", conclusion, steps_budget, usages,
                        action_log)
     finally:
-        abandoned = assistant.shutdown()
-        if abandoned:
-            _log(f"{abandoned} collaborator engagement(s) abandoned at exit")
+        # Synchronous seats: nothing is ever left running at episode exit
+        # — a seat either returned as this episode's own tool result or
+        # was killed inside engage(). Only a SIGKILL of the scientist
+        # itself can leak one, and _reconcile harvests that on resume.
+        pass
 
 
 def _result(outcome, conclusion, steps, usages, action_log) -> dict:

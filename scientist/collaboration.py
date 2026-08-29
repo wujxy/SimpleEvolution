@@ -6,6 +6,13 @@ import json
 
 ROLE_NAMES = frozenset({"searcher", "proposer", "executor", "challenger"})
 
+# An open-scope proposer receives the neutral evidence index inline. A
+# long run accumulates hundreds of experiments; unbounded, that index
+# would put a hundred-thousand-character payload into every fresh seat's
+# opening prompt. The most RECENT rows ship; the rest are reachable
+# through experiment_ids, which the PI selects deliberately.
+_EVIDENCE_INDEX_MAX_ROWS = 100
+
 
 def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
@@ -65,12 +72,26 @@ def build_collaboration_prompt(
                 raise ValueError("directed proposer requires region")
             sections.append(f"Directed research region:\n{region}")
         else:
+            rows = evidence_index
+            overflow = 0
+            if len(rows) > _EVIDENCE_INDEX_MAX_ROWS:
+                overflow = len(rows) - _EVIDENCE_INDEX_MAX_ROWS
+                # rows are sorted by experiment id (ascending sequence):
+                # keep the most RECENT — what was lately tried and found
+                # is the ground a fresh proposal must not re-tread
+                rows = rows[-_EVIDENCE_INDEX_MAX_ROWS:]
+            index_text = _json(rows)
+            if overflow:
+                index_text += (
+                    f"\n(the {overflow} oldest of {len(evidence_index)} "
+                    "experiments are omitted; the Scientist can forward "
+                    "any of them through experiment_ids)")
             sections.append(
                 "Reconstruct opportunities from the goal, live world, and "
                 "neutral evidence index below. You have intentionally not "
                 "received the Scientist's current preference, selected "
                 "experiment ids, or reasoning history.\n\nNeutral evidence "
-                "index:\n" + _json(evidence_index)
+                "index:\n" + index_text
             )
     elif role == "challenger":
         sections.append(
@@ -86,8 +107,23 @@ def build_collaboration_prompt(
         sections.append(f"Definition of done:\n{done}")
 
     sections.append(
-        "Your private trajectory is not the Scientist's memory. Return only "
-        "a concise report of conclusions, evidence, artifacts, uncertainty, "
-        "and recommended follow-up."
+        "Your private trajectory is not the Scientist's memory. Close the "
+        "engagement with a concise report of conclusions, evidence, "
+        "artifacts, uncertainty, and recommended follow-up, as the FINAL "
+        "message, in exactly this fenced JSON block — the harness reads "
+        "these fields and delivers them to the Scientist; prose outside "
+        "the block is archived but not delivered:\n"
+        "```json\n"
+        "{\n"
+        '  "report_digest": "<the report: what you established, with the '
+        'numbers>",\n'
+        '  "diff_summary": "<files changed in your workspace, if any>",\n'
+        '  "metrics": {"<name>": "<value with units>"},\n'
+        '  "evidence": ["<what backs each claim: run, file, source>"],\n'
+        '  "artifacts": ["<paths this engagement produced>"],\n'
+        '  "uncertainty": "<what remains uncertain>",\n'
+        '  "recommended_follow_up": "<the single most valuable next step>"\n'
+        "}\n"
+        "```"
     )
     return "\n\n".join(sections)

@@ -111,8 +111,8 @@ def _run_probe(spec: dict, args) -> int:
     budget = dict(spec.get("budget") or {})
     world = LocalWorld(
         work=roots["work"], repo=roots["repo"], scratch=roots["scratch"],
-        timeout_seconds=int(budget.get("command_timeout_seconds", 360)),
-        cap_chars=int(budget.get("command_output_cap_chars", 12000)),
+        timeout_seconds=int(budget.get("command_timeout_seconds", 1800)),
+        cap_chars=int(budget.get("command_output_cap_chars", 40000)),
     )
     ledger = LocalLedger(world.work / ".scientist")
     assistant = InWorldAssistant(
@@ -176,8 +176,8 @@ def main(argv: list[str] | None = None) -> int:
 
     world = LocalWorld(
         work=roots["work"], repo=roots["repo"], scratch=roots["scratch"],
-        timeout_seconds=int(budget.get("command_timeout_seconds", 360)),
-        cap_chars=int(budget.get("command_output_cap_chars", 12000)),
+        timeout_seconds=int(budget.get("command_timeout_seconds", 1800)),
+        cap_chars=int(budget.get("command_output_cap_chars", 40000)),
     )
     ledger_root = world.work / ".scientist"
     ledger_root.mkdir(parents=True, exist_ok=True)

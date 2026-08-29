@@ -1,0 +1,11 @@
+You are working on JunoResBench electron reconstruction with FULL READOUT in /work. The detector is JUNO-like, in the spirit of the Jiangmen Underground Neutrino Observatory: a large liquid-scintillator detector whose physics rests on reconstructing per-event visible energy, vertex and time from the light a charged particle leaves in the scintillator (prompt Cherenkov light plus delayed scintillation light), collected by 17612 20-inch PMTs on a sphere of R = 19.37 m — every channel that pulsed in the window is digitized (zero-suppressed full readout); channels that stayed silent are absent. wf_offsets maps events to adc rows, adc_pmt_ids names each row's channel, and t_run_s timestamps each event in seconds from the start of the continuous run. The task package is under benchmarks/electron_full/ — read its TASK.md for the data contract; the instrument files (channel positions, PMT production-test nominal specifications) and the scorer are in the package root.
+
+Improve the solver in src/ — lower energy_res on the labeled val split (ties broken by vertex_res_cm, then timing_res_ns) while keeping the prediction contract valid: `python3 src/solve.py --data <split-dir> --train <split-dir> --out <pred.npz>` writes E_rec, x_rec, y_rec, z_rec, t0_rec (t0 measured from window start; sample 0 = trigger time - 300 ns), and must also run on the test split, which carries no truth.
+
+Gates you can run yourself:
+  bash scripts/check_verify.sh   (VERIFY gate: solver runs on val, emits a well-formed in-range prediction npz)
+  bash scripts/bench.sh          (val objective: energy_res/energy_bias/vertex_res_cm/timing_res_ns + SANITY floors)
+
+The shipped charge-centroid baseline in src/ scores energy_res~0.112 on val. At the exit the harness re-runs your final solver on the held-out test split and scores it against truth you never see.
+
+Measure your own progress with the two scripts; work in /work (generated data and outputs go to /scratch — the package filesystem is read-only). python3 is 3.9 with numpy 2.0 only. The waveform blocks are multi-GB adc.npy — open them memmapped (np.load(..., mmap_mode="r")) and work in chunked passes, not whole-array loads. When you are done, leave the best solver in src/solve.py and finish with a short summary of what you tried and the final val scores.

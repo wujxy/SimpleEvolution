@@ -1,0 +1,35 @@
+{
+  "goal": "This is a JUNO-like liquid-scintillator detector world, in the spirit of the Jiangmen Underground Neutrino Observatory: a large underground scintillator detector whose physics (the neutrino mass ordering from reactor antineutrinos) rests on reconstructing per-event visible energy, vertex and time from the light a charged particle leaves in the scintillator — prompt Cherenkov light plus delayed scintillation light — collected by 17612 20-inch PMTs on a sphere of R = 19.37 m. Your job: reconstruct per-event energy, vertex and time from the digitized PMT waveforms — drive energy_res DOWN (lower is better; ties broken by vertex_res_cm, then timing_res_ns) while keeping the prediction contract valid. The task package benchmarks/electron_full/ carries the waveforms, the labeled train/val calibration splits, the instrument files (channel positions, PMT production-test nominal specifications) and the scorer. Every channel that pulsed in the window is digitized (zero-suppressed full readout; silent channels absent; wf_offsets/adc_pmt_ids map rows; t_run_s timestamps events in seconds from run start and nothing is guaranteed stationary). The editable surface is src/ only; the solver contract is `python3 src/solve.py --data <split-dir> --train <split-dir> --out <pred.npz>` writing E_rec, x_rec, y_rec, z_rec, t0_rec (t0 measured from window start; sample 0 = trigger time - 300 ns) — and it must also run on the test split, which carries no truth.\n\nCalibration on this population: the shipped baseline (src/solve.py, charge-centroid) scores energy_res~0.112, vertex_res_cm~584, timing_res_ns~5.9 on val (~0.123 / 627 cm / 6.1 ns on test). The SANITY floors (energy_res >= 0.5%, vertex >= 3 cm, timing >= 0.3 ns) reject val-truth copying; the judged score is the harness's held-out test replay, which a val-truth-dependent solver cannot game.",
+  "gate_block": "Only modify files under src/. The harness runs, in order:\n  - bash scripts/check_verify.sh   (VERIFY gate: the solver runs on val and emits a well-formed, in-range prediction npz)\n  - bash scripts/bench.sh          (objective: energy_res on the labeled val split, lower is better; also emits the SANITY gate token)\nA change is accepted only if VERIFY=PASS and SANITY=PASS; among accepted changes, lower energy_res wins, ties broken by vertex_res_cm then timing_res_ns. At the exit the harness re-runs your final solver on the held-out test split (no truth in-container) and scores it against truth you never see — dry-run on the test split yourself to be sure it runs there. python3 is 3.9 with numpy 2.0 only; /scratch is free space for generated datasets, fits and predictions. Both scripts can be run mid-research to measure progress; the harness re-measures from a pristine checkout of your final src/ at the exit.",
+  "editable_paths": [
+    "src"
+  ],
+  "base_sha": "FILL_BEFORE_RUNNING",
+  "node_id": "jrb-elec-node",
+  "episode_id": "jrb-full-elec-001",
+  "model": {
+    "api": "openai",
+    "model": "deepseek-v4-flash",
+    "base_url": "https://api.deepseek.com",
+    "api_key": "FILL_BEFORE_RUNNING",
+    "reasoning_effort": "low"
+  },
+  "assistant": {
+    "command": "claude",
+    "env": {
+      "ANTHROPIC_AUTH_TOKEN": "FILL_BEFORE_RUNNING",
+      "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"
+    }
+  },
+  "budget": {
+    "steps": 3000,
+    "wall_seconds": 604800,
+    "command_timeout_seconds": 3600,
+    "command_output_cap_chars": 40000,
+    "consult_timeout_seconds": 1800,
+    "work_default_minutes": 60,
+    "distill_word_cap": 1200,
+    "cognitive_timeout_seconds": 5400,
+    "seat_timeout_max_minutes": 480
+  }
+}

@@ -16,3 +16,9 @@ benchmarks/JunoResBench/data/jrb_electron_static/
 benchmarks/JunoResBench/blind_task_electron_static/
 benchmarks/JunoResBench/blind_truth_electron_static/
 benchmarks/JunoResBench/whitebox_task_electron_static/
+
+# jrb full-readout (electron_full) variants: same policy as _static
+benchmarks/JunoResBench/data/jrb_electron_full/
+benchmarks/JunoResBench/blind_task_electron_full/
+benchmarks/JunoResBench/blind_truth_electron_full/
+benchmarks/JunoResBench/whitebox_task_electron_full/

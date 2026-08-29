@@ -109,8 +109,8 @@ SEARCHER_TOOL = _fn(
     "Open work with a fresh Searcher colleague on a factual question about "
     "what is already known — literature, precedent, or the code in this "
     "world. They investigate independently and report sources, findings, "
-    "disagreements, and uncertainty. Returns a receipt; the report arrives "
-    "later.",
+    "disagreements, and uncertainty. The call runs to completion and "
+    "returns their report.",
     {
         "brief": {"type": "string"},
         "read": {"type": "string", "enum": ["none", "node", "lab"]},
@@ -118,9 +118,9 @@ SEARCHER_TOOL = _fn(
             "type": "array", "items": {"type": "string"},
         },
         "timeout_minutes": {
-            "type": "integer", "minimum": 1, "maximum": 180,
-            "description": "engagement time box; when omitted a short "
-                           "default applies",
+            "type": "integer", "minimum": 1, "maximum": 480,
+            "description": "engagement time box in minutes; when omitted the "
+                           "role default applies (searcher 30, proposer/challenger 90)",
         },
     },
     ["brief"],
@@ -142,9 +142,9 @@ PROPOSER_TOOL = _fn(
             "type": "array", "items": {"type": "string"},
         },
         "timeout_minutes": {
-            "type": "integer", "minimum": 1, "maximum": 180,
-            "description": "engagement time box; when omitted a short "
-                           "default applies",
+            "type": "integer", "minimum": 1, "maximum": 480,
+            "description": "engagement time box in minutes; when omitted the "
+                           "role default applies (searcher 30, proposer/challenger 90)",
         },
     },
     ["brief", "scope"],
@@ -164,7 +164,7 @@ EXECUTOR_TOOL = _fn(
             "type": "string", "enum": ["current", "isolated"],
         },
         "timeout_minutes": {
-            "type": "integer", "minimum": 1, "maximum": 180,
+            "type": "integer", "minimum": 1, "maximum": 480,
         },
     },
     ["brief", "definition_of_done"],
@@ -182,25 +182,13 @@ CHALLENGER_TOOL = _fn(
             "type": "array", "items": {"type": "string"},
         },
         "timeout_minutes": {
-            "type": "integer", "minimum": 1, "maximum": 180,
-            "description": "engagement time box; when omitted a short "
-                           "default applies",
+            "type": "integer", "minimum": 1, "maximum": 480,
+            "description": "engagement time box in minutes; when omitted the "
+                           "role default applies (searcher 30, proposer/challenger 90)",
         },
     },
     ["brief"],
 )
-
-WAIT_TOOL = _fn(
-    "wait",
-    "Block until the next collaborator report lands, or the given "
-    "seconds pass. An engagement that has not reported back is still "
-    "running; you will see its message the moment it lands. Use this when "
-    "the productive next move depends on running work and nothing else is "
-    "worth doing meanwhile.",
-    {"timeout_seconds": {"type": "integer", "minimum": 1}},
-    [],
-)
-
 
 REVISE_RESEARCH_JUDGMENT_TOOL = _fn(
     "revise_research_judgment",
@@ -350,7 +338,6 @@ NATIVE_TOOLS: tuple[dict, ...] = (
     PROPOSER_TOOL,
     EXECUTOR_TOOL,
     CHALLENGER_TOOL,
-    WAIT_TOOL,
     REVISE_RESEARCH_JUDGMENT_TOOL,
     NOTE_TOOL,
     READ_FILE_TOOL,
@@ -402,11 +389,10 @@ work with Searcher, Proposer, Executor, and Challenger. The functions are a
 communication mechanism; the collaborators are members of your research
 team.
 
-Opening an engagement returns a receipt immediately. The collaborator then
-works independently and reports back when the assignment is complete. You
-may open several engagements and keep reading, reasoning, or directing
-other work while they run. If your next decision depends on a running
-engagement and nothing else is worth doing meanwhile, wait for its report.
+A collaborator call runs the whole engagement — the colleague works
+through their investigation and the call returns with their attributable
+report. Opening several collaborator calls in one turn runs those
+engagements in parallel; they all return together before your next turn.
 
 Each engagement is handled by a fresh collaborator. They may work through a
 long internal trajectory of searching, reading, coding, debugging, or
@@ -446,10 +432,9 @@ NATIVE_PROTOCOL_BLOCK = """# Runtime Mechanics
   one turn; they run in order and each answer returns to you. Plain text
   alongside a call is your own trajectory note — not a substitute for
   acting.
-- An engagement receipt means the work is running. Its attributed report
-  arrives later as a message labelled with the call id; an engagement that
-  has not reported back is still running. wait blocks until the next
-  report lands.
+- A collaborator call returns when the engagement finishes; its result IS
+  the attributable report (a killed or crashed engagement returns a
+  salvaged partial report, marked as such).
 - revise_research_judgment replaces the judgment note in your active
   context in place; historical judgments are reachable only through the
   research-record channels.

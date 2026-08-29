@@ -84,9 +84,12 @@ def parse(pattern: str, text: str) -> str:
 def judge_test(workdir: Path, truth: Path, env: dict) -> dict:
     """Run the solver on the test split, score against the hidden truth."""
     bench = workdir / "benchmarks"
-    pkgs = sorted(bench.glob("whitebox_task_*")) if bench.is_dir() else []
+    # oracle templates ship whitebox_task_*; standard templates ship the
+    # neutral electron_full/ (mode words must not reach the agent)
+    pkgs = (sorted(bench.glob("whitebox_task_*"))
+            + sorted(bench.glob("electron_full"))) if bench.is_dir() else []
     if len(pkgs) != 1:
-        return {"error": f"expected one whitebox_task_* in {bench}, "
+        return {"error": f"expected one task package in {bench}, "
                          f"found {[p.name for p in pkgs]}"}
     pkg = pkgs[0]
     # dir-format splits (full-readout era) or legacy single npz files
@@ -146,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     base = args.base_repo.resolve()
     truth = args.truth.resolve()
     if not (base / "scripts" / "bench.sh").exists():
-        print(f"error: {base} is not the jrb whitebox repo", file=sys.stderr)
+        print(f"error: {base} is not a jrb task repo", file=sys.stderr)
         return 1
     # hardlink materialization needs a tempdir on the same filesystem as
     # the base repo (see materialize)

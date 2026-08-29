@@ -71,7 +71,17 @@ pmt_offsets (hit identity from waveforms) and ships t_run_s. train 600 ev / 2,96
 | blind_task_electron_full/val/adc.npy | a29590d4fa1c9613c7e162a2e16366dcef4e5cc72eadd747782d482d3f48cd53 |
 | blind_task_electron_full/test/data.npz | 5814ed755478946c399e9847096cac2ed89a1d618fd41db8fe62c2de7b3f4964 |
 | blind_task_electron_full/test/adc.npy | 78489a048b03a1527b16d1e8679751ef4dff9168c93264b21e40900dd1eb9034 |
+| blind_task_electron_full/pmt_positions.csv | 86b23690947e46974c89eae8a16b3a7bcb7649c38537e7613afb5013a0a78ab8 |
+| blind_task_electron_full/pmt_datasheet.md | 975cd146424278c67d1282321bac79d370e341fe22ded51de4cc35a6ce084861 |
 | blind_truth_electron_full/test_full.npz | 02587c10ec16b309616145d58aaff00ed76a6c7b2c0245294c879d2d89e2c2e0 |
+
+`pmt_positions.csv` was added 2026-08-28 for the standard mode (see
+docs/design/JRB-standard-oracle两模式定案.md): channel positions are instrument
+description, not mechanism — exported once from the package generator's
+`fibonacci_sphere(17612, 19.365)` layout. `pmt_datasheet.md` same day:
+type-level production-test nominal specifications (typicals around the
+generator's truth; per-channel spreads quoted as uniformity figures) —
+the as-run values are the calibration problem, not the sheet's business.
 | data/jrb_electron_full/data.npz | 84ac0159112b745ed867925abd7b11a2201edbe474dc0b746d9b1c5aeb99f11a |
 ### whitebox_task_electron/ — white-box variant (blind + generator source)
 

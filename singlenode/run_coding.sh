@@ -74,7 +74,7 @@ setsid nohup bash -c '
     source "$0/node_common.sh"
     ( sleep "${WALL}s"; kill -TERM -- -$$ 2>/dev/null ) &
     node_container claude -p --input-format text --output-format stream-json \
-        --verbose --allowedTools Read,Grep,Glob,Edit,Write,Bash \
+        --verbose --allowedTools Read,Grep,Glob,Edit,Write,Bash,WebSearch,WebFetch \
         < "$TASK_FILE" > "$RUN_DIR/trace.jsonl" 2>&1
     ' "$SINGLENODE_DIR" < /dev/null >> "$RUN_DIR/coding.log" 2>&1 &
 AGENT=$!
