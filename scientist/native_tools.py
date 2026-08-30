@@ -109,8 +109,8 @@ SEARCHER_TOOL = _fn(
     "Open work with a fresh Searcher colleague on a factual question about "
     "what is already known — literature, precedent, or the code in this "
     "world. They investigate independently and report sources, findings, "
-    "disagreements, and uncertainty. The call runs to completion and "
-    "returns their report.",
+    "disagreements, and uncertainty. The call returns an acknowledgment; "
+    "their report arrives as a later observation.",
     {
         "brief": {"type": "string"},
         "read": {"type": "string", "enum": ["none", "node", "lab"]},
