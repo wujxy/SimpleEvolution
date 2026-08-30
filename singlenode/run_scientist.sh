@@ -104,12 +104,50 @@ fi
 node_container python3 -m scientist.cli \
     --spec /spec.json --world /work --repo /repo --scratch /scratch --probe
 
-# detached run (scientist_container is a shell FUNCTION — the detached
-# call re-sources node_common.sh in a bash -c; nohup cannot exec functions)
-export RUN_DIR
-setsid nohup bash -c \
-    'source "$0/node_common.sh"; node_container python3 -m scientist.cli --spec /spec.json --world /work --repo /repo --scratch /scratch' \
-    "$SINGLENODE_DIR" < /dev/null >> "$RUN_DIR/run.log" 2>&1 &
+# detached run, SUPERVISED (the persistence contract's scheduler side):
+# on infra death (transport/model failure) the agent exits 1 with a
+# crashed conclusion; the supervisor moves that conclusion aside (cli
+# resumes only in its absence) and relaunches — the conversation
+# rebuilds from wire.jsonl. Non-infra crashes and unreadable exits are
+# left loudly for humans (never mask a real bug in a restart loop);
+# 5 consecutive quick crashes give up; a healthy attempt that ran
+# ≥10 min resets the crashloop counter. WALL is honored globally here —
+# each cli attempt sees a fresh spec wall, so this loop is the one
+# place the launch wall caps the whole span end-to-end.
+export RUN_DIR PY WALL
+setsid nohup bash -c '
+    source "$0/node_common.sh"
+    deadline=$(( $(date +%s) + ${WALL:-604800} ))
+    attempts=0
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        attempt_start=$(date +%s)
+        node_container python3 -m scientist.cli --spec /spec.json --world /work --repo /repo --scratch /scratch
+        rc=$?
+        [ "$rc" -eq 0 ] && exit 0
+        if [ $(( $(date +%s) - attempt_start )) -ge 600 ]; then
+            attempts=0   # ran healthy ≥10 min: not a crashloop
+        fi
+        attempts=$((attempts + 1))
+        conc="$RUN_DIR/world/.scientist/conclusion.json"
+        reason=$("$PY" -c "import json;print(json.load(open(\"$conc\"))[\"conclusion\"][\"reason\"])" 2>/dev/null || echo unreadable)
+        case "$reason" in
+            "model failure:"*) ;;
+            *)
+                echo "[supervisor] agent exited rc=$rc, crash not infra-class (reason: $reason) — leaving it for humans"
+                exit 1
+                ;;
+        esac
+        if [ "$attempts" -ge 5 ]; then
+            echo "[supervisor] giving up after $attempts quick crashes — crashed conclusion left in place"
+            exit 1
+        fi
+        mv "$conc" "$RUN_DIR/world/.scientist/conclusion.$(date +%m%d-%H%M%S).attempt$attempts.crashed.json"
+        delay=$((60 * attempts))
+        echo "[supervisor] infra crash (attempt $attempts, rc=$rc) — resuming from wire in ${delay}s"
+        sleep "$delay"
+    done
+    echo "[supervisor] launch WALL reached — stopping"
+' "$SINGLENODE_DIR" < /dev/null >> "$RUN_DIR/run.log" 2>&1 &
 AGENT=$!
 setsid nohup "$PY" "$REPO_ROOT/scripts/snapshot_world_loop.py" \
     --world "$RUN_DIR/world" --out "$RUN_DIR/snapshots" \

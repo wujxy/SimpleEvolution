@@ -153,7 +153,7 @@ class _RetryChatModel:
     a round. Subclasses implement ``_create`` (the provider call) and
     ``_to_reply`` (response -> ModelReply)."""
 
-    def __init__(self, *, max_retries: int = 4, retry_base_delay: float = 2.0):
+    def __init__(self, *, max_retries: int = 8, retry_base_delay: float = 2.0):
         self._max_retries = max_retries
         self._retry_base_delay = retry_base_delay
 

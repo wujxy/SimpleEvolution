@@ -65,7 +65,7 @@ class StdlibChatModel(_RetryChatModel):
         model: str,
         base_url: str,
         api_key: str,
-        max_retries: int = 4,
+        max_retries: int = 8,
         retry_base_delay: float = 2.0,
         reasoning_effort: str | None = None,
         max_output_tokens: int | None = None,

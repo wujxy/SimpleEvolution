@@ -24,6 +24,17 @@ import time
 from pathlib import Path
 
 
+def _is_final(conclusion: Path) -> bool:
+    """True unless the conclusion is a crash. A crashed conclusion is not
+    the end of the world: run_scientist.sh's supervisor auto-resumes from
+    wire.jsonl, so only deliver/abstain stop the sidecar. An unreadable
+    conclusion keeps the old existence-only behavior (stop)."""
+    try:
+        return json.loads(conclusion.read_text()).get("outcome") != "crashed"
+    except Exception:
+        return True
+
+
 def tree_state(src: Path) -> str:
     if not src.is_dir():
         return ""
@@ -58,6 +69,7 @@ def main(argv: list[str] | None = None) -> int:
     seq = max((int(p.name[4:]) for p in args.out.glob("seq-[0-9][0-9][0-9]")),
               default=0)
     last: str | None = None
+    crashed_noted = False
     t0 = time.monotonic()
     conclusion = args.world / ".scientist" / "conclusion.json"
 
@@ -83,11 +95,19 @@ def main(argv: list[str] | None = None) -> int:
         last = state
 
     while True:
-        if conclusion.exists():
-            print("[snapshot] conclusion.json present — final check, "
+        if conclusion.exists() and _is_final(conclusion):
+            print("[snapshot] final conclusion present — final check, "
                   "then stop", flush=True)
             take()
             break
+        if conclusion.exists() and not crashed_noted:
+            # crashed, not final: run_scientist.sh's supervisor may
+            # resume the run from wire.jsonl. Keep watching (bounded by
+            # --max-seconds; without a supervisor this branch costs
+            # nothing beyond this one note).
+            print("[snapshot] crashed conclusion present — supervisor "
+                  "may resume, keep watching", flush=True)
+            crashed_noted = True
         if time.monotonic() - t0 >= args.max_seconds:
             print("[snapshot] max-seconds reached — final check, "
                   "then stop", flush=True)
