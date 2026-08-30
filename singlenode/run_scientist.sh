@@ -90,6 +90,16 @@ fi
 
 node_scientist_env
 
+# --state reaches only CLIs that know it: a run frozen on older code (the
+# v6 package of an old-world control arm) predates the flag and would die
+# on argparse. Probe the frozen package, not the repo tree.
+if grep -q -- '--state' "$RUN_DIR/pkg/scientist/cli.py" 2>/dev/null; then
+    STATE_ARGS="--state /state"
+else
+    STATE_ARGS=""
+fi
+export STATE_ARGS
+
 # smoke gate (fail-closed), then optional stop. Skipped on RESUME: this
 # exact world already passed it once.
 if [ "$RESUMING" = 0 ]; then
@@ -102,7 +112,7 @@ fi
 
 # pre-flight probe: one model call through the real mounted world
 node_container python3 -m scientist.cli \
-    --spec /spec.json --world /work --repo /repo --scratch /scratch --state /state --probe
+    --spec /spec.json --world /work --repo /repo --scratch /scratch $STATE_ARGS --probe
 
 # detached run, SUPERVISED (the persistence contract's scheduler side):
 # on infra death (transport/model failure) the agent exits 1 with a
@@ -121,27 +131,33 @@ setsid nohup bash -c '
     attempts=0
     while [ "$(date +%s)" -lt "$deadline" ]; do
         attempt_start=$(date +%s)
-        node_container python3 -m scientist.cli --spec /spec.json --world /work --repo /repo --scratch /scratch --state /state
+        node_container python3 -m scientist.cli --spec /spec.json --world /work --repo /repo --scratch /scratch $STATE_ARGS
         rc=$?
         # Orphan sweep (three-zone world §3.3): seats are setsid-detached
-        # inside the container's pid namespace, so a dead agent can leave
+        # inside the container pid namespace, so a dead agent can leave
         # live seats mutating the world (observed: a 33-minute orphan whose
         # parting git stash ate the harness body). proc.pid records are
         # namespace pids — unusable host-side. Instead: every process whose
-        # mountinfo names THIS run's world bind is inside this run's
-        # container namespace; once the agent has exited, whatever remains
-        # there is an orphan. TERM, breathe, KILL.
-        for pid in $(ls /proc | grep -E '^[0-9]+$'); do
-            grep -qF "$RUN_DIR/world" "/proc/$pid/mountinfo" 2>/dev/null \
+        # mountinfo names THIS world bind is inside this container
+        # namespace; once the agent has exited, whatever remains there is
+        # an orphan. TERM, breathe, KILL.
+        # (quote discipline: the body of this -c script must contain zero
+        # single-quote characters — one such pair in a comment here once
+        # silently regrouped the command words and the supervisor never
+        # started. Glob, no grep.)
+        for proc in /proc/[0-9]*; do
+            grep -qF "$RUN_DIR/world" "$proc/mountinfo" 2>/dev/null \
                 || continue
+            pid=${proc#/proc/}
             echo "[supervisor] orphan sweep: TERM pid $pid"
             kill -TERM -- "-$pid" 2>/dev/null \
                 || kill -TERM "$pid" 2>/dev/null || true
         done
         sleep 3
-        for pid in $(ls /proc | grep -E '^[0-9]+$'); do
-            grep -qF "$RUN_DIR/world" "/proc/$pid/mountinfo" 2>/dev/null \
+        for proc in /proc/[0-9]*; do
+            grep -qF "$RUN_DIR/world" "$proc/mountinfo" 2>/dev/null \
                 || continue
+            pid=${proc#/proc/}
             kill -KILL -- "-$pid" 2>/dev/null \
                 || kill -KILL "$pid" 2>/dev/null || true
         done

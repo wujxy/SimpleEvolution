@@ -50,7 +50,10 @@ export NODE_IMAGE="$REPO_ROOT/examples/omilrec_opt/apptainer.sif"
 # delivered world (its git history is the handoff; no words needed)
 export NODE_TEMPLATE=${NODE_TEMPLATE:-"$REPO_ROOT/examples/omilrec_opt/repo"}
 export SPEC_TEMPLATE="$HERE/spec.json"
-export WORLD_RW="OMILRECV2/src .git build InstallArea TEMP"
+# overridable: a RESUME of a run frozen on pre-three-zone code needs the
+# legacy RW face (.scientist as a plain rw overlay) — its CLI writes there
+# directly and knows no /state channel.
+export WORLD_RW=${WORLD_RW:-"OMILRECV2/src .git build InstallArea TEMP"}
 export EXTRA_RO_BINDS="/cvmfs /data/juno/dingxf/OMILREC_maps /data/juno/dingxf/inputs"
 export SNAPSHOT_SUBDIR="OMILRECV2/src"
 export WALL=${WALL:-604800}
