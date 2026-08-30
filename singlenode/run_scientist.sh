@@ -18,12 +18,30 @@ PY=${PY:-/datafs/users/wujxy/py_venv/my_env/bin/python}
 
 node_unset_inherited_binds
 
+# RESUME=1 — the retry side of the persistence contract: re-enter a run
+# whose agent died on infra (the agent exits 1 with a crashed conclusion;
+# wire.jsonl is the single source of truth). Keeps world/wire/spec/pkg/
+# snapshots, skips every one-time step (template copy would nest inside
+# the existing world, pkg re-copy would nest inside pkg/), skips smoke
+# (this exact world already passed). The crashed conclusion is moved
+# aside — the snapshot loop watches conclusion.json as the exit signal,
+# and the new attempt writes its own when it concludes.
+RESUMING=0
 if [ -e "$RUN_DIR/run.log" ] || [ -d "$RUN_DIR/world" ]; then
-    if [ "${FORCE:-0}" != "1" ]; then
-        echo "refusing to overwrite existing run at $RUN_DIR (FORCE=1 to override)" >&2
+    if [ "${RESUME:-0}" = "1" ] && [ -f "$RUN_DIR/world/.scientist/session/wire.jsonl" ]; then
+        RESUMING=1
+        echo "RESUME=1 — reusing world/wire/spec/pkg in $RUN_DIR"
+        if [ -f "$RUN_DIR/world/.scientist/conclusion.json" ]; then
+            mv "$RUN_DIR/world/.scientist/conclusion.json" \
+               "$RUN_DIR/world/.scientist/conclusion.$(date +%m%d-%H%M%S).crashed.json"
+            echo "crashed conclusion moved aside (preserved as *.crashed.json)"
+        fi
+    elif [ "${FORCE:-0}" != "1" ]; then
+        echo "refusing to overwrite existing run at $RUN_DIR (FORCE=1 to override, RESUME=1 to re-enter after infra death)" >&2
         exit 1
+    else
+        rm -rf "$RUN_DIR/world" "$RUN_DIR/snapshots" "$RUN_DIR/run.log" "$RUN_DIR/pkg"
     fi
-    rm -rf "$RUN_DIR/world" "$RUN_DIR/snapshots" "$RUN_DIR/run.log" "$RUN_DIR/pkg"
 fi
 
 # ds runtime env for the assistant claude subprocesses (credentials —
@@ -32,11 +50,14 @@ set -a
 eval "$($PY -c 'import json,os;d=json.load(open(os.path.expanduser("~/.claude/settings_ds.json.backup")))["env"];[print(f"export {k}=\x27{v}\x27") for k,v in d.items()]')"
 set +a
 
-node_prepare_run_dir
+if [ "$RESUMING" = 0 ]; then
+    node_prepare_run_dir
+fi
 BASE_SHA=$(git -C "$RUN_DIR/world" rev-parse HEAD)
 
-# spec with live credentials (default recipe; SPEC_TEMPLATE overridable)
-$PY - "$SPEC_TEMPLATE" "$RUN_DIR/spec.json" "$BASE_SHA" <<'EOF'
+if [ "$RESUMING" = 0 ]; then
+    # spec with live credentials (default recipe; SPEC_TEMPLATE overridable)
+    $PY - "$SPEC_TEMPLATE" "$RUN_DIR/spec.json" "$BASE_SHA" <<'EOF'
 import json, os, sys
 spec = json.load(open(sys.argv[1]))
 tide = json.load(open("runs/tide-demo-1/spec.json"))
@@ -52,26 +73,31 @@ for key in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"):
 open(sys.argv[2], "w").write(
     json.dumps(spec, indent=2, ensure_ascii=False))
 EOF
-chmod 600 "$RUN_DIR/spec.json"
+    chmod 600 "$RUN_DIR/spec.json"
 
-# freeze the scientist package for this run (upgrade = re-copy)
-cp -a "$REPO_ROOT/scientist" "$RUN_DIR/pkg/scientist"
+    # freeze the scientist package for this run (upgrade = re-copy)
+    cp -a "$REPO_ROOT/scientist" "$RUN_DIR/pkg/scientist"
+fi
 
 # Task-specific one-time setup once the run dir, spec, and frozen package
 # all exist (e.g. the omilrec world pip-installs pytest into the run's
 # home for the cvmfs python its eval uses). Eval'd with node_container
-# available; empty for jrb/xsbench.
-if [ -n "${POST_PREPARE_HOOK:-}" ]; then
+# available; empty for jrb/xsbench. One-time by contract: skipped on
+# RESUME (already applied to this world).
+if [ "$RESUMING" = 0 ] && [ -n "${POST_PREPARE_HOOK:-}" ]; then
     eval "$POST_PREPARE_HOOK"
 fi
 
 node_scientist_env
 
-# smoke gate (fail-closed), then optional stop
-bash "$SINGLENODE_DIR/smoke.sh" "$RUN_DIR" "$BASE_SHA"
-if [ "${SMOKE_ONLY:-0}" = "1" ]; then
-    echo "SMOKE_ONLY=1 — stopping after smoke. run_dir=$RUN_DIR"
-    exit 0
+# smoke gate (fail-closed), then optional stop. Skipped on RESUME: this
+# exact world already passed it once.
+if [ "$RESUMING" = 0 ]; then
+    bash "$SINGLENODE_DIR/smoke.sh" "$RUN_DIR" "$BASE_SHA"
+    if [ "${SMOKE_ONLY:-0}" = "1" ]; then
+        echo "SMOKE_ONLY=1 — stopping after smoke. run_dir=$RUN_DIR"
+        exit 0
+    fi
 fi
 
 # pre-flight probe: one model call through the real mounted world

@@ -52,7 +52,11 @@ def main(argv: list[str] | None = None) -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     manifest = args.out / "manifest.jsonl"
 
-    seq = 0
+    # resume-friendly numbering: continue after the last existing seq-NNN
+    # so a relaunched loop (run_scientist.sh RESUME=1) appends instead of
+    # overwriting the crashed attempt's history.
+    seq = max((int(p.name[4:]) for p in args.out.glob("seq-[0-9][0-9][0-9]")),
+              default=0)
     last: str | None = None
     t0 = time.monotonic()
     conclusion = args.world / ".scientist" / "conclusion.json"
