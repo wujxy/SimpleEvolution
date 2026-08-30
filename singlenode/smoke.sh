@@ -43,6 +43,22 @@ S3_EDITABLE_RW=${S3_EDITABLE_RW:-'/work/src'}
 check S2-mounts "$S2_CHECK"
 check S3-erofs-frozen-side 'for p in '"$S3_FROZEN"'; do if : >> "$p" 2>/dev/null; then echo "UNEXPECTED WRITE SUCCEEDED: $p"; exit 1; fi; done; echo erofs-ok'
 check S3-erofs-editable-side 'for p in '"$S3_EDITABLE_RW"'; do : > "$p/.smoke_rw" && rm "$p/.smoke_rw"; done; echo rw-ok'
+# S3b — the harness body (three-zone world §3.1): read-only to every
+# actor, invisible to git, writable only through /state; and the blessed
+# clean-baseline path (git worktree) must function. This is the gate
+# form of the 2026-08-30 incident: a legitimate `git stash -u` must not
+# be able to take the body, and no accidental write may land on it.
+check S3b-body '
+  if : >> /work/.scientist/.smoke_probe 2>/dev/null; then
+      echo "BODY WRITE SUCCEEDED (expected read-only)"; exit 1; fi;
+  if git -C /work status --porcelain 2>/dev/null | grep -q "\.scientist"; then
+      echo "BODY VISIBLE TO GIT"; exit 1; fi;
+  if ! (: > /state/.smoke_probe && rm /state/.smoke_probe) 2>/dev/null; then
+      echo "STATE NOT WRITABLE"; exit 1; fi;
+  if ! (git -C /work worktree add /scratch/.smoke-wt HEAD >/dev/null 2>&1 \
+        && git -C /work worktree remove /scratch/.smoke-wt >/dev/null 2>&1); then
+      echo "WORKTREE ADD FAILED"; exit 1; fi;
+  echo body-ok'
 check S4-git '[ "$(git -C /work rev-parse HEAD)" = "'"$BASE_SHA"'" ] && git -C /work log --oneline -1 | grep -q . && git -C /work var GIT_COMMITTER_IDENT | grep -q "@"'
 check S5-model 'python3 - <<"PY"
 import json, urllib.request

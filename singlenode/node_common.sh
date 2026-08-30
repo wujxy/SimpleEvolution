@@ -31,7 +31,7 @@ node_unset_inherited_binds() {
 # single-src layout; a task with a nested editable surface plus its own
 # build outputs (omilrec: OMILRECV2/src + build/ InstallArea/ TEMP/)
 # overrides WORLD_RW in its launcher.
-WORLD_RW=${WORLD_RW:-src .scientist .git}
+WORLD_RW=${WORLD_RW:-src .git}
 # Extra read-only host mounts the task's eval needs (e.g. "/cvmfs
 # /data/juno/dingxf/OMILREC_maps" for the JUNO toolchain and bench maps).
 # Bind exactly what the eval reads — never a wider tree than necessary
@@ -61,6 +61,14 @@ node_container() {
     for p in $WORLD_RW; do
         rw_binds+=(--bind "$RUN_DIR/world/$p:/work/$p:rw")
     done
+    # The harness body's write channel (three-zone world): the same
+    # tree that /work/.scientist shows read-only through the base
+    # bind, mounted writable at /state for the scientist CLI alone.
+    # No actor prompt ever names /state; the read-only view is what
+    # accidental commands hit. docs/design/世界三区设计.md §3.1.
+    if [ -d "$RUN_DIR/world/.scientist" ]; then
+        rw_binds+=(--bind "$RUN_DIR/world/.scientist:/state:rw")
+    fi
     "${prefix[@]}" apptainer exec --cleanenv --no-eval --userns --containall \
         --no-mount cwd,home,hostfs --cwd /work \
         --bind "$RUN_DIR/world:/work:ro" \
@@ -107,10 +115,19 @@ node_prepare_run_dir() {
     mkdir -p "$RUN_DIR"/{scratch,snapshots,pkg,home} \
         "$RUN_DIR/scratch/claude-config"
     cp -a "$NODE_TEMPLATE" "$RUN_DIR/world"
+    # The harness body (.scientist) lives in the world but is invisible
+    # to git workflows — hygiene line written at prepare time so `git
+    # status` stays clean and `stash -u` never sweeps it. Hygiene, not
+    # law: the enforcement point is the read-only dual-bind (see
+    # docs/design/世界三区设计.md §3.1).
+    touch "$RUN_DIR/world/.gitignore"
+    grep -qx '\.scientist/' "$RUN_DIR/world/.gitignore" \
+        || printf '.scientist/\n' >> "$RUN_DIR/world/.gitignore"
     local p
     for p in $WORLD_RW; do
         mkdir -p "$RUN_DIR/world/$p"   # bind sources must exist
     done
+    mkdir -p "$RUN_DIR/world/.scientist"  # the body: /state bind source
     git_name=$(git config --global user.name || echo wujxy)
     git_mail=$(git config --global user.email || echo "wujxy@st.usst.edu.cn")
     printf '[user]\n\tname = %s\n\temail = %s\n' "$git_name" "$git_mail" \

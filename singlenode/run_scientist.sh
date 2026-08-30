@@ -102,7 +102,7 @@ fi
 
 # pre-flight probe: one model call through the real mounted world
 node_container python3 -m scientist.cli \
-    --spec /spec.json --world /work --repo /repo --scratch /scratch --probe
+    --spec /spec.json --world /work --repo /repo --scratch /scratch --state /state --probe
 
 # detached run, SUPERVISED (the persistence contract's scheduler side):
 # on infra death (transport/model failure) the agent exits 1 with a
@@ -121,8 +121,30 @@ setsid nohup bash -c '
     attempts=0
     while [ "$(date +%s)" -lt "$deadline" ]; do
         attempt_start=$(date +%s)
-        node_container python3 -m scientist.cli --spec /spec.json --world /work --repo /repo --scratch /scratch
+        node_container python3 -m scientist.cli --spec /spec.json --world /work --repo /repo --scratch /scratch --state /state
         rc=$?
+        # Orphan sweep (three-zone world §3.3): seats are setsid-detached
+        # inside the container's pid namespace, so a dead agent can leave
+        # live seats mutating the world (observed: a 33-minute orphan whose
+        # parting git stash ate the harness body). proc.pid records are
+        # namespace pids — unusable host-side. Instead: every process whose
+        # mountinfo names THIS run's world bind is inside this run's
+        # container namespace; once the agent has exited, whatever remains
+        # there is an orphan. TERM, breathe, KILL.
+        for pid in $(ls /proc | grep -E '^[0-9]+$'); do
+            grep -qF "$RUN_DIR/world" "/proc/$pid/mountinfo" 2>/dev/null \
+                || continue
+            echo "[supervisor] orphan sweep: TERM pid $pid"
+            kill -TERM -- "-$pid" 2>/dev/null \
+                || kill -TERM "$pid" 2>/dev/null || true
+        done
+        sleep 3
+        for pid in $(ls /proc | grep -E '^[0-9]+$'); do
+            grep -qF "$RUN_DIR/world" "/proc/$pid/mountinfo" 2>/dev/null \
+                || continue
+            kill -KILL -- "-$pid" 2>/dev/null \
+                || kill -KILL "$pid" 2>/dev/null || true
+        done
         [ "$rc" -eq 0 ] && exit 0
         if [ $(( $(date +%s) - attempt_start )) -ge 600 ]; then
             attempts=0   # ran healthy ≥10 min: not a crashloop

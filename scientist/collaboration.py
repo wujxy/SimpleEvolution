@@ -80,6 +80,14 @@ def build_collaboration_prompt(
         "attributable research report.",
         f"Research goal:\n{goal}",
         f"Hard constraints:\n{gate_block}",
+        "The workspace you run in is a bench of your own — a git "
+        "worktree where commits are how results accumulate. A "
+        "``.scientist/`` directory may sit in it: that is the run's "
+        "record as handed to you (memory, past reports); read it "
+        "freely. For a clean baseline or a comparison state, "
+        "``git worktree add`` a second checkout rather than "
+        "disturbing your own; what you produce leaves through your "
+        "closing report.",
         f"Engagement brief:\n{brief}",
     ]
     if selected_experiments:

@@ -169,6 +169,7 @@ def build_system_prompt(spec: dict, *, roots: dict | None = None) -> str:
     from .prompts import load_semantic
     team = load_semantic("research_team", None).strip()
     memory = load_semantic("research_memory", None).strip()
+    anatomy = load_semantic("world_anatomy", None).strip()
 
     world = _render_goal_block(
         goal=goal, editable=editable, base_sha=base_sha,
@@ -209,6 +210,7 @@ def build_system_prompt(spec: dict, *, roots: dict | None = None) -> str:
         memory,
         goal_and_constraints,
         current_world,
+        anatomy,
         NATIVE_RUNTIME_BLOCK,
         boundaries,
         research_records,

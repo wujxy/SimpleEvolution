@@ -1,17 +1,29 @@
-"""Read-only sidecar: freeze a world's editable surface (src/) into
-timestamped snapshot dirs while an agent works.
+"""Read-only sidecar: freeze a world's editable surface (src/) and the
+harness body (.scientist) into timestamped snapshot dirs while an agent
+works.
 
-One snapshot per DISTINCT src/ state (tree-hash dedup, checked every
-``--every`` seconds), so post-hoc replay through the frozen gates yields
-the agent's true speedup-vs-wallclock curve — independent of anything
-the agent claims. Read-only on the world; writes only under ``--out``.
+One snapshot per DISTINCT state (tree-hash dedup over src + body,
+checked every ``--every`` seconds), so post-hoc replay through the
+frozen gates yields the agent's true speedup-vs-wallclock curve —
+independent of anything the agent claims — and the body freeze makes
+any crash a minutes-scale loss for RESUME instead of a dead run (the
+wire is the replay source; it lives in the body). Read-only on the
+world; writes only under ``--out``.
+
+Body copy rules: seat stdout streams (raw.txt) are skipped — they are
+the large streams and the live transcripts live in the run's
+claude-config anyway — and any file over 2 MB is skipped; everything
+else (wire, session, memory, ledger, seat manifests/digests) is copied
+per-file with torn mid-write reads tolerated (the next tick re-freezes;
+wire is append-only JSONL whose torn tail a replay drops).
 
 Stops at ``--max-seconds`` or when the world's ``.scientist/
 conclusion.json`` appears (the scientist exit contract), whichever
 comes first — then takes one final snapshot if the state is new.
 
 Manifest: ``<out>/manifest.jsonl``, one line per snapshot:
-    {"seq": 1, "wall_offset_s": 63.2, "unix_ts": ..., "tree": "ab12..."}
+    {"seq": 1, "wall_offset_s": 63.2, "unix_ts": ..., "tree": "ab12...",
+     "body": "cd34..."}
 """
 from __future__ import annotations
 
@@ -22,6 +34,9 @@ import shutil
 import sys
 import time
 from pathlib import Path
+
+BODY_SKIP_NAMES = {"raw.txt"}
+BODY_MAX_BYTES = 2_000_000
 
 
 def _is_final(conclusion: Path) -> bool:
@@ -48,6 +63,44 @@ def tree_state(src: Path) -> str:
     return h.hexdigest()
 
 
+def body_state(body: Path) -> str:
+    """Hash the freezable body — same shape as tree_state, minus the
+    streams and oversized files the copy skips, so state and copy always
+    agree on what a snapshot holds."""
+    if not body.is_dir():
+        return ""
+    h = hashlib.sha256()
+    for p in sorted(body.rglob("*")):
+        if not p.is_file() or p.name in BODY_SKIP_NAMES:
+            continue
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        if st.st_size > BODY_MAX_BYTES:
+            continue
+        h.update(str(p.relative_to(body)).encode())
+        h.update(str(st.st_size).encode())
+        h.update(str(st.st_mtime_ns).encode())
+    return h.hexdigest()
+
+
+def copy_body(body: Path, dest: Path) -> None:
+    if not body.is_dir():
+        return
+    for p in sorted(body.rglob("*")):
+        if not p.is_file() or p.name in BODY_SKIP_NAMES:
+            continue
+        try:
+            if p.stat().st_size > BODY_MAX_BYTES:
+                continue
+            target = dest / p.relative_to(body)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, target)
+        except OSError:
+            continue  # torn/mid-write: the next tick re-freezes
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Sidecar src/ snapshotter for a lived-in world.")
@@ -60,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     src = args.world / args.subdir
+    body = args.world / ".scientist"
     args.out.mkdir(parents=True, exist_ok=True)
     manifest = args.out / "manifest.jsonl"
 
@@ -76,23 +130,27 @@ def main(argv: list[str] | None = None) -> int:
     def take() -> None:
         nonlocal seq, last
         state = tree_state(src)
-        if state == last:
+        bstate = body_state(body)
+        combined = f"{state}|{bstate}"
+        if combined == last:
             return
         seq += 1
         dest = args.out / f"seq-{seq:03d}"
         if dest.exists():  # never overwrite (restart safety)
             shutil.rmtree(dest)
         shutil.copytree(src, dest)
+        copy_body(body, dest / "body")
         with manifest.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({
                 "seq": seq,
                 "wall_offset_s": round(time.monotonic() - t0, 1),
                 "unix_ts": time.time(),
                 "tree": state[:16],
+                "body": bstate[:16],
             }) + "\n")
         print(f"[snapshot] seq={seq} t={time.monotonic() - t0:.0f}s",
               flush=True)
-        last = state
+        last = combined
 
     while True:
         if conclusion.exists() and _is_final(conclusion):

@@ -36,10 +36,21 @@ class LocalWorld:
         scratch: Path,
         timeout_seconds: int,
         cap_chars: int,
+        state: Path | None = None,
     ):
         self.work = Path(work)
         self.repo = Path(repo)
         self.scratch = Path(scratch)
+        # The harness body — wire, session, memory, assistant seats.
+        # The same tree as the world's .scientist by default; the
+        # three-zone world container bind-mounts that tree twice
+        # (read-only at /work/.scientist for actors to read their own
+        # record, writable at /state for the harness's organs alone).
+        # See docs/design/世界三区设计.md §3.
+        self.state_dir = (
+            Path(state) if state is not None
+            else self.work / ".scientist"
+        )
         self.boundary = PathBoundary(
             work=self.work, repo=self.repo, scratch=self.scratch,
         )

@@ -69,6 +69,10 @@ def _resolve_roots(args, spec: dict) -> dict:
                 paths.get("scratch")
                 or work / ".scientist" / "scratch").resolve()
         ),
+        "state": (
+            Path(args.state).resolve() if args.state else Path(
+                paths.get("state") or work / ".scientist").resolve()
+        ),
     }
 
 
@@ -113,8 +117,9 @@ def _run_probe(spec: dict, args) -> int:
         work=roots["work"], repo=roots["repo"], scratch=roots["scratch"],
         timeout_seconds=int(budget.get("command_timeout_seconds", 1800)),
         cap_chars=int(budget.get("command_output_cap_chars", 40000)),
+        state=roots["state"],
     )
-    ledger = LocalLedger(world.work / ".scientist")
+    ledger = LocalLedger(world.state_dir)
     assistant = InWorldAssistant(
         world=world, config=AssistantConfig.from_spec(spec),
         ledger=ledger, episode_id=spec.get("episode_id") or "probe",
@@ -159,6 +164,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="read-only repo root (default: the world)")
     parser.add_argument("--scratch", type=Path, default=None,
                         help="scratch root (default: world/.scientist/scratch)")
+    parser.add_argument("--state", type=Path, default=None,
+                        help="harness body root — wire/session/memory/"
+                             "assistant (default: world/.scientist; the "
+                             "three-zone container passes /state)")
     parser.add_argument("--session", type=Path, default=None,
                         help="session dir (default: world/.scientist/session)")
     parser.add_argument("--probe", action="store_true",
@@ -178,8 +187,9 @@ def main(argv: list[str] | None = None) -> int:
         work=roots["work"], repo=roots["repo"], scratch=roots["scratch"],
         timeout_seconds=int(budget.get("command_timeout_seconds", 1800)),
         cap_chars=int(budget.get("command_output_cap_chars", 40000)),
+        state=roots["state"],
     )
-    ledger_root = world.work / ".scientist"
+    ledger_root = world.state_dir
     ledger_root.mkdir(parents=True, exist_ok=True)
     roots["scratch"].mkdir(parents=True, exist_ok=True)
     ledger = LocalLedger(ledger_root)

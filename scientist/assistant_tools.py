@@ -310,7 +310,7 @@ class InWorldAssistant:
     # -- plumbing ----------------------------------------------------------
 
     def _base(self) -> Path:
-        return self.world.work / ".scientist" / "assistant"
+        return self.world.state_dir / "assistant"
 
     def _dir_of(self, call_id: str) -> Path:
         return self._base() / call_id
