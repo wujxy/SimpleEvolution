@@ -5,13 +5,29 @@ from pathlib import Path
 
 import pytest
 
-from scientist.ui.projector import RunProjector
-from scientist.ui.reader import RunLayout, RunReader
+from scientist.ui.projector import RunProjector, summarize_seat_record
+from scientist.ui.reader import (
+    ReaderBatch, RunLayout, RunReader, SourceRecord,
+)
 
 
 def _write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value), encoding="utf-8")
+
+
+def _seat_record(tmp_path: Path, offset: int, value: object) -> SourceRecord:
+    raw = (json.dumps(value) + "\n").encode()
+    return SourceRecord(
+        id=f"seat:executor-1:{offset}",
+        source="seat:executor-1",
+        path=tmp_path / "raw.txt",
+        offset=offset,
+        length=len(raw),
+        raw=raw,
+        value=value,
+        is_json=True,
+    )
 
 
 def test_projector_keeps_recovery_and_seat_truth_separate(run_fixture):
@@ -150,3 +166,115 @@ def test_large_initial_raw_history_is_indexed_progressively(run_fixture):
             break
 
     assert projector.snapshot()["indexing"] is False
+
+
+def test_bash_tool_summary_names_benchmark_without_running_it(tmp_path):
+    record = _seat_record(tmp_path, 10, {
+        "type": "assistant",
+        "message": {"content": [{
+            "type": "tool_use",
+            "id": "tool-1",
+            "name": "Bash",
+            "input": {
+                "command": "bash scripts/benchmark.sh --evtmax 10",
+            },
+        }]},
+    })
+
+    activity = summarize_seat_record(record)
+
+    assert activity["summary"] == "运行 benchmark.sh --evtmax 10"
+    assert activity["status"] == "running"
+    assert activity["tool_use_id"] == "tool-1"
+
+
+def test_tool_progress_and_result_update_one_activity(tmp_path):
+    records = [
+        _seat_record(tmp_path, 10, {
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use",
+                "id": "tool-1",
+                "name": "Bash",
+                "input": {"command": "pytest -q"},
+            }]},
+        }),
+        _seat_record(tmp_path, 20, {
+            "type": "tool_progress",
+            "tool_use_id": "tool-1",
+            "tool_name": "Bash",
+            "elapsed_time_seconds": 5,
+        }),
+        _seat_record(tmp_path, 30, {
+            "type": "tool_progress",
+            "tool_use_id": "tool-1",
+            "tool_name": "Bash",
+            "elapsed_time_seconds": 10,
+        }),
+        _seat_record(tmp_path, 40, {
+            "type": "user",
+            "message": {"content": [{
+                "type": "tool_result",
+                "tool_use_id": "tool-1",
+                "is_error": False,
+                "content": "16 passed",
+            }]},
+        }),
+    ]
+    projector = RunProjector({})
+
+    projector.apply(ReaderBatch(records, [], initial_index_complete=True))
+
+    activities = projector.snapshot()["seats"]["executor-1"]["activities"]
+    assert len(activities) == 1
+    assert activities[0]["summary"] == "运行 pytest -q"
+    assert activities[0]["status"] == "succeeded"
+    assert len(activities[0]["detail_refs"]) == 4
+
+
+def test_digest_stays_collaborator_testimony(run_fixture):
+    run_dir, scientist = run_fixture
+    seat = scientist / "assistant" / "searcher-ep-002"
+    _write_json(seat / "manifest.json", {
+        "role": "searcher", "collaborator_id": "searcher-ep-002",
+    })
+    _write_json(seat / "digest.json", {
+        "status": "done",
+        "report_digest": "virtual calls dominate",
+        "evidence": ["profile.txt"],
+        "uncertainty": "exact fraction unknown",
+    })
+    reader = RunReader(RunLayout.discover(run_dir))
+    projector = RunProjector(reader.layout.safe_metadata())
+
+    projector.apply(reader.poll())
+
+    report = projector.snapshot()["seats"]["searcher-ep-002"]["activities"][0]
+    assert report["kind"] == "report"
+    assert report["status"] == "collaborator_testimony"
+    assert report["uncertainty"] == "exact fraction unknown"
+
+
+def test_hostile_text_is_capped_plain_data_and_external_path_hidden(tmp_path):
+    payload = "<img src=x onerror=alert(1)>" + "x" * 1000
+    text_record = _seat_record(tmp_path, 10, {
+        "type": "assistant",
+        "message": {"content": [{"type": "text", "text": payload}]},
+    })
+    path_record = _seat_record(tmp_path, 20, {
+        "type": "assistant",
+        "message": {"content": [{
+            "type": "tool_use",
+            "id": "read-1",
+            "name": "Read",
+            "input": {"file_path": "/etc/private-key"},
+        }]},
+    })
+
+    text_activity = summarize_seat_record(text_record)
+    path_activity = summarize_seat_record(path_record)
+
+    assert text_activity["summary"].startswith("<img src=x")
+    assert len(text_activity["summary"]) <= 241
+    assert "/etc/private-key" not in path_activity["summary"]
+    assert path_activity["summary"] == "读取 private-key"

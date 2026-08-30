@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import copy
 import re
+import shlex
+from pathlib import Path
 
 from .reader import ReaderBatch, SourceRecord
 
@@ -18,6 +20,138 @@ _RUN_STATUS = {
 _SEAT_STATUS = {
     "done", "failed", "timeout-salvaged", "crash-salvaged", "unparsed",
 }
+_TOOL_LABELS = {
+    "Read": "读取",
+    "Grep": "搜索",
+    "Glob": "查找文件",
+    "Edit": "修改",
+    "Write": "写入",
+    "Bash": "运行",
+    "WebSearch": "检索网页",
+    "WebFetch": "读取网页",
+    "Task": "派出子任务",
+}
+_KNOWN_COMMANDS = {
+    "benchmark.sh", "quick_bench.sh", "sl_eval_v100.sh",
+    "pytest", "cmake", "make",
+}
+
+
+def _cap(text: object, limit: int = 240) -> str:
+    shown = str(text or "").strip().replace("\x00", "")
+    return shown if len(shown) <= limit else shown[:limit] + "…"
+
+
+def _safe_path(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "unknown path"
+    if text.startswith("/work/"):
+        return text[len("/work/"):]
+    if Path(text).is_absolute():
+        return Path(text).name
+    return text
+
+
+def _bash_summary(command: object) -> str:
+    first = str(command or "").strip().splitlines()[0] if command else ""
+    try:
+        tokens = shlex.split(first)
+    except ValueError:
+        tokens = first.split()
+    for index, token in enumerate(tokens):
+        name = Path(token).name
+        if name in _KNOWN_COMMANDS:
+            args = " ".join(tokens[index + 1:index + 5])
+            return f"运行 {name}" + (f" {args}" if args else "")
+    return "运行 " + _cap(first or "command", 160)
+
+
+def _tool_summary(name: str, inputs: dict) -> str:
+    if name == "Bash":
+        return _bash_summary(inputs.get("command"))
+    label = _TOOL_LABELS.get(name, name or "工具")
+    if name in {"Read", "Edit", "Write"}:
+        path = inputs.get("file_path") or inputs.get("path")
+        return f"{label} {_safe_path(path)}"
+    if name in {"Grep", "Glob"}:
+        pattern = _cap(inputs.get("pattern") or inputs.get("query"), 100)
+        root = _safe_path(inputs.get("path") or ".")
+        return f"{label} {pattern} · {root}"
+    if name in {"WebSearch", "WebFetch"}:
+        return f"{label} {_cap(inputs.get('query') or inputs.get('url'), 160)}"
+    return f"{label} {_cap(inputs.get('description') or '', 160)}".strip()
+
+
+def summarize_seat_record(
+    record: SourceRecord,
+) -> dict[str, object] | None:
+    """Return one conservative activity from a Claude stream event."""
+    value = record.value
+    if not isinstance(value, dict):
+        return None
+    event_type = value.get("type")
+    detail = f"detail:{record.id}"
+    if event_type == "assistant":
+        content = (value.get("message") or {}).get("content") or []
+        for chunk in content:
+            if not isinstance(chunk, dict):
+                continue
+            if chunk.get("type") == "tool_use":
+                tool_id = str(chunk.get("id") or record.id)
+                name = str(chunk.get("name") or "Tool")
+                inputs = (
+                    chunk.get("input")
+                    if isinstance(chunk.get("input"), dict) else {}
+                )
+                return {
+                    "id": f"activity:{record.id}:{tool_id}",
+                    "kind": "tool",
+                    "summary": _tool_summary(name, inputs),
+                    "status": "running",
+                    "tool_use_id": tool_id,
+                    "detail_refs": [detail],
+                    "sequence": record.offset,
+                }
+            if chunk.get("type") == "text" and str(
+                    chunk.get("text") or "").strip():
+                return {
+                    "id": f"activity:{record.id}",
+                    "kind": "intent",
+                    "summary": _cap(chunk.get("text")),
+                    "status": "stated",
+                    "tool_use_id": None,
+                    "detail_refs": [detail],
+                    "sequence": record.offset,
+                }
+    if event_type == "tool_progress":
+        tool_id = str(value.get("tool_use_id") or "")
+        return {
+            "id": f"activity:{record.id}",
+            "kind": "tool",
+            "summary": f"{value.get('tool_name') or '工具'} 仍在运行",
+            "status": "running",
+            "tool_use_id": tool_id or None,
+            "detail_refs": [detail],
+            "sequence": record.offset,
+        }
+    if event_type == "user":
+        content = (value.get("message") or {}).get("content") or []
+        for chunk in content:
+            if (isinstance(chunk, dict)
+                    and chunk.get("type") == "tool_result"):
+                tool_id = str(chunk.get("tool_use_id") or "")
+                return {
+                    "id": f"activity:{record.id}",
+                    "kind": "tool",
+                    "summary": "工具执行完成",
+                    "status": (
+                        "failed" if chunk.get("is_error") else "succeeded"),
+                    "tool_use_id": tool_id or None,
+                    "detail_refs": [detail],
+                    "sequence": record.offset,
+                }
+    return None
 
 
 class RunProjector:
@@ -43,6 +177,7 @@ class RunProjector:
         self._event_ids: set[str] = set()
         self._warning_keys: set[tuple[str, str]] = set()
         self._resume_pending = False
+        self._activity_tools: dict[tuple[str, str], dict[str, object]] = {}
 
     def snapshot(self) -> dict[str, object]:
         return copy.deepcopy(self._snapshot)
@@ -156,6 +291,19 @@ class RunProjector:
                 status if status in _SEAT_STATUS else "failed")
             seat["finished_at"] = value.get("finished_at")
             seat["report"] = value.get("report_digest")
+            seat["activities"].append({
+                "id": f"activity:{record.id}",
+                "kind": "report",
+                "summary": _cap(value.get("report_digest"), 1200),
+                "status": "collaborator_testimony",
+                "uncertainty": value.get("uncertainty"),
+                "evidence": (
+                    value.get("evidence")
+                    if isinstance(value.get("evidence"), list) else []
+                ),
+                "detail_refs": [detail],
+                "sequence": record.offset,
+            })
             self._event(
                 record.id, "seat_finished",
                 f"{seat['role']} {seat_id}: {seat['formal_status']}",
@@ -168,6 +316,27 @@ class RunProjector:
             self._event(
                 record.id, "seat_delivered",
                 f"{seat_id} report delivered to Scientist")
+            deltas.append({"type": "seat_updated",
+                           "data": {"collaborator_id": seat_id}})
+        elif source.startswith("seat:"):
+            seat_id = source.split(":", 1)[1]
+            seat = self._seat(seat_id)
+            activity = summarize_seat_record(record)
+            if activity is None:
+                return deltas
+            tool_id = activity.get("tool_use_id")
+            key = (seat_id, str(tool_id)) if tool_id else None
+            existing = self._activity_tools.get(key) if key else None
+            if existing is None:
+                seat["activities"].append(activity)
+                if key:
+                    self._activity_tools[key] = activity
+            else:
+                for ref in activity["detail_refs"]:
+                    if ref not in existing["detail_refs"]:
+                        existing["detail_refs"].append(ref)
+                if activity["status"] != "running":
+                    existing["status"] = activity["status"]
             deltas.append({"type": "seat_updated",
                            "data": {"collaborator_id": seat_id}})
         elif source == "research-state" and isinstance(record.value, dict):
