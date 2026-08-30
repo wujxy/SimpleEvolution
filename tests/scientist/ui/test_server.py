@@ -36,6 +36,11 @@ def get_json(url):
         return json.loads(response.read())
 
 
+def get_text(url):
+    with get_response(url) as response:
+        return response.read().decode("utf-8"), response.headers
+
+
 def test_snapshot_is_redacted_and_mutating_methods_are_rejected(run_fixture):
     run_dir, scientist = run_fixture
     (scientist / "session" / "wire.jsonl").write_text(
@@ -124,3 +129,25 @@ def test_cursor_from_previous_server_requires_fresh_snapshot(run_fixture):
     replay = observatory.events_after("delta-999")
 
     assert replay[0]["type"] == "snapshot_required"
+
+
+def test_frontend_has_required_regions_and_safe_rendering_contract(
+        run_fixture):
+    run_dir, _ = run_fixture
+    observatory = Observatory(RunLayout.discover(run_dir))
+    with running_server(observatory) as base_url:
+        html, headers = get_text(base_url + "/")
+        app, _ = get_text(base_url + "/static/app.js")
+        css, _ = get_text(base_url + "/static/style.css")
+
+    assert 'id="run-status"' in html
+    assert 'id="timeline"' in html
+    assert 'id="seats"' in html
+    assert 'id="details"' in html
+    assert "new EventSource('/api/stream')" in app
+    assert ".textContent" in app
+    assert ".innerHTML" not in app
+    assert "@media (max-width: 900px)" in css
+    assert headers["Content-Security-Policy"] == (
+        "default-src 'self'; connect-src 'self'; script-src 'self'; "
+        "style-src 'self'; object-src 'none'; base-uri 'none'")

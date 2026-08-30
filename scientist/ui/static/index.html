@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scientist Observatory</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header id="run-header" aria-live="polite">
+    <div class="eyebrow">
+      <span>SimpleEvolution</span>
+      <span id="connection-status" class="connection">连接中</span>
+    </div>
+    <h1 id="run-name">Scientist Observatory</h1>
+    <p id="run-goal" class="goal"></p>
+    <div id="run-status" class="status-strip"></div>
+    <div id="run-metrics" class="metrics"></div>
+  </header>
+
+  <section class="current" aria-labelledby="current-state-title">
+    <p class="section-label">CURRENT STATE</p>
+    <h2 id="current-state-title">Scientist 当前状态</h2>
+    <p id="current-state-text">等待快照</p>
+    <blockquote id="current-judgment"></blockquote>
+  </section>
+
+  <main>
+    <section class="panel timeline-panel" aria-labelledby="timeline-title">
+      <div class="panel-heading">
+        <div>
+          <p class="section-label">RESEARCH TRAJECTORY</p>
+          <h2 id="timeline-title">Scientist 时间线</h2>
+        </div>
+        <button id="new-activity" class="quiet-button" hidden>查看新活动</button>
+      </div>
+      <ol id="timeline"></ol>
+    </section>
+
+    <aside class="panel" aria-labelledby="seats-title">
+      <div class="panel-heading">
+        <div>
+          <p class="section-label">RESEARCH TEAM</p>
+          <h2 id="seats-title">协作者席位</h2>
+        </div>
+      </div>
+      <div id="seats"></div>
+    </aside>
+  </main>
+
+  <section class="panel details-panel" aria-labelledby="details-title">
+    <div class="panel-heading">
+      <div>
+        <p class="section-label">EVIDENCE</p>
+        <h2 id="details-title">活动详情</h2>
+      </div>
+    </div>
+    <div id="details">选择时间线事件或协作者活动以查看原始记录。</div>
+  </section>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

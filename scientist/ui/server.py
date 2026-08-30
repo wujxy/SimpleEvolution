@@ -6,6 +6,7 @@ import threading
 from collections import deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.resources import files
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .projector import RunProjector
@@ -145,6 +146,16 @@ def _handler_class():
         def _not_found(self) -> None:
             self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
+        def _static(self, name: str, content_type: str) -> None:
+            try:
+                body = files("scientist.ui").joinpath(
+                    "static", name).read_bytes()
+            except (FileNotFoundError, OSError):
+                self._not_found()
+                return
+            self._headers(HTTPStatus.OK, content_type, len(body))
+            self.wfile.write(body)
+
         def _method_not_allowed(self) -> None:
             body = b'{"error":"method not allowed"}'
             self.send_response(HTTPStatus.METHOD_NOT_ALLOWED)
@@ -163,6 +174,16 @@ def _handler_class():
 
         def do_GET(self) -> None:
             parsed = urlsplit(self.path)
+            if parsed.path == "/":
+                self._static("index.html", "text/html; charset=utf-8")
+                return
+            if parsed.path == "/static/app.js":
+                self._static(
+                    "app.js", "application/javascript; charset=utf-8")
+                return
+            if parsed.path == "/static/style.css":
+                self._static("style.css", "text/css; charset=utf-8")
+                return
             if parsed.path == "/api/snapshot":
                 self._json(self.server.observatory.snapshot())
                 return
