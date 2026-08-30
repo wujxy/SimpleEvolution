@@ -1,6 +1,6 @@
 # 席位制多 Proposer 设计（透镜席位 / Seat-based Proposers）
 
-状态：**已实现（v6）· smoke 首跑验收通过（见 §8）** · 实现于 2026-08-23
+状态：**已实现（v6）· 第八轮 v7 设计定案（并行与续用，见文末）· smoke 首跑验收通过（见 §8）** · 实现于 2026-08-23
 实现记录见 §9；验收脚本 `scripts/check_seat_v6.py`，smoke run
 `runs/seat-v6-smoke`（examples/xsbench_opt/task-supervisor-v6-smoke.yaml）。
 证据来源：runs/ablation-v5（旧架构验证 run，反面教材：树臂 1.66h 以 2 evals/
@@ -792,3 +792,139 @@ floor'(真) 被硬化成 'energy is done'(假)"；且自带新实验产出：occ
   proposer；同回合三席并行整批归位；零 salvage 零退回零异常；69 步
   4h49m。转移自校准：handover 自报 ±0.0022，val 0.0185→test 0.0203
   落带内。弱点：vertex 转移衰减（50.4→59.7），coding 33.8 仍领先。
+
+---
+
+## 第八轮（v7）：并行与续用——席位接口向「委托-信任」关系升级（2026-08-30 定案，待实现）
+
+### 动机与证据
+
+omilrec v1.0.0 双臂 run（runs/singlenode/omilrec-v100-r1）的效率解剖。
+coding 臂 4.8h 自判收笔于 3.67×；sci 臂同窗只到 2.07×（后 2.30×）。墙钟
+去向五项：席位内循环（全量 `cmake --fresh` 重建 1-2min/次）、**席位串行**
+（一个 2h 盒，PI 回合被同步劫持）、每席位重新定向（重读 5k 行源码）、勘察
+期无界搜索（66min cvmfs 爬行）、官方 eval 5-8min。方法学判定（讨论定案）
+：非无效脑暴——记忆账本 R1-R18 零重复、家族级证伪（一次实验关掉一整族）、
+机理级否定（非单调性诊断 Minuit 盆地切换）；**慢在串行与管理成本，不在
+搜索质量**。设计目标因此是消等待与重学，一字不动验证严格度。
+
+### 北极星（用户定案）
+
+**sci 与席位的关系，尽可能模拟用户本人用 Claude 的方法**：可以开更多
+claude 并行；可以重开窗口 resume 并告诉它"之前我改了什么"；材料放那
+席位自己会查。协调走世界（文件/git），不走 harness 消息通道——与
+"Evidence & World 不动只被引用"同根。
+
+深层理由（接口即教学）：PI 预训练里读过海量人类管理 Claude 的交互，
+委托-信任的管理能力是现成的；接口讲它熟悉的语言，能力免费到账。现接口
+（发简报→同步等报告→串行）教的是**工单队列**——PI 不并行的根因不只是
+缺杠杆，是接口在教一种更穷的关系。
+
+### 六条原则（宪法条款）
+
+1. **harness 零内容**：不自动附变更单、不替 PI 排程、不裁决哪个 fork
+   的活进主线。简报质量是 PI 的手艺：坏简报→席位验证失败→gate 拒→
+   PI 学乖——损害被第一性基础设施（gate+冻结基准）封顶。
+2. **一个世界一个写者**：并行 executor 全走 fork；主世界永远只有 PI
+   一双手。
+3. **新鲜感分工**：executor 可续用（craft 累积是纯收益）；
+   challenger/reviewer 永不续用（独立视角是其认识论价值，续用=带前见
+   审查）。
+4. **聆听是专门的认知行为**：reviewer 同步串行。用户原话：要认真聆阅
+   阅卷，不能交头接耳——若 reviewer 报告混进异步事件流，"听"会退化成
+   扫一眼摘要放行，listen-before-deliver 的门空转。专注写进身份层，
+   **不设 harness 闸**（执法化会把聆听做成打卡）。
+5. **效率=第二性**：只在第一性（研究可靠性）留下的自由度内起作用——
+   并行独立验证合法，砍验证是背叛。立在场外 prompt 身份层，不在
+   harness。
+6. **harness 只造杠杆**：异步机制、resume 管道、fork 卫生、核隔离——
+   纯环境，零判断。
+
+### 映射表（用户↔Claude ⇒ PI↔席位）
+
+| 用户与 Claude | v7 对应 | 机械结构 |
+|---|---|---|
+| 派后台子代理，不阻塞，完成时通知 | engage 异步化 | dispatch 立即返回句柄；报告作为完成观察落在 PI 后续回合；一次可派多个 |
+| SendMessage 续接子代理（上下文保留） | continue_engagement | `claude -p --resume <session-id>` 原生支持；session_id 存 engagement 记录 |
+| 子代理只回终报，全 transcript 可查不默认进上下文 | digest + raw.txt 指针 | 已如此——并行化后这是防报告洪水的关键 |
+| 多窗/worktree，协调走 git | 并行 executor 走 fork | fork=worktree 模式语义（§3.3） |
+| "我改了 X"由用户说，其余 Claude 自查 | 变更简报 PI 写；席位自审 | 零 harness 内容；世界带 .git |
+| Compact 后靠摘要+memory+重读世界恢复 | PI 靠 wire resume；席位靠 continue | 与持久化契约对称闭环 |
+| Monitor 盯世界，事件推送 | 席位完成即事件 | 回合头部一行席位状态（running/idle），环境信息非判断 |
+
+### 三件机械改动
+
+**3.1 非阻塞 dispatch（最大件）**。现状 engage 在工具调用内同步跑满
+盒子，PI 回合被劫持 2h。改为 fire-and-return：句柄立即到手，PI 继续想
+自己的（其 bash 实验在主世界照跑——委托后继续想，这才是 PI 的工作
+方式）；完成报告作为观察事件落在后续回合。全角色适用，**唯 reviewer
+同步**（宪法 4）。并发完成互不阻塞；digest 仍为默认回传面。
+
+**3.2 continue_engagement（executor 专属）**。`claude -p --resume
+<session-id> "<PI 的消息>"`：会话库按 cwd+config 派生，席位 side_dir
+与 CLAUDE_CONFIG_DIR 均 run 级持久，原样传回即续用。resume 之后发生
+什么全在 PI 的消息里——变更简报（"你走后世界改了这些"+下一步）是 PI
+写，席位也可自行 `git log/diff` 审查。工程要点：session_id 已在席位
+stream-json 每行里，存 engagement 记录即可；实现时验一次同 cwd/config
+的 resume 匹配。**v7 只给已完成席位的续用**；对运行中席位中途改指令
+（SendMessage 对运行者语义）风险加倍，留 v8。
+
+**3.3 fork 并行 + 报告带补丁**。fork 语义=worktree 模式：隔离可写副本、
+独立实验、经世界自己的 git 合并回。v7 机械形态保持整树 copy（修正案
+的 `_fork_world`：小树真复制+数据符号链接）；git 纪律定死——**fork 在
+自己副本上提交，报告附 `git diff`/HEAD，PI 手 apply、PI 手重验**。合并
+是研究决策，harness 不碰。此任务域合并语义干净（bit-exact 改动天然
+可组合：各自保输出则联合保输出，文本合并+一次全量验）。防互污：bench
+用 TASKSET 钉不交叠核段（两臂对 pin 的机制已存在），构建/验 gate 阶段
+随便并行。真 git worktree 化（共享对象库、fork 更轻）留作磁盘/时延成
+真问题时的一步——语义不变，形态可换。
+
+### 身份层措辞（prompt 变更点，落笔在实现轮）
+
+- 效率第二性的精确画线："可靠性第一，效率第二；并行独立验证是效率，
+  砍验证是对第一性的背叛。"
+- 阅卷时刻的专注："reviewer 阅卷时你在听，别的都不做；听完消化完再动。"
+- 委托模式："独立假设各派一个 fork 席位并发去验；等结果的时间是你
+  自己的。"
+- 续用简报手艺："续用老席位时，告诉它世界自它离开后变了什么。"
+
+### 不做的（划界）
+
+- 上下文继承席位（fork subagent 型分身）——PI 的 bash 就是它自己的手；
+- harness 生成的任何简报/排程/裁决/变更单；
+- reviewer/challenger 的并行与续用；
+- 运行中席位的中途改指令（v8 再议）；
+- 真 worktree 化（触发条件再动）。
+
+### 铺垫件（正交，随时可落）
+
+ccache 进容器（席位内循环重建降 3-5×）；任务仓库 `--suite fcn` 单套件
+快验（~2min，两臂同权——基准工具面非喂饭，中间态快验+提交档全量的
+quick/acceptance 二分）；cvmfs 遮蔽 EXTRA_MASK_BINDS（杀暴露面+无界
+爬行双收益）。
+
+### 验证计划
+
+1. 假 claude 脚本（fake-claude 模式）：异步 dispatch 不孤儿、并发
+   完成各自回执、continue 真传 `--resume` 旗标（argv 断言）、fork
+   期间主世界零写入、报告带 diff 工件；
+2. 回归：同步路径、salvage、GC、listen-before-deliver 门在并行世界
+   不弱化（审后改动必重听仍有效）；
+3. live 探针：一回合双 executor 并行 + 一例 continue 续用；
+4. 真 run 对照（同任务重跑或下任务域）。
+
+### 与既有轮次的关系
+
+- 第七轮 listen-before-deliver：reviewer 同步保留、`reviewer_heard_
+  after(last_src_write)` 不动——并行化不碰这扇门；
+- 修正案 fork 机制：v7 直接复用 `_fork_world`，只加"报告带补丁"契约；
+- 持久化契约：席位级 continue 与 PI 级 wire resume 对称闭环；
+- 研究记忆层：席位继续精确携带 research_memory.jsonl（P4 指给看不
+  喂饭，不变）。
+
+### 讨论 provenance
+
+本会话（omilrec run 盯守期间的三轮设计对话）：效率解剖与五杠杆提案；
+"无效脑暴还是有效但慢"的轨迹判定；北极星定案（用户：模拟我本人用
+claude 的方法）与三问三答（异步范围/resume 原生性+fork=worktree/
+reviewer 同步聆听）；否定"harness 自动附变更单"（喂饭的体面姿势）。
