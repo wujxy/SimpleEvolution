@@ -30,6 +30,32 @@ def _objective_experiments(experiments: list[dict]) -> str:
     ])
 
 
+# The closing report contract every engagement ends with. Shared by the
+# fresh-seat prompt and the continuation prompt — a resumed session gets
+# it restated so the final fenced JSON stays anchored.
+_CLOSING_CONTRACT = (
+    "Your private trajectory is not the Scientist's memory. Close the "
+    "engagement with a concise report of conclusions, evidence, "
+    "artifacts, uncertainty, and recommended follow-up, as the FINAL "
+    "message, in exactly this fenced JSON block — the harness reads "
+    "these fields and delivers them to the Scientist; prose outside "
+    "the block is archived but not delivered:\n"
+    "```json\n"
+    "{\n"
+    '  "report_digest": "<the report: what you established, with the '
+    'numbers>",\n'
+    '  "diff_summary": "<files changed in your workspace, if any; for '
+    'fork work: the commit range or diff against the base>",\n'
+    '  "metrics": {"<name>": "<value with units>"},\n'
+    '  "evidence": ["<what backs each claim: run, file, source>"],\n'
+    '  "artifacts": ["<paths this engagement produced>"],\n'
+    '  "uncertainty": "<what remains uncertain>",\n'
+    '  "recommended_follow_up": "<the single most valuable next step>"\n'
+    "}\n"
+    "```"
+)
+
+
 def build_collaboration_prompt(
     role: str,
     action: dict,
@@ -119,25 +145,42 @@ def build_collaboration_prompt(
         if not done:
             raise ValueError("executor.definition_of_done must be non-empty")
         sections.append(f"Definition of done:\n{done}")
+        if str(action.get("workspace") or "current") == "isolated":
+            sections.append(
+                "Workspace discipline: this engagement runs in a disposable "
+                "copy of the world with its own copy of the git history. "
+                "Commit your work in that copy as you go, and report the "
+                "change in ``diff_summary`` as the diff or commit range "
+                "(HEAD against the base) — the Scientist applies and "
+                "re-verifies it in the live world themselves."
+            )
 
-    sections.append(
-        "Your private trajectory is not the Scientist's memory. Close the "
-        "engagement with a concise report of conclusions, evidence, "
-        "artifacts, uncertainty, and recommended follow-up, as the FINAL "
-        "message, in exactly this fenced JSON block — the harness reads "
-        "these fields and delivers them to the Scientist; prose outside "
-        "the block is archived but not delivered:\n"
-        "```json\n"
-        "{\n"
-        '  "report_digest": "<the report: what you established, with the '
-        'numbers>",\n'
-        '  "diff_summary": "<files changed in your workspace, if any>",\n'
-        '  "metrics": {"<name>": "<value with units>"},\n'
-        '  "evidence": ["<what backs each claim: run, file, source>"],\n'
-        '  "artifacts": ["<paths this engagement produced>"],\n'
-        '  "uncertainty": "<what remains uncertain>",\n'
-        '  "recommended_follow_up": "<the single most valuable next step>"\n'
-        "}\n"
-        "```"
-    )
+    sections.append(_CLOSING_CONTRACT)
+    return "\n\n".join(sections)
+
+
+def build_continuation_prompt(action: dict) -> str:
+    """Render the brief for resuming a finished Executor engagement.
+
+    The resumed session already carries its own context — the codebase it
+    read, the experiments it ran, the craft it accumulated. What it does
+    not carry is anything that happened since; that is the PI's brief to
+    write (the harness supplies none of it).
+    """
+    brief = str(action.get("brief") or "").strip()
+    if not brief:
+        raise ValueError("continue_engagement.brief must be non-empty")
+    done = str(action.get("definition_of_done") or "").strip()
+    if not done:
+        raise ValueError("continue_engagement.definition_of_done must be "
+                         "non-empty")
+    sections = [
+        "You are the same Executor collaborator, resumed: this engagement "
+        "continues your prior session in your existing workspace — your "
+        "context and your work are where you left them. What changed in "
+        "the world since you worked is in the brief below.",
+        f"Engagement brief:\n{brief}",
+        f"Definition of done:\n{done}",
+        _CLOSING_CONTRACT,
+    ]
     return "\n\n".join(sections)

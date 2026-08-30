@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import time
 import urllib.error
 from pathlib import Path
 
@@ -425,9 +426,11 @@ def test_engagements_run_sequentially_and_leave_nothing_running(
 
 def test_seat_report_is_its_own_tool_result(tmp_path: Path):
     """The sync-era wire invariant (demo-2's death was a report landing
-    as a user message between tool_calls and its result): a seat's
-    report arrives as the tool result of its OWN call, immediately
-    adjacent, and the next model call sees exactly that."""
+    as a user message between tool_calls and its result) — now carried by
+    the one seat that stays synchronous: a REVIEWER's report arrives as
+    the tool result of its OWN call, immediately adjacent, and the next
+    model call sees exactly that. (Async seats' reports arrive at turn
+    tops — see the drain tests.)"""
     from scientist.agent import run_episode
     from scientist.assistant_tools import AssistantConfig, InWorldAssistant
     from scientist.model import ModelReply, ToolCall
@@ -451,9 +454,8 @@ def test_seat_report_is_its_own_tool_result(tmp_path: Path):
             self.turn += 1
             if self.turn == 1:
                 return ModelReply(text="dispatch", tool_calls=(
-                    ToolCall(id="c1", name="executor", arguments={
+                    ToolCall(id="c1", name="reviewer", arguments={
                         "brief": "instrument",
-                        "definition_of_done": "report the result",
                     }),))
             return ModelReply(text="stop", tool_calls=(
                 ToolCall(id="c2", name="abstain",
@@ -472,11 +474,11 @@ def test_seat_report_is_its_own_tool_result(tmp_path: Path):
     after_dispatch = model.seen[1]
     idx = next(i for i, m in enumerate(after_dispatch)
                if m.get("role") == "assistant" and m.get("tool_calls")
-               and m["tool_calls"][0]["function"]["name"] == "executor")
+               and m["tool_calls"][0]["function"]["name"] == "reviewer")
     result_msg = after_dispatch[idx + 1]
     assert result_msg["role"] == "tool", (
-        "the seat report did not arrive as the executor call's own tool "
-        "result")
+        "the reviewer report did not arrive as the reviewer call's own "
+        "tool result")
     assert result_msg["tool_call_id"] == "c1"
     assert "Research collaborator report" in result_msg["content"]
     assert "ran benches" in result_msg["content"]
@@ -580,6 +582,12 @@ def test_reconcile_harvests_orphaned_seat_on_startup(tmp_path: Path):
         '{"type": "assistant", "message": {"content": '
         '[{"type": "text", "text": "partial diagnosis in hand"}]}}\n',
         encoding="utf-8")
+    # v7: the engagement directory is born at launch — manifest first
+    (orphan_dir / "manifest.json").write_text(json.dumps({
+        "role": "executor", "collaborator_id": "executor-t-007",
+        "box": 60, "started": time.time(), "work_dir": str(world.work),
+        "side_dir": None, "mode": "current", "brief": "b",
+    }), encoding="utf-8")
 
     InWorldAssistant(
         world=world,
@@ -748,3 +756,551 @@ def test_stdlib_model_http_error_carries_status(monkeypatch):
         model.complete(system="s", messages=[], timeout_seconds=5)
     assert excinfo.value.status_code == 503
     assert _is_transient(excinfo.value)
+
+
+# --- v7: the engagement is a directory; async dispatch + continuation -------
+
+def _slow_claude(tmp_path: Path, seconds: float,
+                 name: str = "fake_claude_slow.sh") -> Path:
+    """A fake seat that finishes after ``seconds`` — long enough to span
+    a model call, short enough for tests."""
+    event = {
+        "type": "result",
+        "result": "did the work\n```json\n"
+                  '{"diff_summary": "changed a.c", '
+                  '"self_report_digest": "ran benches", '
+                  '"metrics": {"speed": 2}}\n```',
+        "usage": {"total_tokens": 7},
+    }
+    script = tmp_path / name
+    script.write_text(
+        "#!/bin/sh\ncat >/dev/null\n"
+        f"sleep {seconds}\n"
+        "cat <<'JSONLINE'\n" + json.dumps(event) + "\nJSONLINE\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script
+
+
+def _session_claude(tmp_path: Path) -> Path:
+    """A fake seat that emits an init line carrying a session_id, prints
+    the standard result, and records its argv and cwd to $SEAT_OUT —
+    the assertion surface for --resume and workspace reuse."""
+    init = {"type": "system", "subtype": "init",
+            "session_id": "sess-abc-123"}
+    event = {
+        "type": "result",
+        "result": "did the work\n```json\n"
+                  '{"diff_summary": "changed a.c", '
+                  '"self_report_digest": "ran benches", '
+                  '"metrics": {"speed": 2}}\n```',
+        "usage": {"total_tokens": 7},
+    }
+    script = tmp_path / "fake_claude_session.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        'cat > /dev/null\n'
+        'printf \'%s\\n\' ' + json.dumps(json.dumps(init)) + '\n'
+        'printf \'%s\\n\' "$@" > "${SEAT_OUT}/argv.txt"\n'
+        'printf \'%s\\n\' "$PWD" > "${SEAT_OUT}/pwd.txt"\n'
+        'cat <<\'JSONLINE\'\n' + json.dumps(event) + "\nJSONLINE\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script
+
+
+def _sleeper_claude(tmp_path: Path) -> Path:
+    """A fake seat that emits its init line, one substantive assistant
+    event, then sleeps past any test — the occupant for time-box and
+    exit-salvage paths."""
+    init = {"type": "system", "subtype": "init",
+            "session_id": "sess-sleeper-1"}
+    assistant_event = {
+        "type": "assistant",
+        "message": {"content": [
+            {"type": "text", "text": "partial diagnosis in hand"}]},
+    }
+    script = tmp_path / "fake_claude_sleeper.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        'cat > /dev/null\n'
+        'printf \'%s\\n\' ' + json.dumps(json.dumps(init)) + '\n'
+        'printf \'%s\\n\' ' + json.dumps(json.dumps(assistant_event)) + '\n'
+        'sleep 30\n',
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script
+
+
+def test_launch_writes_manifest_and_prompt_immediately(tmp_path: Path):
+    """The engagement directory is BORN at launch: manifest (with the
+    box and workspace), prompt, and pid exist before any collection;
+    there is no digest yet — the state machine is file existence."""
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_sleeper_claude(tmp_path)),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+    ack = assistant.engage_async("executor", {
+        "brief": "b", "definition_of_done": "d"})
+    assert ack["ok"] and ack["status"] == "running"
+    d = world.work / ".scientist" / "assistant" / ack["collaborator_id"]
+    mani = json.loads((d / "manifest.json").read_text())
+    assert mani["role"] == "executor" and mani["box"] == 60
+    assert (d / "prompt.txt").exists() and (d / "proc.pid").exists()
+    assert not (d / "digest.json").exists()
+    rows = assistant.pending()
+    assert [r["collaborator_id"] for r in rows] == [ack["collaborator_id"]]
+    assistant.shutdown_pending()
+
+
+def test_async_engagement_completes_later_and_leaves_no_orphans(
+        tmp_path: Path):
+    """Fire-and-return: the ack comes back at once; the report arrives
+    through poll_completions once the seat finishes; nothing is left
+    running and the ledger carries the call."""
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_slow_claude(tmp_path, 0.4)),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+    ack = assistant.engage_async("executor", {
+        "brief": "b", "definition_of_done": "d"})
+    assert ack["status"] == "running"
+    assert assistant.poll_completions() == []
+    time.sleep(0.8)
+    reports = assistant.poll_completions()
+    assert len(reports) == 1
+    assert reports[0]["status"] == "done"
+    assert reports[0]["self_report_digest"] == "ran benches"
+    d = world.work / ".scientist" / "assistant" / ack["collaborator_id"]
+    digest = json.loads((d / "digest.json").read_text())
+    assert digest["status"] == "done"
+    assert not (d / "proc.pid").exists()
+    # exactly-once: the marker is down, a second poll has nothing
+    assert assistant.poll_completions() == []
+    assert (d / "read.marker").exists()
+
+
+def test_two_concurrent_async_seats_and_wait_returns_both(tmp_path: Path):
+    """Independent seats run concurrently; wait blocks until both finish
+    and returns their reports together."""
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_slow_claude(tmp_path, 0.4)),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+    ack1 = assistant.engage_async("executor", {
+        "brief": "b1", "definition_of_done": "d"})
+    ack2 = assistant.engage_async("proposer", {"brief": "b2",
+                                               "scope": "open"})
+    assert ack1["collaborator_id"] != ack2["collaborator_id"]
+    assert len(assistant.pending()) == 2
+    result = assistant.wait_for_seats()
+    assert result["ok"] and result["still_running"] == []
+    ids = sorted(r["collaborator_id"] for r in result["finished"])
+    assert ids == sorted([ack1["collaborator_id"],
+                          ack2["collaborator_id"]])
+
+
+def test_wait_with_nothing_pending_returns_immediately(tmp_path: Path):
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_fake_claude(tmp_path)),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+    t0 = time.monotonic()
+    result = assistant.wait_for_seats()
+    assert result["finished"] == [] and result["still_running"] == []
+    assert "no engagement pending" in result.get("note", "")
+    assert time.monotonic() - t0 < 2.0
+
+
+def test_async_timeout_salvage_via_sweep(tmp_path: Path):
+    """The box is enforced by sweep: a seat past its box is killed and
+    collected as timeout-salvaged, with the status a FIELD in the digest
+    and the session id already captured from the init line."""
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_sleeper_claude(tmp_path)),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+    ack = assistant.engage_async("executor", {
+        "brief": "b", "definition_of_done": "d"})
+    d = world.work / ".scientist" / "assistant" / ack["collaborator_id"]
+    # let the seat flush its events before forcing the box to expiry
+    # (killing faster than the shell prints would salvage nothing)
+    for _ in range(100):
+        try:
+            if "partial diagnosis" in (d / "raw.txt").read_text():
+                break
+        except OSError:
+            pass
+        time.sleep(0.05)
+    mani = json.loads((d / "manifest.json").read_text())
+    mani["box"] = 0          # white-box: the box is spent
+    (d / "manifest.json").write_text(json.dumps(mani))
+    reports = assistant.sweep()
+    assert len(reports) == 1
+    assert reports[0]["status"] == "timeout-salvaged"
+    digest = json.loads((d / "digest.json").read_text())
+    assert digest["status"] == "timeout-salvaged"
+    assert digest["session_id"] == "sess-sleeper-1"
+    assert not (d / "proc.pid").exists()
+
+
+def test_episode_exit_salvages_pending_seats(tmp_path: Path):
+    """Episode exit leaves nothing running: a pending seat is killed,
+    crash-salvaged, and its report lands in the wire as the last word."""
+    from scientist.agent import run_episode
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+    from scientist.model import ModelReply, ToolCall
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_sleeper_claude(tmp_path)),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+
+    class ScriptedModel:
+        def __init__(self):
+            self.turn = 0
+
+        def complete(self, *, system, messages, timeout_seconds, tools):
+            self.turn += 1
+            if self.turn == 1:
+                return ModelReply(text="dispatch", tool_calls=(
+                    ToolCall(id="c1", name="executor", arguments={
+                        "brief": "b", "definition_of_done": "d"}),))
+            # let the dispatched seat flush its events before the exit
+            # salvage kills it (an empty transcript salvages nothing)
+            time.sleep(0.8)
+            return ModelReply(text="stop", tool_calls=(
+                ToolCall(id="c2", name="abstain",
+                         arguments={"reason": "probe",
+                                    "axes_checked": ["a"]}),))
+
+    result = run_episode(
+        model=ScriptedModel(), system_prompt="sys",
+        messages=[{"role": "user", "content": "go"}],
+        world=world, assistant=assistant, ledger=ledger,
+        steps_budget=4, wall_seconds=60.0,
+    )
+    assert result["outcome"] == "abstain"
+    base = world.work / ".scientist" / "assistant"
+    assert not list(base.rglob("proc.pid"))
+    salvaged = [json.loads(p.read_text()) for p in base.glob(
+        "*/digest.json")]
+    assert any(s["status"] == "crash-salvaged" for s in salvaged)
+
+
+def test_turn_top_drain_emits_user_role_report(tmp_path: Path):
+    """A finished async engagement's report arrives as a USER-role
+    observation at the top of a later turn — never between a tool_call
+    and its own result (the compaction adjacency rule)."""
+    from scientist.agent import run_episode
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+    from scientist.model import ModelReply, ToolCall
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_slow_claude(tmp_path, 0.3)),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+
+    class ScriptedModel:
+        def __init__(self):
+            self.turn = 0
+            self.seen: list[list[dict]] = []
+
+        def complete(self, *, system, messages, timeout_seconds, tools):
+            self.seen.append([dict(m) for m in messages])
+            self.turn += 1
+            if self.turn == 1:
+                return ModelReply(text="dispatch", tool_calls=(
+                    ToolCall(id="c1", name="executor", arguments={
+                        "brief": "b", "definition_of_done": "d"}),))
+            if self.turn == 2:
+                time.sleep(1.0)     # the PI thinks; the seat finishes
+                return ModelReply(text="probe", tool_calls=(
+                    ToolCall(id="c2", name="bash",
+                             arguments={"command": "true"}),))
+            return ModelReply(text="stop", tool_calls=(
+                ToolCall(id="c3", name="abstain",
+                         arguments={"reason": "probe",
+                                    "axes_checked": ["a"]}),))
+
+    model = ScriptedModel()
+    result = run_episode(
+        model=model, system_prompt="sys",
+        messages=[{"role": "user", "content": "go"}],
+        world=world, assistant=assistant, ledger=ledger,
+        steps_budget=5, wall_seconds=60.0,
+    )
+    assert result["outcome"] == "abstain"
+    third = model.seen[2]
+    drained = [m for m in third
+               if m.get("role") == "user"
+               and "Research collaborator report" in str(m.get("content"))]
+    assert drained, "no drained report at the third turn's top"
+    assert "ran benches" in drained[-1]["content"]
+
+
+def test_wait_returns_reports_exactly_once(tmp_path: Path):
+    """wait's own tool result carries the pending reports, and the
+    turn-top drain does not re-deliver them (read.marker idempotence)."""
+    from scientist.agent import run_episode
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+    from scientist.model import ModelReply, ToolCall
+    from scientist.scientist_session import ScientistSession
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_slow_claude(tmp_path, 0.4)),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+    session = ScientistSession.load_or_create(
+        world.work / ".scientist" / "session", prompt_version="t",
+        episode_id="t")
+
+    class ScriptedModel:
+        def __init__(self):
+            self.turn = 0
+            self.seen: list[list[dict]] = []
+
+        def complete(self, *, system, messages, timeout_seconds, tools):
+            self.seen.append([dict(m) for m in messages])
+            self.turn += 1
+            if self.turn == 1:
+                return ModelReply(text="dispatch", tool_calls=(
+                    ToolCall(id="c1", name="executor", arguments={
+                        "brief": "b", "definition_of_done": "d"}),))
+            if self.turn == 2:
+                return ModelReply(text="collect", tool_calls=(
+                    ToolCall(id="c2", name="wait", arguments={}),))
+            return ModelReply(text="stop", tool_calls=(
+                ToolCall(id="c3", name="abstain",
+                         arguments={"reason": "probe",
+                                    "axes_checked": ["a"]}),))
+
+    result = run_episode(
+        model=ScriptedModel(), system_prompt="sys",
+        messages=[{"role": "user", "content": "go"}],
+        world=world, assistant=assistant, ledger=ledger,
+        steps_budget=5, wall_seconds=60.0, session=session,
+    )
+    assert result["outcome"] == "abstain"
+    wire_lines = session.wire_path.read_text().splitlines()
+    # one delivery, one wire line (the report dict carries the digest
+    # string under two field names — count lines, not substrings)
+    assert sum(1 for line in wire_lines if "ran benches" in line) == 1, (
+        "the report must be delivered exactly once across wait and drains")
+    second = [m for m in [json.loads(line)
+                          for line in session.wire_path.read_text().splitlines()]
+              if m.get("role") == "tool" and m.get("tool_call_id") == "c2"]
+    assert second and "ran benches" in second[0]["content"]
+
+
+def test_same_turn_batch_returns_adjacent_acks(tmp_path: Path):
+    """Two seats dispatched in one turn each get their acknowledgment
+    as their OWN call's tool result, immediately adjacent."""
+    from scientist.agent import run_episode
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+    from scientist.model import ModelReply, ToolCall
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_slow_claude(tmp_path, 0.4)),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+
+    class ScriptedModel:
+        def __init__(self):
+            self.turn = 0
+            self.seen: list[list[dict]] = []
+
+        def complete(self, *, system, messages, timeout_seconds, tools):
+            self.seen.append([dict(m) for m in messages])
+            self.turn += 1
+            if self.turn == 1:
+                return ModelReply(text="dispatch", tool_calls=(
+                    ToolCall(id="c1", name="executor", arguments={
+                        "brief": "b1", "definition_of_done": "d"}),
+                    ToolCall(id="c2", name="proposer", arguments={
+                        "brief": "b2", "scope": "open"}),))
+            return ModelReply(text="stop", tool_calls=(
+                ToolCall(id="c3", name="abstain",
+                         arguments={"reason": "probe",
+                                    "axes_checked": ["a"]}),))
+
+    model = ScriptedModel()
+    result = run_episode(
+        model=model, system_prompt="sys",
+        messages=[{"role": "user", "content": "go"}],
+        world=world, assistant=assistant, ledger=ledger,
+        steps_budget=4, wall_seconds=60.0,
+    )
+    assert result["outcome"] == "abstain"
+    second = model.seen[1]
+    dispatch = next(m for m in second
+                    if m.get("role") == "assistant" and m.get("tool_calls"))
+    calls = dispatch["tool_calls"]
+    for i, call in enumerate(calls):
+        result_msg = second[second.index(dispatch) + 1 + i]
+        assert result_msg["role"] == "tool"
+        assert result_msg["tool_call_id"] == call["id"]
+        assert '"running"' in result_msg["content"]
+
+
+def test_continue_engagement_passes_resume_and_old_workspace(
+        tmp_path: Path):
+    """Continuation is claude --resume <session-id> in the engagement's
+    ORIGINAL workspace, recorded as continued_from in the new report."""
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    seat_out = tmp_path / "seatout"
+    seat_out.mkdir()
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_session_claude(tmp_path)),
+                               env={"SEAT_OUT": str(seat_out)},
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+    first = assistant.engage("executor", {
+        "brief": "b1", "definition_of_done": "d",
+        "workspace": "isolated"})
+    assert first["ok"] and first["status"] == "done"
+    old_id = first["collaborator_id"]
+    old_fork = world.scratch / f"fresh-{old_id}"
+    assert old_fork.is_dir()
+
+    ack = assistant.continue_engagement({
+        "collaborator_id": old_id,
+        "brief": "the world changed: X landed; continue with Y",
+        "definition_of_done": "report the delta",
+    })
+    assert ack["ok"] and ack["status"] == "running"
+    assert ack["continued_from"] == old_id
+    result = assistant.wait_for_seats()
+    reports = result["finished"]
+    assert any(r.get("continued_from") == old_id for r in reports)
+    argv = (seat_out / "argv.txt").read_text()
+    assert "--resume" in argv and "sess-abc-123" in argv
+    pwd = (seat_out / "pwd.txt").read_text().strip()
+    assert pwd == str(old_fork)
+
+
+def test_continue_engagement_rejections(tmp_path: Path):
+    """Every rejection is a clean receipt with a humane error: the
+    validation chain runs entirely on the engagement records."""
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    base = world.work / ".scientist" / "assistant"
+    base.mkdir(parents=True)
+    (base / "reviewer-t-001").mkdir()
+    (base / "reviewer-t-001" / "digest.json").write_text(json.dumps(
+        {"role": "reviewer", "status": "done", "session_id": "s"}))
+    (base / "executor-t-002").mkdir()
+    (base / "executor-t-002" / "digest.json").write_text(json.dumps(
+        {"role": "executor", "status": "failed"}))
+    (base / "executor-t-003").mkdir()
+    (base / "executor-t-003" / "digest.json").write_text(json.dumps(
+        {"role": "executor", "status": "done", "session_id": ""}))
+    (base / "executor-t-004").mkdir()
+    (base / "executor-t-004" / "digest.json").write_text(json.dumps(
+        {"role": "executor", "status": "done", "session_id": "s9"}))
+    (base / "executor-t-004" / "manifest.json").write_text(json.dumps(
+        {"work_dir": "/nonexistent/reclaimed-ws", "side_dir": None,
+         "mode": "isolated"}))
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_fake_claude(tmp_path)),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+    brief = {"brief": "b", "definition_of_done": "d"}
+    r1 = assistant.continue_engagement(
+        {"collaborator_id": "reviewer-t-001", **brief})
+    assert not r1["ok"] and "only Executor" in r1["error"]
+    r2 = assistant.continue_engagement(
+        {"collaborator_id": "executor-t-002", **brief})
+    assert not r2["ok"] and "salvageable" in r2["error"]
+    r3 = assistant.continue_engagement(
+        {"collaborator_id": "executor-t-003", **brief})
+    assert not r3["ok"] and "no session id" in r3["error"]
+    r4 = assistant.continue_engagement(
+        {"collaborator_id": "executor-t-999", **brief})
+    assert not r4["ok"] and "no finished engagement record" in r4["error"]
+    r5 = assistant.continue_engagement(
+        {"collaborator_id": "executor-t-004", **brief})
+    assert not r5["ok"] and "reclaimed" in r5["error"]
+
+
+def test_reviewer_heard_after_reads_finished_at_field(tmp_path: Path):
+    """The listen door reads the recorded finished_at (not the file's
+    mtime) when present — the field is the explicit carrier; mtime is
+    the fallback for records written before the field existed."""
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    base = world.work / ".scientist" / "assistant"
+    base.mkdir(parents=True)
+    (base / "reviewer-t-001").mkdir()
+    (base / "reviewer-t-001" / "digest.json").write_text(json.dumps({
+        "role": "reviewer", "status": "done",
+        "finished_at": 5000.0,
+    }))
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_fake_claude(tmp_path)),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+    assert not assistant.reviewer_heard_after(6000.0)
+    assert assistant.reviewer_heard_after(4000.0)

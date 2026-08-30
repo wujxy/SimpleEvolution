@@ -195,6 +195,7 @@ def test_native_actions_and_wire_helpers():
 def test_forwardable_set_excludes_local_and_terminal():
     assert FORWARDABLE_ACTIONS == {
         "searcher", "proposer", "executor", "challenger", "reviewer",
+        "continue_engagement", "wait",
         "revise_research_state", "remember", "search_experiments",
         "inspect_experiment", "inspect_originating_research_state",
         "search_research_memory", "list_research_memory",

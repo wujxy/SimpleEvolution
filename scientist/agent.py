@@ -18,7 +18,8 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor  # noqa: F401
+
 
 from .native_tools import (
     NATIVE_TERMINAL_ACTIONS,
@@ -238,10 +239,22 @@ def dispatch_action(action: dict, *, world, assistant, ledger) -> dict:
         # observation the PI can act on), not kill the run — the first
         # live isolated-workspace dispatch took the whole episode down.
         try:
-            return assistant.engage(name, action)
+            if name == "reviewer":
+                # listening semantics: the engagement runs inside the
+                # call and its report is the call's own result
+                return assistant.engage(name, action)
+            return assistant.engage_async(name, action)
         except Exception as exc:  # noqa: BLE001 — surfaced to the PI
             return {"ok": False, "error": f"engagement dispatch failed: "
                                           f"{exc}"}
+    if name == "continue_engagement":
+        try:
+            return assistant.continue_engagement(action)
+        except Exception as exc:  # noqa: BLE001 — surfaced to the PI
+            return {"ok": False, "error": f"engagement dispatch failed: "
+                                          f"{exc}"}
+    if name == "wait":
+        return assistant.wait_for_seats(action.get("timeout_minutes"))
     if name == "revise_research_state":
         return ledger.revise_research_state(action)
     if name == "revise_research_judgment":
@@ -473,9 +486,28 @@ def _compact_native(messages: list[dict], *, keep_messages: int,
 
 
 def _seat_observation(report: dict) -> dict:
-    """A seat engagement's report, rendered for the tool-result channel."""
+    """A seat engagement's result, rendered for the tool-result channel.
+    A running engagement yields its acknowledgment; a collected one
+    (reviewer, or a failure receipt) yields the report itself."""
     if not isinstance(report, dict):
         return {"ok": False, "error": f"engagement failed: {report!r}"}
+    if report.get("status") == "running":
+        hev = report.get("harness_evidence") or {}
+        return {
+            "ok": True,
+            "collaborator_id": report.get("collaborator_id"),
+            "role": report.get("role"),
+            "status": "running",
+            "ack": (
+                f"[Research collaborator dispatched | "
+                f"role={report.get('role')} | "
+                f"collaborator_id={report.get('collaborator_id')}] "
+                f"engagement opened (box {report.get('box_seconds')}s, "
+                f"workspace {hev.get('workspace')}); the report arrives "
+                f"as an observation when it finishes — wait returns "
+                f"pending reports"
+            ),
+        }
     return {
         "ok": bool(report.get("ok")),
         "collaborator_id": report.get("collaborator_id"),
@@ -488,24 +520,13 @@ def _run_actions(actions: list[dict], *, world, assistant,
                  ledger) -> dict[int, dict]:
     """Execute one turn's tool actions; returns ``id(action) -> observation``.
 
-    Everything is sequential except SEAT actions: two or more collaborator
-    calls in the same turn run in parallel and return together — the one
-    concurrency the parliament actually uses, with no standing state (the
-    batch completes before the turn does)."""
-    seat_names = set(ROLE_NAMES)
-    seat_actions = [a for a in actions if a.get("action") in seat_names]
+    Sequential: seat launches return acknowledgments immediately (the
+    engagements run on their own), a reviewer call blocks by design, and
+    everything else is in-world I/O. There is no standing state to keep
+    — the engagements live in their directories."""
+    seat_names = set(ROLE_NAMES) | {"continue_engagement"}
     results: dict[int, dict] = {}
-    if len(seat_actions) >= 2:
-        with ThreadPoolExecutor(max_workers=len(seat_actions)) as pool:
-            futures = {
-                id(a): pool.submit(
-                    dispatch_action, a, world=world, assistant=assistant,
-                    ledger=ledger)
-                for a in seat_actions}
-            results = {key: future.result() for key, future in futures.items()}
     for action in actions:
-        if id(action) in results:
-            continue
         name = action.get("action")
         if name in NATIVE_TERMINAL_ACTIONS:
             results[id(action)] = {
@@ -654,6 +675,17 @@ def run_episode(
                     step, steps_budget,
                     deadline - time.monotonic(), wall_seconds))
 
+            # Turn-top drain: engagements that finished since the last
+            # look arrive here as user-role observations (never between
+            # a tool_call and its result — compaction cuts whole turns).
+            if assistant is not None:
+                for report in assistant.poll_completions():
+                    _log(f"step {step}: seat engagement finished "
+                         f"({report.get('collaborator_id')}, "
+                         f"{report.get('status')})")
+                    _emit({"role": "user",
+                           "content": _collaborator_report_message(report)})
+
             _log(f"step {step}/{steps_budget}: thinking")
             reply = model.complete(
                 system=system_prompt, messages=messages,
@@ -690,9 +722,12 @@ def run_episode(
                         deadline - time.monotonic(), wall_seconds))
                 if conclusion is not None:
                     if (listen_refusals >= _LISTEN_REFUSAL_MAX
-                            and name == "deliver_world"):
+                            and action["action"] == "deliver_world"):
                         # Third refusal overridden: the listening door is
                         # a chance to reconsider, never a hard block.
+                        # (action["action"], never the loop-leaked `name`
+                        # the pre-v7 code read — that branch had never
+                        # actually fired.)
                         action_log.append({
                             "action": "deliver_listen_overridden",
                             "step": step,
@@ -722,9 +757,9 @@ def run_episode(
             for action in actions:
                 name = action["action"]
                 observation = observations[id(action)]
-                if name in ROLE_NAMES:
-                    _log(f"step {step}: seat engagement finished "
-                         f"({observation.get('status')})")
+                if name in ROLE_NAMES or name == "continue_engagement":
+                    _log(f"step {step}: seat engagement "
+                         f"{observation.get('status')}")
                 action_log.append({"action": name, "step": step})
                 _emit(wire_tool_result(
                     action.get("tool_call_id", ""), observation))
@@ -743,11 +778,20 @@ def run_episode(
         return _result("cut_off", conclusion, steps_budget, usages,
                        action_log)
     finally:
-        # Synchronous seats: nothing is ever left running at episode exit
-        # — a seat either returned as this episode's own tool result or
-        # was killed inside engage(). Only a SIGKILL of the scientist
-        # itself can leak one, and _reconcile harvests that on resume.
-        pass
+        # Nothing is ever left running at episode exit: engagements still
+        # inside their boxes are killed and crash-salvaged here (the
+        # same collect startup recovery uses), and their salvaged reports
+        # land in the wire — the resume source of truth. Inert when a
+        # conclusion.json exists; informative otherwise. A SIGKILL of the
+        # scientist itself is the one window this cannot close, and
+        # _reconcile harvests that on resume.
+        if assistant is not None:
+            try:
+                for report in assistant.shutdown_pending():
+                    _emit({"role": "user",
+                           "content": _collaborator_report_message(report)})
+            except Exception as exc:  # noqa: BLE001 — exit must not hang
+                _log(f"shutdown salvage failed: {exc}")
 
 
 def _result(outcome, conclusion, steps, usages, action_log) -> dict:

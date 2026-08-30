@@ -156,7 +156,10 @@ EXECUTOR_TOOL = _fn(
     "implementation, debugging, measurement, or experiment work — anything "
     "beyond a small discriminating probe. Give research intent, "
     "constraints, and a definition of done; they own how the work is "
-    "carried through and return artifacts and evidence.",
+    "carried through. The call returns an acknowledgment and their "
+    "attributable report arrives as an observation when they finish; "
+    "continue_engagement resumes a finished Executor with their context "
+    "and workspace intact.",
     {
         "brief": {"type": "string"},
         "definition_of_done": {"type": "string"},
@@ -168,6 +171,47 @@ EXECUTOR_TOOL = _fn(
         },
     },
     ["brief", "definition_of_done"],
+)
+
+CONTINUE_ENGAGEMENT_TOOL = _fn(
+    "continue_engagement",
+    "Resume a finished Executor engagement — the same colleague, session "
+    "context, and workspace — with a new brief. What changed in the world "
+    "since they worked is part of the brief. Executor engagements only; "
+    "the other roles open fresh each time.",
+    {
+        "collaborator_id": {
+            "type": "string",
+            "description": "the finished executor engagement to resume "
+                           "(the id in its report)",
+        },
+        "brief": {"type": "string"},
+        "definition_of_done": {"type": "string"},
+        "timeout_minutes": {
+            "type": "integer", "minimum": 1, "maximum": 480,
+            "description": "engagement time box in minutes; when omitted "
+                           "the executor default (120) applies",
+        },
+    },
+    ["collaborator_id", "brief", "definition_of_done"],
+)
+
+WAIT_TOOL = _fn(
+    "wait",
+    "Block until pending collaborator engagements finish; their reports "
+    "return as this call's result. With nothing pending, returns an empty "
+    "status immediately. Engagements still running at the wait's bound "
+    "keep running, and their reports arrive as observations in later "
+    "turns.",
+    {
+        "timeout_minutes": {
+            "type": "integer", "minimum": 1, "maximum": 480,
+            "description": "bound on this wait in minutes; when omitted "
+                           "the wait runs until every pending engagement "
+                           "finishes (each within its own time box)",
+        },
+    },
+    [],
 )
 
 CHALLENGER_TOOL = _fn(
@@ -492,8 +536,10 @@ NATIVE_TOOLS: tuple[dict, ...] = (
     SEARCHER_TOOL,
     PROPOSER_TOOL,
     EXECUTOR_TOOL,
+    CONTINUE_ENGAGEMENT_TOOL,
     CHALLENGER_TOOL,
     REVIEWER_TOOL,
+    WAIT_TOOL,
     REVISE_RESEARCH_STATE_TOOL,
     REMEMBER_TOOL,
     NOTE_TOOL,
@@ -520,9 +566,10 @@ NATIVE_TOOL_NAMES = frozenset(t["function"]["name"] for t in NATIVE_TOOLS)
 # ledger, the experiment archive, and the assistant all live on the host);
 # TERMINAL = forwarded, and ends the lease.
 NATIVE_LOCAL_ACTIONS = frozenset(
-    {"bash", "read_file", "write_file", "note", "wait"})
+    {"bash", "read_file", "write_file", "note"})
 NATIVE_FORWARDED_ACTIONS = frozenset({
     "searcher", "proposer", "executor", "challenger", "reviewer",
+    "continue_engagement", "wait",
     "revise_research_state", "remember", "search_experiments",
     "inspect_experiment", "inspect_originating_research_state",
     "search_research_memory", "list_research_memory",
@@ -553,16 +600,29 @@ team.
 
 A Reviewer is not an exit-only ritual — a look-back at a milestone,
 while there is still budget to act on what it finds, is often the
-most valuable one. A collaborator call runs the whole engagement — the colleague works
-through their investigation and the call returns with their attributable
-report. Opening several collaborator calls in one turn runs those
-engagements in parallel; they all return together before your next turn.
+most valuable one.
 
-Each engagement is handled by a fresh collaborator. They may work through a
+A searcher, proposer, executor, or challenger engagement returns
+immediately with an acknowledgment — the colleague works in their own
+workspace and their attributable report arrives as an observation at the
+start of one of your later turns; wait collects pending reports. A
+Reviewer engagement runs inside the call: its report is the call's own
+result, and while it reads your work you are listening — nothing else
+until you have heard it through.
+
+Independent hypotheses open as separate seats in one turn and run
+concurrently — the time they spend is yours to think in. Reliability
+first, efficiency second: parallel independent verification is
+efficiency; cutting verification is the betrayal.
+
+Each fresh engagement is a fresh collaborator. They may work through a
 long internal trajectory of searching, reading, coding, debugging, or
 measurement, but that private trajectory does not become your memory. What
 returns to you is an attributable report: what was found or built, the
 evidence and artifacts behind it, and what remains uncertain.
+continue_engagement resumes a finished Executor with their context and
+workspace intact; what changed in the world since they worked is part of
+your brief to write.
 
 A report is testimony from a colleague. Read it critically; inspect
 decisive evidence yourself when the decision matters. Agreement, confident
@@ -599,9 +659,12 @@ NATIVE_PROTOCOL_BLOCK = """# Runtime Mechanics
   one turn; they run in order and each answer returns to you. Plain text
   alongside a call is your own trajectory note — not a substitute for
   acting.
-- A collaborator call returns when the engagement finishes; its result IS
-  the attributable report (a killed or crashed engagement returns a
-  salvaged partial report, marked as such).
+- A searcher/proposer/executor/challenger call returns an acknowledgment
+  immediately; the attributable report arrives as a later observation (a
+  killed or crashed engagement's salvaged partial report arrives the same
+  way, marked as such). A reviewer call returns the report itself — it
+  runs inside the call. wait blocks until pending engagements finish and
+  returns their reports.
 - revise_research_state replaces the current view note in your active
   context in place; your long-term research memory (remember and its
   search tools) is persistent and independent of that page.
