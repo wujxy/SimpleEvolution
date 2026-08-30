@@ -153,6 +153,8 @@ def test_frontend_has_required_regions_and_safe_rendering_contract(
     assert "new EventSource('/api/stream')" in app
     assert ".textContent" in app
     assert ".innerHTML" not in app
+    assert "last_activity_at" in app
+    assert "box_seconds" in app
     assert "@media (max-width: 900px)" in css
     assert headers["Content-Security-Policy"] == (
         "default-src 'self'; connect-src 'self'; script-src 'self'; "

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -278,3 +280,71 @@ def test_hostile_text_is_capped_plain_data_and_external_path_hidden(tmp_path):
     assert len(text_activity["summary"]) <= 241
     assert "/etc/private-key" not in path_activity["summary"]
     assert path_activity["summary"] == "读取 private-key"
+
+
+def test_last_observed_time_and_seat_activity_follow_raw_mtime(run_fixture):
+    run_dir, scientist = run_fixture
+    seat = scientist / "assistant" / "executor-ep-001"
+    manifest = seat / "manifest.json"
+    _write_json(manifest, {
+        "role": "executor", "collaborator_id": "executor-ep-001",
+        "started": 1000.0, "box": 7200,
+    })
+    os.utime(manifest, (1000.0, 1000.0))
+    raw = seat / "raw.txt"
+    raw.write_text('{"type":"system"}\n', encoding="utf-8")
+    os.utime(raw, (1500.0, 1500.0))
+    reader = RunReader(RunLayout.discover(run_dir))
+    projector = RunProjector(reader.layout.safe_metadata())
+
+    projector.apply(reader.poll())
+    snapshot = projector.snapshot()
+
+    assert snapshot["run"]["last_observed_at"] == 1500.0
+    assert snapshot["seats"]["executor-ep-001"]["last_activity_at"] == 1500.0
+
+
+def test_malformed_manifest_becomes_observer_warning(run_fixture):
+    run_dir, scientist = run_fixture
+    manifest = scientist / "assistant" / "executor-ep-001" / "manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text('{"role":', encoding="utf-8")
+    reader = RunReader(RunLayout.discover(run_dir))
+    projector = RunProjector(reader.layout.safe_metadata())
+
+    projector.apply(reader.poll())
+
+    assert any(
+        warning["source"] == "seat-manifest:executor-ep-001"
+        and "malformed JSON document" in warning["message"]
+        for warning in projector.snapshot()["warnings"]
+    )
+
+
+def test_anchored_timeline_orders_seat_start_between_scientist_steps(
+        run_fixture):
+    run_dir, scientist = run_fixture
+    (run_dir / "run.log").write_text(
+        "[scientist 18:50:00] step 1/20: thinking\n"
+        "[scientist 19:28:00] step 2/20: wait\n",
+        encoding="utf-8",
+    )
+    started = time.mktime((2026, 8, 30, 18, 57, 0, 0, 0, -1))
+    _write_json(
+        scientist / "assistant" / "executor-ep-001" / "manifest.json",
+        {
+            "role": "executor",
+            "collaborator_id": "executor-ep-001",
+            "started": started,
+        },
+    )
+    reader = RunReader(RunLayout.discover(run_dir))
+    projector = RunProjector(reader.layout.safe_metadata())
+
+    projector.apply(reader.poll())
+
+    anchored = [
+        event["kind"] for event in projector.snapshot()["timeline"]
+        if event["kind"] in {"scientist_step", "seat_started"}
+    ]
+    assert anchored == ["scientist_step", "seat_started", "scientist_step"]

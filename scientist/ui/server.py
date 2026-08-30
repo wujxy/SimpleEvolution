@@ -37,12 +37,14 @@ class Observatory:
         self._thread: threading.Thread | None = None
 
     def snapshot(self) -> dict[str, object]:
-        return self.projector.snapshot()
+        with self.condition:
+            return self.projector.snapshot()
 
     def poll_once(self) -> list[dict[str, object]]:
-        projected = self.projector.apply(self.reader.poll())
+        batch = self.reader.poll()
         deltas: list[dict[str, object]] = []
         with self.condition:
+            projected = self.projector.apply(batch)
             for item in projected:
                 delta = {
                     "id": f"delta-{self._next_delta}",

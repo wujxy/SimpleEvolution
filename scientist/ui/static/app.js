@@ -16,6 +16,14 @@ function unavailable(value) {
     ? 'Unavailable' : String(value);
 }
 
+function relativeAge(epochSeconds) {
+  if (typeof epochSeconds !== 'number') return '无活动时间';
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000 - epochSeconds));
+  if (seconds < 60) return seconds + ' 秒前';
+  if (seconds < 3600) return Math.floor(seconds / 60) + ' 分钟前';
+  return Math.floor(seconds / 3600) + ' 小时前';
+}
+
 function detailButton(label, detailId) {
   const button = element('button', 'detail-button', label);
   button.type = 'button';
@@ -88,6 +96,15 @@ function renderSeats(seats) {
       element('p', 'seat-id', unavailable(seat.collaborator_id)),
       element('p', 'brief', unavailable(seat.brief)),
     );
+    if (seat.formal_status === 'started') {
+      card.append(element(
+        'p', 'muted', '最近输出：' + relativeAge(seat.last_activity_at)));
+      const deadline = Number(seat.started) + Number(seat.box_seconds);
+      if (Number.isFinite(deadline) && Date.now() / 1000 > deadline) {
+        card.append(element(
+          'p', 'warning', '已超过 time box，等待运行时回收'));
+      }
+    }
     if (seat.delivered) card.append(element('p', 'delivered', '✓ Scientist 已收取'));
     const activityRoot = element('div', 'seat-activities');
     renderSeatActivities(seat, activityRoot);

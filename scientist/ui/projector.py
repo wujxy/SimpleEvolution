@@ -4,6 +4,8 @@ from __future__ import annotations
 import copy
 import re
 import shlex
+import time
+from datetime import datetime
 from pathlib import Path
 
 from .reader import ReaderBatch, SourceRecord
@@ -11,6 +13,7 @@ from .reader import ReaderBatch, SourceRecord
 
 _STEP_RE = re.compile(
     r"\[scientist(?: [0-9:]+)?\] step (\d+)(?:/\d+)?: (.+)$")
+_TIME_RE = re.compile(r"\[scientist (\d{2}):(\d{2}):(\d{2})\]")
 _RUN_STATUS = {
     "deliver": "delivered",
     "abstain": "abstained",
@@ -81,6 +84,19 @@ def _tool_summary(name: str, inputs: dict) -> str:
     if name in {"WebSearch", "WebFetch"}:
         return f"{label} {_cap(inputs.get('query') or inputs.get('url'), 160)}"
     return f"{label} {_cap(inputs.get('description') or '', 160)}".strip()
+
+
+def _day_seconds(value: object) -> float | None:
+    if isinstance(value, (int, float)):
+        shown = time.localtime(float(value))
+        return float(shown.tm_hour * 3600 + shown.tm_min * 60 + shown.tm_sec)
+    if isinstance(value, str):
+        try:
+            shown = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        return float(shown.hour * 3600 + shown.minute * 60 + shown.second)
+    return None
 
 
 def summarize_seat_record(
@@ -180,7 +196,18 @@ class RunProjector:
         self._activity_tools: dict[tuple[str, str], dict[str, object]] = {}
 
     def snapshot(self) -> dict[str, object]:
-        return copy.deepcopy(self._snapshot)
+        result = copy.deepcopy(self._snapshot)
+        timeline = result["timeline"]
+        timeline.sort(key=lambda event: (
+            event.get("_sort_key") is None,
+            event.get("_sort_key") if event.get("_sort_key") is not None
+            else event["sequence"],
+            event["sequence"],
+        ))
+        for sequence, event in enumerate(timeline, 1):
+            event["sequence"] = sequence
+            event.pop("_sort_key", None)
+        return result
 
     def _event(
         self,
@@ -190,6 +217,7 @@ class RunProjector:
         *,
         occurred_at: object = None,
         detail_ref: str | None = None,
+        sort_key: float | None = None,
     ) -> bool:
         if event_id in self._event_ids:
             return False
@@ -201,6 +229,7 @@ class RunProjector:
             "occurred_at": occurred_at,
             "sequence": len(self._snapshot["timeline"]) + 1,
             "detail_refs": [detail_ref] if detail_ref else [],
+            "_sort_key": sort_key,
         }
         self._snapshot["timeline"].append(event)
         return True
@@ -220,27 +249,38 @@ class RunProjector:
     def _run_log(self, record: SourceRecord) -> bool:
         line = str(record.value)
         match = _STEP_RE.search(line)
+        time_match = _TIME_RE.search(line)
+        occurred_at = None
+        sort_key = None
+        if time_match:
+            hour, minute, second = (int(item) for item in time_match.groups())
+            occurred_at = f"{hour:02d}:{minute:02d}:{second:02d}"
+            sort_key = float(hour * 3600 + minute * 60 + second)
         detail = f"detail:{record.id}"
         changed = False
         if "resumed from wire.jsonl" in line:
             self._resume_pending = True
             changed |= self._event(
-                record.id, "resumed", line, detail_ref=detail)
+                record.id, "resumed", line, occurred_at=occurred_at,
+                detail_ref=detail, sort_key=sort_key)
             self._snapshot["run"]["current_activity"] = "resumed"
         elif "model failure:" in line:
             changed |= self._event(
-                record.id, "model_failure", line, detail_ref=detail)
+                record.id, "model_failure", line, occurred_at=occurred_at,
+                detail_ref=detail, sort_key=sort_key)
             self._snapshot["run"]["current_activity"] = "model failure"
         elif "infra crash" in line:
             changed |= self._event(
-                record.id, "attempt_crashed", line, detail_ref=detail)
+                record.id, "attempt_crashed", line, occurred_at=occurred_at,
+                detail_ref=detail, sort_key=sort_key)
         elif match:
             step, activity = int(match.group(1)), match.group(2).strip()
             self._ensure_attempt(step)
             self._snapshot["run"]["current_activity"] = activity
             changed |= self._event(
                 record.id, "scientist_step",
-                f"Step {step}: {activity}", detail_ref=detail)
+                f"Step {step}: {activity}", occurred_at=occurred_at,
+                detail_ref=detail, sort_key=sort_key)
         return changed
 
     def _seat(self, seat_id: str) -> dict[str, object]:
@@ -254,6 +294,7 @@ class RunProjector:
             "started": None,
             "finished_at": None,
             "box_seconds": None,
+            "last_activity_at": None,
             "report": None,
             "activities": [],
         })
@@ -262,6 +303,11 @@ class RunProjector:
         source = record.source
         detail = f"detail:{record.id}"
         deltas: list[dict[str, object]] = []
+        observed = record.observed_at
+        current_observed = self._snapshot["run"]["last_observed_at"]
+        if observed is not None and (
+                current_observed is None or observed > current_observed):
+            self._snapshot["run"]["last_observed_at"] = observed
         if source == "run-log":
             if self._run_log(record):
                 deltas.append({"type": "event_added",
@@ -279,7 +325,8 @@ class RunProjector:
             self._event(
                 record.id, "seat_started",
                 f"{seat['role']} {seat_id} started",
-                occurred_at=seat["started"], detail_ref=detail)
+                occurred_at=seat["started"], detail_ref=detail,
+                sort_key=_day_seconds(seat["started"]))
             deltas.append({"type": "seat_updated",
                            "data": {"collaborator_id": seat_id}})
         elif source.startswith("seat-digest:"):
@@ -307,7 +354,8 @@ class RunProjector:
             self._event(
                 record.id, "seat_finished",
                 f"{seat['role']} {seat_id}: {seat['formal_status']}",
-                occurred_at=seat["finished_at"], detail_ref=detail)
+                occurred_at=seat["finished_at"], detail_ref=detail,
+                sort_key=_day_seconds(seat["finished_at"]))
             deltas.append({"type": "seat_updated",
                            "data": {"collaborator_id": seat_id}})
         elif source.startswith("seat-read:"):
@@ -321,6 +369,8 @@ class RunProjector:
         elif source.startswith("seat:"):
             seat_id = source.split(":", 1)[1]
             seat = self._seat(seat_id)
+            if observed is not None:
+                seat["last_activity_at"] = observed
             activity = summarize_seat_record(record)
             if activity is None:
                 return deltas
@@ -364,14 +414,16 @@ class RunProjector:
             self._snapshot["run"]["current_activity"] = "concluded"
             self._event(
                 record.id, "conclusion", f"Run concluded: {outcome}",
-                occurred_at=value.get("finished_at"), detail_ref=detail)
+                occurred_at=value.get("finished_at"), detail_ref=detail,
+                sort_key=_day_seconds(value.get("finished_at")))
             deltas.append({"type": "run_updated", "data": {}})
         elif source.startswith("conclusion-history:"):
             value = record.value if isinstance(record.value, dict) else {}
             self._event(
                 record.id, "attempt_crashed",
                 f"Historical attempt: {value.get('outcome', 'unknown')}",
-                occurred_at=value.get("finished_at"), detail_ref=detail)
+                occurred_at=value.get("finished_at"), detail_ref=detail,
+                sort_key=_day_seconds(value.get("finished_at")))
             deltas.append({"type": "event_added",
                            "data": {"event_id": record.id}})
         elif source == "wire" and isinstance(record.value, dict):

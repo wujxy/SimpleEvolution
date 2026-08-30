@@ -58,6 +58,7 @@ class SourceRecord:
     raw: bytes
     value: object
     is_json: bool
+    observed_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -168,6 +169,7 @@ class LineCursor:
                 raw=raw,
                 value=value,
                 is_json=self.json_lines,
+                observed_at=stat.st_mtime,
             ))
             record_offset += length
         return ReaderBatch(records, warnings, reset)
@@ -321,6 +323,7 @@ class RunReader:
             raw=raw,
             value=value,
             is_json=is_json,
+            observed_at=stat.st_mtime,
         )
 
     def poll(self) -> ReaderBatch:
@@ -353,6 +356,11 @@ class RunReader:
                 )
                 if record is not None:
                     records.append(record)
+                    if marker is None and record.value is None:
+                        warnings.append(ReaderWarning(
+                            record.source,
+                            "malformed JSON document",
+                        ))
 
         for path in sorted(self.layout.scientist_dir.glob(
                 "conclusion*.json")):
