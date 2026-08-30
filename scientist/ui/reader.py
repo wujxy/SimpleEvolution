@@ -71,6 +71,7 @@ class ReaderBatch:
     records: list[SourceRecord]
     warnings: list[ReaderWarning]
     reset: bool = False
+    initial_index_complete: bool = False
 
 
 class LineCursor:
@@ -225,3 +226,161 @@ class DetailIndex:
             "content": content,
             "truncated": truncated,
         }
+
+
+FIXED_LINE_SOURCES = {
+    "run-log": ("run.log", False),
+    "wire": ("world/.scientist/session/wire.jsonl", True),
+    "research-state": ("world/.scientist/research_state.jsonl", True),
+    "research-memory": ("world/.scientist/research_memory.jsonl", True),
+    "assistant-calls": ("world/.scientist/assistant_calls.jsonl", True),
+    "usage": ("world/.scientist/usage.jsonl", True),
+}
+
+
+class RunReader:
+    """Discover and incrementally read every supported source in one run."""
+
+    def __init__(self, layout: RunLayout):
+        self.layout = layout
+        self.detail_index = DetailIndex()
+        self._cursors = {
+            source: LineCursor(
+                layout.source_path(relative),
+                source=source,
+                json_lines=is_json,
+            )
+            for source, (relative, is_json) in FIXED_LINE_SOURCES.items()
+        }
+        self._raw_cursors: dict[str, LineCursor] = {}
+        self._document_signatures: dict[Path, tuple[int, int]] = {}
+        self._initial_targets: dict[str, int] | None = None
+        self.initial_index_complete = False
+
+    def _discover_seats(self) -> list[Path]:
+        base = self.layout.scientist_dir / "assistant"
+        if not base.is_dir():
+            return []
+        return sorted(path for path in base.iterdir() if path.is_dir())
+
+    def _ensure_raw_cursors(self, seats: list[Path]) -> None:
+        for seat in seats:
+            path = seat / "raw.txt"
+            source = f"seat:{seat.name}"
+            if source not in self._raw_cursors and path.is_file():
+                self._raw_cursors[source] = LineCursor(
+                    path, source=source, json_lines=True)
+
+    def _capture_initial_targets(self) -> None:
+        targets: dict[str, int] = {}
+        for source, cursor in {
+                **self._cursors, **self._raw_cursors}.items():
+            try:
+                targets[source] = cursor.path.stat().st_size
+            except OSError:
+                pass
+        self._initial_targets = targets
+
+    def _document(
+        self,
+        path: Path,
+        *,
+        source: str,
+        is_json: bool,
+        marker_value: object | None = None,
+    ) -> SourceRecord | None:
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        signature = (stat.st_mtime_ns, stat.st_size)
+        if self._document_signatures.get(path) == signature:
+            return None
+        self._document_signatures[path] = signature
+        if marker_value is not None:
+            raw = b""
+            value = marker_value
+        else:
+            try:
+                raw = path.read_bytes()
+            except OSError:
+                return None
+            if is_json:
+                try:
+                    value = json.loads(raw)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    value = None
+            else:
+                value = raw.decode("utf-8", errors="replace")
+        return SourceRecord(
+            id=f"{source}:0",
+            source=source,
+            path=path,
+            offset=0,
+            length=len(raw),
+            raw=raw,
+            value=value,
+            is_json=is_json,
+        )
+
+    def poll(self) -> ReaderBatch:
+        seats = self._discover_seats()
+        self._ensure_raw_cursors(seats)
+        if self._initial_targets is None:
+            self._capture_initial_targets()
+
+        records: list[SourceRecord] = []
+        warnings: list[ReaderWarning] = []
+        reset = False
+        for cursor in self._cursors.values():
+            batch = cursor.poll()
+            records.extend(batch.records)
+            warnings.extend(batch.warnings)
+            reset = reset or batch.reset
+
+        for seat in seats:
+            seat_id = seat.name
+            for filename, prefix, marker in (
+                ("manifest.json", "seat-manifest", None),
+                ("digest.json", "seat-digest", None),
+                ("read.marker", "seat-read", True),
+            ):
+                record = self._document(
+                    seat / filename,
+                    source=f"{prefix}:{seat_id}",
+                    is_json=marker is None,
+                    marker_value=marker,
+                )
+                if record is not None:
+                    records.append(record)
+
+        for path in sorted(self.layout.scientist_dir.glob(
+                "conclusion*.json")):
+            current = path.name == "conclusion.json"
+            source = (
+                "conclusion:current" if current
+                else f"conclusion-history:{path.name}"
+            )
+            record = self._document(path, source=source, is_json=True)
+            if record is not None:
+                records.append(record)
+
+        for cursor in self._raw_cursors.values():
+            batch = cursor.poll()
+            records.extend(batch.records)
+            warnings.extend(batch.warnings)
+            reset = reset or batch.reset
+
+        for record in records:
+            self.detail_index.register(record)
+        targets = self._initial_targets or {}
+        self.initial_index_complete = all(
+            ({**self._cursors, **self._raw_cursors}[source].offset >= end)
+            for source, end in targets.items()
+        )
+        return ReaderBatch(
+            records=records,
+            warnings=warnings,
+            reset=reset,
+            initial_index_complete=self.initial_index_complete,
+        )
