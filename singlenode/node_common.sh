@@ -123,9 +123,19 @@ node_prepare_run_dir() {
     touch "$RUN_DIR/world/.gitignore"
     grep -qx '\.scientist/' "$RUN_DIR/world/.gitignore" \
         || printf '.scientist/\n' >> "$RUN_DIR/world/.gitignore"
+    # commit the hygiene line so the world is born with a clean
+    # `git status` — agents should never wonder about it (BASE_SHA is
+    # taken after this commit; relay templates just gain one commit).
+    git -C "$RUN_DIR/world" commit -q -m \
+        "world prepare: keep the harness body (.scientist) invisible to git" \
+        -- .gitignore 2>/dev/null || true
     local p
     for p in $WORLD_RW; do
-        mkdir -p "$RUN_DIR/world/$p"   # bind sources must exist
+        # bind sources must exist; .gitignore is a file, not a dir —
+        # its bind is how the bench config stays researcher-owned
+        # (three-zone design: .gitignore rides with the research
+        # surface, not the frozen zone).
+        [ -e "$RUN_DIR/world/$p" ] || mkdir -p "$RUN_DIR/world/$p"
     done
     mkdir -p "$RUN_DIR/world/.scientist"  # the body: /state bind source
     git_name=$(git config --global user.name || echo wujxy)
