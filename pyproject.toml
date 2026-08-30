@@ -27,3 +27,6 @@ simpleevo = "simpleevo.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["simpleevo*", "scientist*", "supervisor*", "ablation*"]
+
+[tool.setuptools.package-data]
+"scientist.ui" = ["static/*"]

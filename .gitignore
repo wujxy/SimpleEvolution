@@ -5,6 +5,7 @@ build/
 dist/
 .venv/
 .worktrees/
+.superpowers/
 runs/
 run/
 *.log

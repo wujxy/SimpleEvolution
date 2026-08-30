@@ -1,12 +1,14 @@
 """Read-only HTTP and SSE transport for Scientist Observatory."""
 from __future__ import annotations
 
+import argparse
 import json
 import threading
 from collections import deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
+from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .projector import RunProjector
@@ -239,3 +241,43 @@ def make_server(
     server = _ObservatoryServer((host, port), _handler_class())
     server.observatory = observatory
     return server
+
+
+def positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than zero")
+    return parsed
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="scientist-observatory")
+    parser.add_argument(
+        "--run-dir", required=True, type=Path,
+        help="one run directory containing world/.scientist")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", default=8765, type=int)
+    parser.add_argument(
+        "--poll-seconds", default=1.0, type=positive_float)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    layout = RunLayout.discover(args.run_dir)
+    observatory = Observatory(layout, poll_seconds=args.poll_seconds)
+    server = make_server(observatory, args.host, args.port)
+    observatory.start()
+    print(
+        f"Scientist Observatory: http://{args.host}:{server.server_port} "
+        f"(run: {layout.run_dir})",
+        flush=True,
+    )
+    try:
+        server.serve_forever(poll_interval=0.5)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        observatory.stop()
+        server.server_close()
+    return 0
