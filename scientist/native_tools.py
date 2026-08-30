@@ -165,6 +165,13 @@ EXECUTOR_TOOL = _fn(
         "definition_of_done": {"type": "string"},
         "workspace": {
             "type": "string", "enum": ["current", "isolated"],
+            "description": "where the engagement works: isolated gives "
+                           "the colleague a disposable copy of the world "
+                           "as a bench of their own — concurrent "
+                           "engagements each get one, and the report "
+                           "carries a diff the Scientist applies; "
+                           "current (the default) works directly in the "
+                           "live tree the Scientist shares",
         },
         "timeout_minutes": {
             "type": "integer", "minimum": 1, "maximum": 480,

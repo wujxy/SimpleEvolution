@@ -80,14 +80,17 @@ def build_collaboration_prompt(
         "attributable research report.",
         f"Research goal:\n{goal}",
         f"Hard constraints:\n{gate_block}",
-        "The workspace you run in is a bench of your own — a git "
-        "worktree where commits are how results accumulate. A "
-        "``.scientist/`` directory may sit in it: that is the run's "
-        "record as handed to you (memory, past reports); read it "
-        "freely. For a clean baseline or a comparison state, "
-        "``git worktree add`` a second checkout rather than "
-        "disturbing your own; what you produce leaves through your "
-        "closing report.",
+        "You work inside the run's laboratory. Its instruments are sealed "
+        "— the tests, the evaluation and the baseline are constants every "
+        "claim answers to. Git is how knowledge accumulates in this lab: "
+        "a commit is a result others can stand on, a diff is how a change "
+        "travels between colleagues, and anything you need from the "
+        "repository at an earlier state — a clean baseline, a comparison "
+        "point — is one ``git worktree`` away. A ``.scientist/`` directory "
+        "may sit in the tree: that is the run's own living record — "
+        "memory, reports, correspondence — kept by the machinery. It is "
+        "yours to read; it belongs to the run, not to the tree, and no "
+        "git operation reaches it.",
         f"Engagement brief:\n{brief}",
     ]
     if selected_experiments:
@@ -156,11 +159,19 @@ def build_collaboration_prompt(
         if str(action.get("workspace") or "current") == "isolated":
             sections.append(
                 "Workspace discipline: this engagement runs in a disposable "
-                "copy of the world with its own copy of the git history. "
+                "copy of the world with its own copy of the git history — "
+                "a bench of your own, and commits you make here stay here. "
                 "Commit your work in that copy as you go, and report the "
                 "change in ``diff_summary`` as the diff or commit range "
                 "(HEAD against the base) — the Scientist applies and "
                 "re-verifies it in the live world themselves."
+            )
+        else:
+            sections.append(
+                "Workspace: the live bench itself — the same tree the "
+                "Scientist works in, and the run's shared git history. "
+                "Your commits land in the world directly; they are what "
+                "the next colleague inherits."
             )
 
     sections.append(_CLOSING_CONTRACT)
