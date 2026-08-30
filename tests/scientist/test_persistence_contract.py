@@ -53,6 +53,34 @@ def test_wire_log_tolerates_torn_trailing_line(tmp_path):
     ]
 
 
+def test_wire_log_completes_dangling_tool_pair(tmp_path):
+    """A hard kill between an assistant tool_calls message and its tool
+    result leaves the pair open forever — later appends (resume notices,
+    budget notes) land after the gap, and replayed as-is the model
+    endpoint rejects the whole conversation. Load completes the view
+    with an interrupted marker; the file on disk keeps the honest gap."""
+    session = _session(tmp_path)
+    session.append_wire({"role": "user", "content": "begin"})
+    session.append_wire({"role": "assistant", "content": None,
+                         "tool_calls": [
+                             {"id": "c1", "type": "function", "function": {
+                                 "name": "executor", "arguments": "{}"}},
+                             {"id": "c2", "type": "function", "function": {
+                                 "name": "proposer", "arguments": "{}"}}]})
+    session.append_wire({"role": "tool", "tool_call_id": "c2",
+                         "content": "{\"ok\": true}"})
+    session.append_wire({"role": "user", "content": "[resumed notice]"})
+    replayed = session.load_wire_messages()
+    assert [m.get("role") for m in replayed] == [
+        "user", "assistant", "tool", "tool", "user"]
+    assert replayed[3]["tool_call_id"] == "c1"
+    assert "interrupted" in replayed[3]["content"]
+    on_disk = [json.loads(line) for line in
+               session.wire_path.read_text("utf-8").splitlines()]
+    assert len(on_disk) == 4
+    assert on_disk[-1]["role"] == "user"  # the gap itself is never rewritten
+
+
 def test_every_seat_advertises_its_own_time_box():
     """The 900s default killed two challengers in one arm: the backend
     accepted timeout_minutes but the schemas never told the model it

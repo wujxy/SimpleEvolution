@@ -73,6 +73,7 @@ class ScientistSession:
             meta=meta,
         )
 
+
     @property
     def wire_path(self) -> Path:
         return self.session_dir / "wire.jsonl"
@@ -102,4 +103,46 @@ class ScientistSession:
                 continue
             if isinstance(message, dict) and message.get("role"):
                 messages.append(message)
-        return messages
+        return _complete_dangling_calls(messages)
+def _complete_dangling_calls(messages: list[dict]) -> list[dict]:
+    """A hard kill can drop the tool results of an in-flight call: the
+    assistant message is already on the wire, the result never arrived,
+    and whatever is appended after the gap (resume notices, budget
+    notes) leaves the pair permanently open. Sent to the model as-is,
+    that conversation is rejected — tool_calls must be followed by tool
+    messages. Complete the view: synthesize an interrupted marker for
+    every unanswered call. The wire file itself is never rewritten."""
+    repaired: list[dict] = []
+    pending: set[str] = set()
+    for message in messages:
+        role = message.get("role")
+        if role == "assistant" and message.get("tool_calls"):
+            if pending:
+                repaired.extend(_interrupted_results(pending))
+                pending = set()
+            repaired.append(message)
+            pending = {t.get("id") for t in message["tool_calls"]} - {None}
+            continue
+        if role == "tool" and pending:
+            pending.discard(message.get("tool_call_id"))
+            repaired.append(message)
+            continue
+        if pending:
+            repaired.extend(_interrupted_results(pending))
+            pending = set()
+        repaired.append(message)
+    if pending:
+        repaired.extend(_interrupted_results(pending))
+    return repaired
+
+
+def _interrupted_results(pending: set[str]) -> list[dict]:
+    return [
+        {
+            "role": "tool",
+            "tool_call_id": call_id,
+            "content": '{"ok": false, "error": "this call was interrupted '
+                       'by a run restart before any result was recorded"}',
+        }
+        for call_id in sorted(pending)
+    ]
