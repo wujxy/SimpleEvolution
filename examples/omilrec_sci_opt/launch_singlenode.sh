@@ -46,7 +46,9 @@ case "$ARM" in
 esac
 
 export NODE_IMAGE="$REPO_ROOT/examples/omilrec_opt/apptainer.sif"
-export NODE_TEMPLATE="$REPO_ROOT/examples/omilrec_opt/repo"
+# NODE_TEMPLATE override = relay launch: seed a new run with a prior run's
+# delivered world (its git history is the handoff; no words needed)
+export NODE_TEMPLATE=${NODE_TEMPLATE:-"$REPO_ROOT/examples/omilrec_opt/repo"}
 export SPEC_TEMPLATE="$HERE/spec.json"
 export WORLD_RW="OMILRECV2/src .scientist .git build InstallArea TEMP"
 export EXTRA_RO_BINDS="/cvmfs /data/juno/dingxf/OMILREC_maps /data/juno/dingxf/inputs"
