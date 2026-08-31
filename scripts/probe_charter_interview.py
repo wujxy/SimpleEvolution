@@ -150,28 +150,136 @@ def _mainline_dispatched() -> list[dict]:
 def _point_messages(point: str) -> list[dict]:
     base = _mainline_dispatched()
     if point == "B":
-        return _opening()
-    if point == "W":
-        return base + [{"role": "user", "content": (
-            "25 minutes later. No report yet; the mainline is inside "
-            "its 300-minute box.")}]
-    if point == "N":
-        peek = {
-            "role": "assistant", "content": "",
-            "tool_calls": [{
-                "id": "call_p1", "type": "function",
-                "function": {"name": "bash", "arguments": json.dumps({
-                    "command": f"tail -40 {TRANSCRIPT}"})}}]}
-        peeked = {
-            "role": "tool", "tool_call_id": "call_p1",
-            "content": json.dumps({"ok": True, "returncode": 0,
-                                   "output": DRIFT_TAIL})}
-        return base + [{"role": "user", "content": (
-            "40 minutes later. No report yet.")}, peek, peeked]
-    if point == "S":
-        report = _collaborator_report_message(STUCK_REPORT)
-        return base + [{"role": "user", "content": report}]
-    raise ValueError(point)
+        messages = _opening()
+    elif point == "B2":
+        # follow-through: grounding done, read the brief it writes
+        messages = _grounded([{"role": "user", "content": (
+            "Memory and ratchet consulted. Open the mainline.")}])
+    elif point == "R":
+        messages = _real_replay()
+    elif point == "S2":
+        # follow-through: stuck report read, grounding done, read the
+        # instrument it reaches for
+        messages = _grounded([
+            {"role": "user", "content":
+                _collaborator_report_message(STUCK_REPORT)}])
+    else:
+        messages = {
+            "W": base + [{"role": "user", "content": (
+                "25 minutes later. No report yet; the mainline is inside "
+                "its 300-minute box.")}],
+            "N": base + [
+                {"role": "user", "content": (
+                    "40 minutes later. No report yet.")},
+                {"role": "assistant", "content": "",
+                 "tool_calls": [{
+                     "id": "call_p1", "type": "function",
+                     "function": {"name": "bash", "arguments":
+                                  json.dumps({"command":
+                                              f"tail -40 {TRANSCRIPT}"})}}]},
+                {"role": "tool", "tool_call_id": "call_p1",
+                 "content": json.dumps({"ok": True, "returncode": 0,
+                                        "output": DRIFT_TAIL})}],
+            "S": base + [{"role": "user", "content":
+                          _collaborator_report_message(STUCK_REPORT)}],
+        }[point]
+    # DeepSeek thinking-mode replay contract: a replayed assistant
+    # message with tool_calls must carry the (blank-receipt) key
+    for m in messages:
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            m.setdefault("reasoning_content", "")
+    return messages
+
+
+GROUNDING_TURN = {
+    "role": "assistant", "content": "", "reasoning_content": "",
+    "tool_calls": [
+        {"id": "call_g1", "type": "function",
+         "function": {"name": "list_research_memory",
+                      "arguments": "{}"}},
+        {"id": "call_g2", "type": "function",
+         "function": {"name": "bash", "arguments": json.dumps({
+             "command": "cd /work && git log --oneline -15"})}},
+    ],
+}
+
+MEMORY_LIST = {
+    "ok": True, "items": [
+        {"item_id": "M31", "title": "tolerance lanes are dead",
+         "one_line": "Minuit2 tolerance loosening fails FCN or changes "
+                     "numerics; verified dead in three prior attempts"},
+        {"item_id": "M35", "title": "1ulp arithmetic = out of bounds",
+         "one_line": "any reordering crossing the FP-noise floor on the "
+                     "4 FCN events fails the 1e-13 gate"},
+        {"item_id": "M39", "title": "stage caches are the living lane",
+         "one_line": "geometry/npe/QPDF caches keyed per stage gave "
+                     "every banked win so far (204.7, 196.9)"},
+        {"item_id": "M42", "title": "EPYC saw SIMD work; this CPU not "
+                                   "yet tried",
+         "one_line": "predecessor workspace notes vector paths were "
+                     "only explored on a different machine"},
+    ], "total": 43,
+}
+
+GIT_LOG = {
+    "ok": True, "returncode": 0,
+    "output": (
+        "1aad9ff qmleGeoCache: bit-exact exact-vertex geometry cache "
+        "for QMLE (196.9ms/4.67x, all gates PASS)\n"
+        "75c0c75 pedCancel: pedestal exp/log cancellation for "
+        "QTMLE+ENERGY (204.7ms/4.49x)\n"
+        "71abd75 relay handoff: bit-exact ratchet 919.9 -> 207.49\n"),
+}
+
+GROUNDING_RESULTS = [
+    {"role": "tool", "tool_call_id": "call_g1",
+     "content": json.dumps(MEMORY_LIST)},
+    {"role": "tool", "tool_call_id": "call_g2",
+     "content": json.dumps(GIT_LOG)},
+]
+
+
+def _grounded(extra: list[dict]) -> list[dict]:
+    return _opening() + [GROUNDING_TURN] + GROUNDING_RESULTS + [
+        {"role": "user", "content": (
+            "You have spent this first hour surveying and now hold: "
+            "the tree (OMILRECV2.cc 2124 lines + RecHelper.cc 452; hot "
+            "kernel Calculate_EVLikelihood; stages QMLE/TMLE/QTMLE/"
+            "ENERGY), the profile (FCN 82% of runtime; TMLE 394.6 "
+            "ms/evt), the memory (dead lanes: tolerance, 1ulp "
+            "reordering; live lane: stage-keyed caches; untried here: "
+            "vector/SIMD paths), and the ratchet (196.9, gates PASS). "
+            "Nothing further to survey — commit to your next action.")},
+    ] + extra
+
+
+def _real_replay() -> list[dict]:
+    """Point R: the REAL r5 wire up to the moment history dispatched
+    its first executor (real grounding, ~30 records of real survey),
+    replayed under the v2 system prompt. Reading: the brief it writes
+    now, against the task-shaped one history wrote."""
+    from scientist.agent import _compact_native
+    wire_path = (RUN / "world/.scientist/session/wire.jsonl")
+    messages = [
+        json.loads(line)
+        for line in wire_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()]
+    cut = None
+    for i, m in enumerate(messages):
+        if m.get("role") != "assistant":
+            continue
+        names = [tc.get("function", {}).get("name")
+                 for tc in m.get("tool_calls") or []]
+        if "executor" in names:
+            cut = i
+            break
+    assert cut is not None, "no executor dispatch in the wire"
+    messages = messages[:cut]
+    _compact_native(messages, keep_messages=400, max_chars=200_000)
+    for m in messages:
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            m.setdefault("reasoning_content", "")
+    return messages
 
 
 def _run_point(point: str, system: str) -> dict:
@@ -201,9 +309,11 @@ def _run_point(point: str, system: str) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--point", default="all",
-                        choices=["B", "W", "N", "S", "all"])
+                        choices=["B", "B2", "W", "N", "S", "S2", "R",
+                                 "all"])
     args = parser.parse_args()
-    points = ["B", "W", "N", "S"] if args.point == "all" else [args.point]
+    points = (["B", "B2", "W", "N", "S", "S2", "R"] if args.point == "all"
+              else [args.point])
     system = _system()
     for point in points:
         _run_point(point, system)
