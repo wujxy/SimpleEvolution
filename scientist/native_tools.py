@@ -663,10 +663,11 @@ world has already passed by — its remaining box is pure cost. Seats
 are opened because a hypothesis deserves them, never to fill them.
 
 The work runs on two ledgers. On experiments: a small probe and a
-full evaluation answer different questions — the probe, at a fraction
-of the events, ranks candidates; only the full evaluation decides,
+full evaluation answer different questions — the probe, run at
+smaller scale wherever the evaluation takes one, ranks candidates;
+only the full evaluation decides,
 and a promotion that skips it is not efficiency. In a bit-exact world
-a correctness check on a few events is exact (a subset of the gate
+a correctness check on a small sample is exact (a subset of the gate
 itself); speed transfers as ordering, never as value. Measurement has
 a noise floor: repeat a fixed state, learn its spread, and read
 sub-noise deltas as ties — gates spent on them buy phantoms. A probe
