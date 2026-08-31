@@ -9,7 +9,8 @@ defined by which files exist under ``.scientist/assistant/<id>/`` —
     proc.pid        in flight
     digest.json     written at collection — the report; the status is a
                     FIELD (done / unparsed / timeout-salvaged /
-                    crash-salvaged / failed), never a string match
+                    crash-salvaged / cancelled / failed), never a string
+                    match
     read.marker     touched when the PI's loop has delivered the report
 
 The class is a set of nearly stateless verbs over that convention:
@@ -923,6 +924,19 @@ class InWorldAssistant:
             })
         return rows
 
+    def _has_unread_reports(self) -> bool:
+        """Non-consuming peek: is there a finished report the PI has not
+        been handed yet? The arrival signal ``wait(mode="any")`` sleeps
+        on — ``_take_reports`` would consume it."""
+        base = self._base()
+        if not base.is_dir():
+            return False
+        for entry in base.iterdir():
+            if ((entry / "digest.json").is_file()
+                    and not (entry / "read.marker").exists()):
+                return True
+        return False
+
     def _take_reports(self, only: str | None = None) -> list[dict]:
         """Reports not yet delivered to the PI; delivery touches
         ``read.marker`` — exactly-once by a file op, resume-safe. ``only``
@@ -979,16 +993,28 @@ class InWorldAssistant:
         arrives later — as a turn-top observation, or through ``wait``."""
         return self.launch(role, action)
 
-    def wait_for_seats(self, timeout_minutes: float | None = None
-                       ) -> dict:
+    def wait_for_seats(self, timeout_minutes: float | None = None,
+                       mode: str = "all") -> dict:
         """Block until pending engagements finish (each within its own
-        box) or the bound elapses; their reports are this call's result."""
+        box) or the bound elapses; their reports are this call's result.
+
+        ``mode="any"`` returns on the FIRST arrival instead of the last.
+        With a long mainline engagement in flight, waiting for everyone
+        holds a finished speculative report hostage until the slowest box
+        expires — a PI that cannot harvest early learns not to keep
+        speculation pending, and parallelism collapses into serial
+        babysitting (the r3 reading: dispatches into an empty pool). The
+        rest keep running and surface through later waits and turn tops.
+        """
+        any_mode = str(mode) == "any"
         t0 = time.monotonic()
         deadline = (None if timeout_minutes is None
                     else t0 + max(1, int(timeout_minutes)) * 60)
         while True:
             self.sweep()
             if not self._unfinalized():
+                break
+            if any_mode and self._has_unread_reports():
                 break
             if deadline is not None and time.monotonic() >= deadline:
                 break
@@ -1000,6 +1026,7 @@ class InWorldAssistant:
                     "waited_seconds": round(time.monotonic() - t0, 1)}
         return {"ok": True, "finished": finished,
                 "still_running": self.pending(),
+                "mode": "any" if any_mode else "all",
                 "waited_seconds": round(time.monotonic() - t0, 1)}
 
     def continue_engagement(self, action: dict) -> dict:
@@ -1055,6 +1082,43 @@ class InWorldAssistant:
             "continued_from": call_id,
             "mode": mani.get("mode") or digest.get("mode") or "current",
         })
+
+    def cancel_engagement(self, action: dict) -> dict:
+        """Stop-loss: stop ONE running engagement before its box expires
+        and salvage its partial transcript. The verb for a speculative
+        candidate the world has already passed by — burning its remaining
+        box is pure cost. The salvaged report is this call's own result
+        (consumed here, so a turn top will not re-deliver it); a
+        cancelled Executor whose session id survived can still be
+        continued later."""
+        call_id = str(action.get("collaborator_id") or "").strip()
+        reason = str(action.get("reason") or "").strip()
+        if not call_id:
+            return {"ok": False,
+                    "error": "cancel_engagement requires collaborator_id"}
+        d = self._dir_of(call_id)
+        if not (d / "manifest.json").is_file():
+            return {"ok": False, "error": (
+                f"no engagement record under '{call_id}'")}
+        if (d / "digest.json").exists():
+            return {"ok": False, "error": (
+                f"'{call_id}' has already finished — its report is "
+                "delivered like any other")}
+        proc = self._procs.get(call_id)
+        if proc is not None:
+            self._kill_tree(proc)
+        else:
+            try:
+                pid = int((d / "proc.pid").read_text().strip())
+            except (OSError, ValueError):
+                pid = 0
+            self._kill_pid(pid)
+        note = reason or "cancelled by the Scientist before its box expired"
+        self.collect(call_id, status_hint="cancelled", note=note)
+        reports = self._take_reports(only=call_id)
+        return reports[0] if reports else {
+            "ok": True, "cancelled": call_id, "status": "cancelled",
+            "note": note}
 
     def shutdown_pending(self, reason: str = (
             "the episode ended before this engagement finished")

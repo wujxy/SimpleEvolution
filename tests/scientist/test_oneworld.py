@@ -1304,3 +1304,97 @@ def test_reviewer_heard_after_reads_finished_at_field(tmp_path: Path):
     )
     assert not assistant.reviewer_heard_after(6000.0)
     assert assistant.reviewer_heard_after(4000.0)
+
+
+def _speed_by_brief_claude(tmp_path: Path) -> Path:
+    """A fake seat whose duration its brief chooses: a brief containing
+    SLOW sleeps past any test, any other brief finishes at once — one
+    config, two speeds, the surface wait(mode=any) needs."""
+    event = {
+        "type": "result",
+        "result": "did the work\n```json\n"
+                  '{"diff_summary": "changed a.c", '
+                  '"self_report_digest": "ran benches", '
+                  '"metrics": {"speed": 2}}\n```',
+        "usage": {"total_tokens": 7},
+    }
+    script = tmp_path / "fake_claude_speed_by_brief.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        "cat > brief.$$\n"
+        "if grep -q SLOW brief.$$; then sleep 30; else sleep 0.3; fi\n"
+        "rm -f brief.$$\n"
+        "cat <<'JSONLINE'\n" + json.dumps(event) + "\nJSONLINE\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script
+
+
+def test_wait_any_returns_first_arrival_while_rest_run(tmp_path: Path):
+    """mode=any: with a fast seat and a still-running slow seat in
+    flight, wait returns the fast report WITHOUT holding it for the slow
+    one — harvest-early semantics, the fix for a PI that would otherwise
+    learn not to speculate next to a long mainline engagement."""
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_speed_by_brief_claude(tmp_path)),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+    slow = assistant.engage_async("executor", {
+        "brief": "SLOW mainline leg", "definition_of_done": "d"})
+    fast = assistant.engage_async("executor", {
+        "brief": "quick speculative probe", "definition_of_done": "d"})
+    result = assistant.wait_for_seats(timeout_minutes=1, mode="any")
+    assert result["mode"] == "any"
+    ids = [r["collaborator_id"] for r in result["finished"]]
+    assert fast["collaborator_id"] in ids
+    assert slow["collaborator_id"] not in ids
+    assert [r["collaborator_id"]
+            for r in result["still_running"]] == [slow["collaborator_id"]]
+    slow_dir = (world.work / ".scientist" / "assistant"
+                / slow["collaborator_id"])
+    assert (slow_dir / "proc.pid").exists()    # the mainline still runs
+    assistant.shutdown_pending()
+
+
+def test_cancel_engagement_salvages_and_consumes_inline(tmp_path: Path):
+    """Stop-loss: a running seat is stopped before its box, its partial
+    transcript salvaged as status=cancelled, and the report returned as
+    the call's OWN result — read.marker touched, so a later turn top
+    will not re-deliver it. Finished and unknown ids are clean errors."""
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_sleeper_claude(tmp_path)),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+    ack = assistant.engage_async("executor", {
+        "brief": "b", "definition_of_done": "d"})
+    time.sleep(0.5)     # let the init line + partial text flush
+    report = assistant.cancel_engagement({
+        "collaborator_id": ack["collaborator_id"],
+        "reason": "eclipsed by a sibling result"})
+    assert report["ok"] and report["status"] == "cancelled"
+    assert "eclipsed" in str(report.get("note") or "")
+    assert report.get("self_report_digest") == "partial diagnosis in hand"
+    d = world.work / ".scientist" / "assistant" / ack["collaborator_id"]
+    assert (d / "digest.json").exists()
+    assert not (d / "proc.pid").exists()
+    assert (d / "read.marker").exists()       # consumed inline
+    assert assistant.poll_completions() == []  # nothing re-delivered
+    again = assistant.cancel_engagement({
+        "collaborator_id": ack["collaborator_id"]})
+    assert not again["ok"] and "already finished" in again["error"]
+    missing = assistant.cancel_engagement(
+        {"collaborator_id": "executor-t-999"})
+    assert not missing["ok"]

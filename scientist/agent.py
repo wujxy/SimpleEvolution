@@ -255,8 +255,16 @@ def dispatch_action(action: dict, *, world, assistant, ledger) -> dict:
         except Exception as exc:  # noqa: BLE001 — surfaced to the PI
             return {"ok": False, "error": f"engagement dispatch failed: "
                                           f"{exc}"}
+    if name == "cancel_engagement":
+        try:
+            return assistant.cancel_engagement(action)
+        except Exception as exc:  # noqa: BLE001 — surfaced to the PI
+            return {"ok": False, "error": f"engagement dispatch failed: "
+                                          f"{exc}"}
     if name == "wait":
-        return assistant.wait_for_seats(action.get("timeout_minutes"))
+        return assistant.wait_for_seats(action.get("timeout_minutes"),
+                                        mode=str(action.get("mode")
+                                                 or "all"))
     if name == "revise_research_state":
         return ledger.revise_research_state(action)
     if name == "revise_research_judgment":
@@ -759,7 +767,9 @@ def run_episode(
             for action in actions:
                 name = action["action"]
                 observation = observations[id(action)]
-                if name in ROLE_NAMES or name == "continue_engagement":
+                if (name in ROLE_NAMES
+                        or name in ("continue_engagement",
+                                    "cancel_engagement")):
                     _log(f"step {step}: seat engagement "
                          f"{observation.get('status') or 'failed'}")
                 action_log.append({"action": name, "step": step})

@@ -206,19 +206,48 @@ CONTINUE_ENGAGEMENT_TOOL = _fn(
 WAIT_TOOL = _fn(
     "wait",
     "Block until pending collaborator engagements finish; their reports "
-    "return as this call's result. With nothing pending, returns an empty "
-    "status immediately. Engagements still running at the wait's bound "
-    "keep running, and their reports arrive as observations in later "
-    "turns.",
+    "return as this call's result. mode=all (the default) waits for every "
+    "pending engagement; mode=any returns on the first report to arrive "
+    "while the rest keep running — the shape for a long mainline "
+    "engagement with speculative seats in flight. With nothing pending, "
+    "returns an empty status immediately. Engagements still running at "
+    "the wait's bound keep running, and their reports arrive as "
+    "observations in later turns.",
     {
+        "mode": {
+            "type": "string", "enum": ["all", "any"],
+            "description": "all (the default) waits for every pending "
+                           "engagement; any returns on the first arrival",
+        },
         "timeout_minutes": {
             "type": "integer", "minimum": 1, "maximum": 480,
             "description": "bound on this wait in minutes; when omitted "
-                           "the wait runs until every pending engagement "
-                           "finishes (each within its own time box)",
+                           "the wait runs until its mode's condition is "
+                           "met (each engagement within its own time box)",
         },
     },
     [],
+)
+
+CANCEL_TOOL = _fn(
+    "cancel_engagement",
+    "Stop a running engagement before its time box expires and salvage "
+    "its partial report — stop-loss on a candidate the world has already "
+    "passed by. The salvaged report is this call's own result; a "
+    "cancelled Executor whose session survived can still be continued.",
+    {
+        "collaborator_id": {
+            "type": "string",
+            "description": "the running engagement to stop (the id in "
+                           "its acknowledgment)",
+        },
+        "reason": {
+            "type": "string",
+            "description": "why it is being stopped — recorded with the "
+                           "salvage",
+        },
+    },
+    ["collaborator_id"],
 )
 
 CHALLENGER_TOOL = _fn(
@@ -547,6 +576,7 @@ NATIVE_TOOLS: tuple[dict, ...] = (
     CHALLENGER_TOOL,
     REVIEWER_TOOL,
     WAIT_TOOL,
+    CANCEL_TOOL,
     REVISE_RESEARCH_STATE_TOOL,
     REMEMBER_TOOL,
     NOTE_TOOL,
@@ -576,7 +606,7 @@ NATIVE_LOCAL_ACTIONS = frozenset(
     {"bash", "read_file", "write_file", "note"})
 NATIVE_FORWARDED_ACTIONS = frozenset({
     "searcher", "proposer", "executor", "challenger", "reviewer",
-    "continue_engagement", "wait",
+    "continue_engagement", "wait", "cancel_engagement",
     "revise_research_state", "remember", "search_experiments",
     "inspect_experiment", "inspect_originating_research_state",
     "search_research_memory", "list_research_memory",
@@ -621,6 +651,16 @@ Independent hypotheses open as separate seats in one turn and run
 concurrently — the time they spend is yours to think in. Reliability
 first, efficiency second: parallel independent verification is
 efficiency; cutting verification is the betrayal.
+
+A working shape for long optimization runs: one mainline Executor
+carried forward through continue_engagement — that colleague's
+accumulated context is where depth comes from — while one or two
+speculative seats (isolated workspaces, distinct mechanisms) explore
+ahead on their own. wait with mode=any hands you the first arrival;
+judge it then: fold a winner into the mainline's next brief and let
+that colleague merge it with their context, and cancel a candidate the
+world has already passed by — its remaining box is pure cost. Seats
+are opened because a hypothesis deserves them, never to fill them.
 
 Each fresh engagement is a fresh collaborator. They may work through a
 long internal trajectory of searching, reading, coding, debugging, or
@@ -671,7 +711,9 @@ NATIVE_PROTOCOL_BLOCK = """# Runtime Mechanics
   killed or crashed engagement's salvaged partial report arrives the same
   way, marked as such). A reviewer call returns the report itself — it
   runs inside the call. wait blocks until pending engagements finish and
-  returns their reports.
+  returns their reports — mode any returns on the first arrival while
+  the rest keep running. cancel_engagement stops a running seat at
+  stop-loss and returns its salvaged report.
 - revise_research_state replaces the current view note in your active
   context in place; your long-term research memory (remember and its
   search tools) is persistent and independent of that page.
