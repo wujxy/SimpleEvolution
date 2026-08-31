@@ -151,6 +151,12 @@ def test_frontend_has_required_regions_and_safe_rendering_contract(
     assert 'id="seats"' in html
     assert 'id="details"' in html
     assert "new EventSource('/api/stream')" in app
+    assert "showActivityDetail" in app
+    assert "activity.task" in app
+    assert "任务详情不可解析" in app
+    assert "完成标准不可用" in app
+    assert "查看活动详情" in app
+    assert "查看原始记录" in app
     assert ".textContent" in app
     assert ".innerHTML" not in app
     assert "last_activity_at" in app
@@ -159,6 +165,40 @@ def test_frontend_has_required_regions_and_safe_rendering_contract(
     assert headers["Content-Security-Policy"] == (
         "default-src 'self'; connect-src 'self'; script-src 'self'; "
         "style-src 'self'; object-src 'none'; base-uri 'none'")
+
+
+def test_snapshot_keeps_hostile_collaboration_task_as_plain_data(
+        run_fixture):
+    run_dir, scientist = run_fixture
+    hostile = '<img src=x onerror=alert("task")>'
+    wire = {
+        "role": "assistant",
+        "tool_calls": [{
+            "id": "call-hostile",
+            "function": {
+                "name": "executor",
+                "arguments": json.dumps({
+                    "brief": hostile,
+                    "definition_of_done": "all checks pass",
+                }),
+            },
+        }],
+    }
+    (scientist / "session" / "wire.jsonl").write_text(
+        json.dumps(wire) + "\n", encoding="utf-8")
+    observatory = Observatory(RunLayout.discover(run_dir))
+    observatory.poll_once()
+
+    with running_server(observatory) as base_url:
+        snapshot = get_json(base_url + "/api/snapshot")
+        app, _ = get_text(base_url + "/static/app.js")
+
+    task = next(
+        event["task"] for event in snapshot["timeline"]
+        if event["kind"] == "collaboration_task"
+    )
+    assert task["brief"] == hostile
+    assert ".innerHTML" not in app
 
 
 def test_cli_defaults_are_loopback_and_one_second():

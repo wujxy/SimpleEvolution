@@ -105,6 +105,15 @@ button:hover, button:focus-visible { border-color: var(--accent); }
 .quiet-button { color: var(--warn); }
 
 #details { margin-top: 12px; }
+.task-label { margin: 16px 0 6px; font-size: 13px; color: var(--muted); }
+.task-text {
+  margin: 0 0 10px;
+  max-height: none;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.task-detail .detail-button { margin-top: 6px; }
 pre {
   max-height: 55vh;
   overflow: auto;

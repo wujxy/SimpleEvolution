@@ -31,6 +31,13 @@ function detailButton(label, detailId) {
   return button;
 }
 
+function activityButton(activity) {
+  const button = element('button', 'detail-button', '查看活动详情');
+  button.type = 'button';
+  button.addEventListener('click', () => showActivityDetail(activity));
+  return button;
+}
+
 function renderTimeline(events) {
   const root = document.getElementById('timeline');
   const nearBottom = root.scrollHeight - root.scrollTop - root.clientHeight < 48;
@@ -48,7 +55,11 @@ function renderTimeline(events) {
       body.append(element('span', 'sequence', '序列 ' + event.sequence));
     }
     const details = event.detail_refs || [];
-    if (details.length) body.append(detailButton('查看原始记录', details[0]));
+    if (event.kind === 'collaboration_task') {
+      body.append(activityButton(event));
+    } else if (details.length) {
+      body.append(detailButton('查看原始记录', details[0]));
+    }
     row.append(marker, body);
     return row;
   });
@@ -169,6 +180,37 @@ async function showDetail(detailId) {
   } catch (error) {
     root.textContent = '原始证据不可用：' + error.message;
   }
+}
+
+function showActivityDetail(activity) {
+  selected = activity.id;
+  const root = document.getElementById('details');
+  const task = activity.task || {};
+  const content = element('div', 'task-detail');
+  content.append(element(
+    'p', 'detail-source', unavailable(activity.role) + ' 任务'));
+  if (!task.available) {
+    content.append(element('p', 'warning', '任务详情不可解析'));
+  } else {
+    content.append(
+      element('h3', 'task-label', '任务'),
+      element('pre', 'task-text', task.brief),
+    );
+    if (Object.prototype.hasOwnProperty.call(
+      task, 'definition_of_done')) {
+      content.append(
+        element('h3', 'task-label', '完成标准'),
+        element(
+          'pre', 'task-text',
+          task.definition_of_done || '完成标准不可用'),
+      );
+    }
+  }
+  const detailId = (activity.detail_refs || [])[0];
+  if (detailId) {
+    content.append(detailButton('查看原始记录', detailId));
+  }
+  root.replaceChildren(content);
 }
 
 async function applyDelta(delta) {
