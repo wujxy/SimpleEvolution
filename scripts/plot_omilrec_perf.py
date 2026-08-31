@@ -88,6 +88,7 @@ def scientist_points(run: str) -> tuple[list[tuple[float, float]],
 
     all_pts: list[tuple[float, float]] = []
     ratchet_pts: list[tuple[float, float]] = []
+    engagements: list[tuple[float, str]] = []
     for d in sorted(base.iterdir()):
         raw_p = d / "raw.txt"
         if not raw_p.is_file():
@@ -102,16 +103,31 @@ def scientist_points(run: str) -> tuple[list[tuple[float, float]],
                 meta = {}
             role = str(meta.get("role") or "")
             t = digest_p.stat().st_mtime
-            # the delivered report is the JSON-fragment occurrence of
-            # this id in the wire — prose never takes that shape
-            probe = f'"collaborator_id": "{d.name}"'
-            pos = wire_text.find(probe)
-            if pos >= 0:
-                anchors.append((wire_text.count("\n", 0, pos), t))
+        engagements.append((t, d.name))
         for _idx, v in stream_readings(raw_p):
             all_pts.append((t, v))
             if role == "executor":
                 ratchet_pts.append((t, v))
+
+    # Anchor placement: the delivered report embeds the engagement id as
+    # a JSON fragment — ESCAPED when the report is nested inside a
+    # tool-result string (v6's shape: \"collaborator_id\": \"...\"), raw
+    # in a structured record. The plain quoted probe matches neither
+    # escaped form and the wire's readings then interpolate across the
+    # whole run between the two endpoint anchors — a flat-then-cliff
+    # artifact. Bare id is the last-resort probe (prose mentions too,
+    # but v6 is synchronous: dispatch, work, and delivery cluster).
+    # Forward-search keeps anchors monotonic in wire position.
+    pos_from = 0
+    for t, name in sorted(engagements):
+        for probe in (f'"collaborator_id": "{name}"',
+                      f'\\"collaborator_id\\": \\"{name}\\"',
+                      name):
+            pos = wire_text.find(probe, pos_from)
+            if pos >= 0:
+                anchors.append((wire_text.count("\n", 0, pos), t))
+                pos_from = pos
+                break
 
     anchors.sort()
     for idx, v in stream_readings(wire_p):
