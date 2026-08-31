@@ -80,3 +80,13 @@ behavioral changes the FCN probe cannot see.
   (the likelihood vertex/energy fitter driven by `Calculate_EVLikelihood`).
   The benchmark freezes the v1.0.0 algorithm and single-thread mode, so the
   dominant expert lever is reducing the likelihood kernel's per-event cost.
+
+## Expert line re-measurement (2026-08-31)
+
+v1.12.0 (7b4700f), this machine (Xeon 8358P), Release build
+(`-DCMAKE_BUILD_TYPE=Release` — a bare cmake build reads ~344 ms/evt,
+unoptimized), 100 events, core 97 pinned, same input/RecMap as the
+task bench, J26.1.1: **171.71 / 171.80 / 176.17 ms/evt (median
+171.8, ±1.3%)**. Consistent with the recorded C4 row 177.71 ± 1.0
+(2b70082); the release commit is a few wins later. Expert line =
+**171.8 ms/evt (5.35× vs the 919.9 baseline)**.

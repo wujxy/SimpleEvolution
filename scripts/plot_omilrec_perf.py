@@ -45,7 +45,7 @@ REPO = Path(__file__).resolve().parent.parent
 RUNS = REPO / "runs" / "singlenode"
 READING_RE = re.compile(
     r"SPEED_MS=([0-9.]+)\s*ms/evt \(100 events\)")
-EXPERT_MS = 177.0
+EXPERT_MS = 171.8   # v1.12.0 re-measured 2026-08-31: 171.71/171.80/176.17
 BASELINE_MS = 919.9
 
 
