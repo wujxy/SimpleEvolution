@@ -18,6 +18,7 @@ machinery. Reading the run means reading the wire.
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -81,9 +82,17 @@ class ScientistSession:
     def append_wire(self, message: dict) -> None:
         """Append one exact wire message (assistant turn with tool_calls
         and reasoning, tool result, user notice). Flush per line: a crash
-        mid-run leaves at most one torn line, which load tolerates."""
+        mid-run leaves at most one torn line, which load tolerates.
+
+        A ``ts`` epoch is stamped on the record (never inside the
+        message the model sees — replay reads role/content/tool_calls
+        only). The streams otherwise carry no clocks, which made every
+        after-the-fact question about WHERE the wall time went — tool
+        durations, wait-vs-work, idle gaps — unanswerable from the
+        record. With ts, they are arithmetic."""
+        record = {**message, "ts": time.time()}
         with self.wire_path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(message, ensure_ascii=False) + "\n")
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def load_wire_messages(self) -> list[dict]:
         """Rebuild the conversation from the wire log. A torn trailing
@@ -102,8 +111,14 @@ class ScientistSession:
             except json.JSONDecodeError:
                 continue
             if isinstance(message, dict) and message.get("role"):
+                # ts is ledger bookkeeping on the record, not part of the
+                # conversation — the replayed view must not carry fields
+                # the endpoint never saw
+                message.pop("ts", None)
                 messages.append(message)
         return _complete_dangling_calls(messages)
+
+
 def _complete_dangling_calls(messages: list[dict]) -> list[dict]:
     """A hard kill can drop the tool results of an in-flight call: the
     assistant message is already on the wire, the result never arrived,

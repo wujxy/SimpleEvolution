@@ -42,6 +42,21 @@ def test_wire_log_roundtrip_preserves_every_field(tmp_path):
     assert session.load_wire_messages() == turns
 
 
+def test_wire_records_carry_ts_the_replay_view_strips(tmp_path):
+    """Every wire record is stamped with a wall-clock epoch — the only
+    clock in the whole stream, without which tool durations and idle
+    gaps are unrecoverable after the fact. The stamp lives on the disk
+    record for analysis; the replayed conversation never sees it (the
+    endpoint must not receive fields it never produced)."""
+    session = _session(tmp_path)
+    session.append_wire({"role": "user", "content": "tick"})
+    rows = [json.loads(line) for line
+            in session.wire_path.read_text().splitlines()]
+    assert isinstance(rows[0]["ts"], float)
+    assert session.load_wire_messages() == [{"role": "user",
+                                             "content": "tick"}]
+
+
 def test_wire_log_tolerates_torn_trailing_line(tmp_path):
     """A crash mid-write leaves at most one torn line; load skips it."""
     session = _session(tmp_path)
