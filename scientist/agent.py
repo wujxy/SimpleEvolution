@@ -653,7 +653,8 @@ def run_episode(
         if session is not None:
             session.append_wire(message)
 
-    if session is not None and not session.wire_path.exists():
+    cold_start = session is not None and not session.wire_path.exists()
+    if cold_start:
         # cold start: the framing (opening messages + judgment note) is
         # part of the record too
         for message in messages:
@@ -661,6 +662,21 @@ def run_episode(
 
     def _nudge(text: str) -> None:
         _emit({"role": "user", "content": text})
+
+    # Relay discoverability: an inherited research memory is the run's
+    # institutional knowledge, but nothing else in the opening says it
+    # exists — r5 found its 43 inherited items only by luck, ~1h in. A
+    # pointer at cold start (a fact, not an instruction): the dead lanes
+    # and verified lessons of the predecessor are one listing away.
+    if (cold_start and ledger.research_memory_path.is_file()):
+        _inherited = sum(1 for _ in ledger.research_memory_path.open())
+        if _inherited:
+            _nudge(
+                f"Research memory: this run carries {_inherited} recorded "
+                "research-memory items from before this conversation — "
+                "list_research_memory and search_research_memory make them "
+                "visible. Dead lanes and verified lessons may already be "
+                "recorded there.")
 
     try:
         for index in range(steps_budget):
