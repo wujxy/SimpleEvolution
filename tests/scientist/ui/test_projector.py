@@ -149,6 +149,26 @@ def test_bad_collaboration_call_does_not_hide_valid_sibling(tmp_path):
     }
 
 
+def test_executor_marks_missing_definition_of_done(tmp_path):
+    record = _wire_record(tmp_path, {
+        "role": "assistant",
+        "tool_calls": [{"id": "missing-done", "function": {
+            "name": "executor",
+            "arguments": {"brief": "measure the current baseline"},
+        }}],
+    })
+    projector = RunProjector({})
+
+    projector.apply(ReaderBatch(
+        [record], [], initial_index_complete=True))
+
+    assert projector.snapshot()["timeline"][0]["task"] == {
+        "brief": "measure the current baseline",
+        "definition_of_done": "",
+        "available": True,
+    }
+
+
 def test_collaboration_event_ids_are_stable_across_replay(tmp_path):
     record = _wire_record(tmp_path, {
         "role": "assistant",

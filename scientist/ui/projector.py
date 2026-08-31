@@ -131,6 +131,8 @@ def _collaboration_events(
             definition = arguments.get("definition_of_done")
             if isinstance(definition, str):
                 task["definition_of_done"] = definition
+            elif name in {"executor", "continue_engagement"}:
+                task["definition_of_done"] = ""
         label = _COLLABORATION_LABELS[name]
         action = "继续" if name == "continue_engagement" else "派出"
         summary = f"{action} {label}"
