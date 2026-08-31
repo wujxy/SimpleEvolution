@@ -761,7 +761,7 @@ def run_episode(
                 observation = observations[id(action)]
                 if name in ROLE_NAMES or name == "continue_engagement":
                     _log(f"step {step}: seat engagement "
-                         f"{observation.get('status')}")
+                         f"{observation.get('status') or 'failed'}")
                 action_log.append({"action": name, "step": step})
                 _emit(wire_tool_result(
                     action.get("tool_call_id", ""), observation))

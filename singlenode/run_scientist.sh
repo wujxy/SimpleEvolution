@@ -145,8 +145,14 @@ setsid nohup bash -c '
         # single-quote characters — one such pair in a comment here once
         # silently regrouped the command words and the supervisor never
         # started. Glob, no grep.)
+        # Match by run basename, not the launch-path form: mountinfo
+        # records bind sources with the /datafs mount prefix stripped
+        # (/users/...), so an absolute launch path would never match its
+        # own string and the sweep would silently no-op. Run dir names
+        # are unique by convention.
+        world_pat="/$(basename "$RUN_DIR")/world"
         for proc in /proc/[0-9]*; do
-            grep -qF "$RUN_DIR/world" "$proc/mountinfo" 2>/dev/null \
+            grep -qF "$world_pat" "$proc/mountinfo" 2>/dev/null \
                 || continue
             pid=${proc#/proc/}
             echo "[supervisor] orphan sweep: TERM pid $pid"
@@ -155,7 +161,7 @@ setsid nohup bash -c '
         done
         sleep 3
         for proc in /proc/[0-9]*; do
-            grep -qF "$RUN_DIR/world" "$proc/mountinfo" 2>/dev/null \
+            grep -qF "$world_pat" "$proc/mountinfo" 2>/dev/null \
                 || continue
             pid=${proc#/proc/}
             kill -KILL -- "-$pid" 2>/dev/null \
