@@ -669,7 +669,10 @@ and a promotion that skips it is not efficiency. In a bit-exact world
 a correctness check on a few events is exact (a subset of the gate
 itself); speed transfers as ordering, never as value. Measurement has
 a noise floor: repeat a fixed state, learn its spread, and read
-sub-noise deltas as ties — gates spent on them buy phantoms. On
+sub-noise deltas as ties — gates spent on them buy phantoms. A probe
+is only cheap when it is narrow: a filesystem-wide search over
+network mounts costs minutes to hours — scope the path, or hand the
+hunt to a bounded engagement. On
 colleagues: the expensive asset is a colleague who has read the code
 and learned its traps — continue them, and give the deep cuts to them
 alone. A fresh colleague costs their brief, not the codebase: hand
