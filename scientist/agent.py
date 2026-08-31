@@ -709,7 +709,7 @@ def run_episode(
                 # Text-only turn: archive and nudge; the model acts by calling.
                 idle_turns += 1
                 _log(f"step {step}: text-only reply")
-                _emit({"role": "assistant", "content": reply.text})
+                _emit(wire_assistant_message(reply, actions))
                 if idle_turns >= _MAX_IDLE_TURNS:
                     _nudge(_IDLE_NUDGE)
                     idle_turns = 0

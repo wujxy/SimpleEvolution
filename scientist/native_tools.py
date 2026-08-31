@@ -809,15 +809,19 @@ def native_actions(reply: ModelReply) -> list[dict]:
 def wire_assistant_message(reply: ModelReply, actions: list[dict]) -> dict:
     """The assistant turn in OpenAI wire format (for the messages list).
 
-    ``reasoning_content`` rides along when the provider returned one:
-    thinking-mode APIs (DeepSeek) require it on replayed assistant turns
-    in multi-turn tool loops — dropping it 400s the run intermittently
-    (a live arm died at step 32 before this).
+    ``actions`` may be empty — the text-only turn. The receipt rule is
+    the same: ``reasoning_content`` rides along when the provider
+    returned one, because thinking-mode APIs (DeepSeek) require it on
+    EVERY replayed assistant turn, not only tool-call turns — a live
+    arm died writing its first text-only turn without the key (r4,
+    step 2 after resume; the hand-rolled dict bypassed this function).
     """
     message = {
         "role": "assistant",
         "content": reply.text or None,
-        "tool_calls": [
+    }
+    if actions:
+        message["tool_calls"] = [
             {
                 "id": call.id,
                 "type": "function",
@@ -827,8 +831,7 @@ def wire_assistant_message(reply: ModelReply, actions: list[dict]) -> dict:
                 },
             }
             for call in reply.tool_calls
-        ],
-    }
+        ]
     if reply.reasoning:
         # Blank receipt: the validator wants the KEY present on turns
         # that thought; the content never enters the replayed context

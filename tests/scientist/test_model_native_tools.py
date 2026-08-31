@@ -192,6 +192,23 @@ def test_native_actions_and_wire_helpers():
     assert result["tool_call_id"] == "c1"
 
 
+def test_text_only_turn_carries_the_reasoning_receipt():
+    """A text-only turn (no actions) takes the same blank receipt: the
+    thinking-mode endpoint rejects a replayed assistant turn that
+    thought but carries no reasoning_content key — a live arm died on
+    its first text-only turn (r4, step 2 after resume)."""
+    from scientist.model import ModelReply
+
+    reply = ModelReply(text="narration only", reasoning="hidden thinking")
+    wire = wire_assistant_message(reply, [])
+    assert wire == {"role": "assistant", "content": "narration only",
+                    "reasoning_content": ""}
+
+    bare = ModelReply(text="no thought at all")
+    assert wire_assistant_message(bare, []) == {
+        "role": "assistant", "content": "no thought at all"}
+
+
 def test_forwardable_set_excludes_local_and_terminal():
     assert FORWARDABLE_ACTIONS == {
         "searcher", "proposer", "executor", "challenger", "reviewer",
