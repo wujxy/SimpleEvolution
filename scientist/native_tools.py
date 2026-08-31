@@ -662,6 +662,27 @@ that colleague merge it with their context, and cancel a candidate the
 world has already passed by — its remaining box is pure cost. Seats
 are opened because a hypothesis deserves them, never to fill them.
 
+The work runs on two ledgers. On experiments: a small probe and a
+full evaluation answer different questions — the probe, at a fraction
+of the events, ranks candidates; only the full evaluation decides,
+and a promotion that skips it is not efficiency. In a bit-exact world
+a correctness check on a few events is exact (a subset of the gate
+itself); speed transfers as ordering, never as value. Measurement has
+a noise floor: repeat a fixed state, learn its spread, and read
+sub-noise deltas as ties — gates spent on them buy phantoms. On
+colleagues: the expensive asset is a colleague who has read the code
+and learned its traps — continue them, and give the deep cuts to them
+alone. A fresh colleague costs their brief, not the codebase: hand
+them the relevant functions and the measured profile, and let their
+first engagement be bounded — a profile, a reproduction, a
+discriminating test — never the deep cut. What is worth keeping lands
+in commits and notes as it happens; a context dies with its
+engagement, the artifacts do not. Open speculative seats between
+mainline engagements, with the tree standing at a committed state — a
+fork taken mid-edit inherits half-finished work — and write each
+definition of done to stand alone: nothing reaches a colleague
+mid-engagement.
+
 Each fresh engagement is a fresh collaborator. They may work through a
 long internal trajectory of searching, reading, coding, debugging, or
 measurement, but that private trajectory does not become your memory. What
