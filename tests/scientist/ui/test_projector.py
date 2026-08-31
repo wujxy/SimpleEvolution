@@ -32,6 +32,142 @@ def _seat_record(tmp_path: Path, offset: int, value: object) -> SourceRecord:
     )
 
 
+def _wire_record(
+    tmp_path: Path,
+    value: object,
+    offset: int = 40,
+) -> SourceRecord:
+    raw = (json.dumps(value) + "\n").encode()
+    return SourceRecord(
+        id=f"wire:{offset}",
+        source="wire",
+        path=tmp_path / "wire.jsonl",
+        offset=offset,
+        length=len(raw),
+        raw=raw,
+        value=value,
+        is_json=True,
+    )
+
+
+def test_wire_projects_each_collaboration_call_with_exact_task(tmp_path):
+    record = _wire_record(tmp_path, {
+        "role": "assistant",
+        "tool_calls": [
+            {"id": "call-exec", "function": {
+                "name": "executor",
+                "arguments": json.dumps({
+                    "brief": (
+                        "profile the hot loop\n"
+                        "without changing behavior"),
+                    "definition_of_done": "report stage timings",
+                    "workspace": "isolated",
+                }),
+            }},
+            {"id": "call-search", "function": {
+                "name": "searcher",
+                "arguments": {
+                    "brief": "inspect external-vertex consumers",
+                },
+            }},
+        ],
+    })
+    projector = RunProjector({})
+
+    projector.apply(ReaderBatch(
+        [record], [], initial_index_complete=True))
+
+    events = [
+        event for event in projector.snapshot()["timeline"]
+        if event["kind"] == "collaboration_task"
+    ]
+    assert [event["id"] for event in events] == [
+        "wire:40:call-exec", "wire:40:call-search",
+    ]
+    assert events[0]["role"] == "executor"
+    assert events[0]["summary"] == (
+        "派出 Executor：profile the hot loop without changing behavior")
+    assert events[0]["task"] == {
+        "brief": "profile the hot loop\nwithout changing behavior",
+        "definition_of_done": "report stage timings",
+        "available": True,
+    }
+    assert "workspace" not in events[0]["task"]
+    assert events[1]["task"] == {
+        "brief": "inspect external-vertex consumers",
+        "available": True,
+    }
+    assert events[0]["detail_refs"] == ["detail:wire:40"]
+
+
+@pytest.mark.parametrize("arguments", ["{broken", [], 7, None])
+def test_collaboration_call_with_bad_arguments_degrades_truthfully(
+        tmp_path, arguments):
+    record = _wire_record(tmp_path, {
+        "role": "assistant",
+        "tool_calls": [{
+            "id": "bad",
+            "function": {"name": "executor", "arguments": arguments},
+        }],
+    })
+    projector = RunProjector({})
+
+    projector.apply(ReaderBatch(
+        [record], [], initial_index_complete=True))
+
+    event = projector.snapshot()["timeline"][0]
+    assert event["kind"] == "collaboration_task"
+    assert event["summary"] == "派出 Executor"
+    assert event["task"] == {"available": False}
+    assert event["detail_refs"] == ["detail:wire:40"]
+
+
+def test_bad_collaboration_call_does_not_hide_valid_sibling(tmp_path):
+    record = _wire_record(tmp_path, {
+        "role": "assistant",
+        "tool_calls": [
+            {"id": "bad", "function": {
+                "name": "executor", "arguments": "{broken",
+            }},
+            {"id": "good", "function": {
+                "name": "reviewer",
+                "arguments": json.dumps({"brief": "audit the evidence"}),
+            }},
+        ],
+    })
+    projector = RunProjector({})
+
+    projector.apply(ReaderBatch(
+        [record], [], initial_index_complete=True))
+
+    events = projector.snapshot()["timeline"]
+    assert len(events) == 2
+    assert events[0]["task"]["available"] is False
+    assert events[1]["task"] == {
+        "brief": "audit the evidence",
+        "available": True,
+    }
+
+
+def test_collaboration_event_ids_are_stable_across_replay(tmp_path):
+    record = _wire_record(tmp_path, {
+        "role": "assistant",
+        "tool_calls": [{"function": {
+            "name": "searcher",
+            "arguments": {"brief": "find consumers"},
+        }}],
+    })
+    snapshots = []
+    for _ in range(2):
+        projector = RunProjector({})
+        projector.apply(ReaderBatch(
+            [record], [], initial_index_complete=True))
+        snapshots.append(projector.snapshot()["timeline"])
+
+    assert snapshots[0] == snapshots[1]
+    assert snapshots[0][0]["id"] == "wire:40:index-0"
+
+
 def test_projector_keeps_recovery_and_seat_truth_separate(run_fixture):
     run_dir, scientist = run_fixture
     (run_dir / "run.log").write_text(

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 import shlex
 import time
@@ -37,6 +38,14 @@ _TOOL_LABELS = {
 _KNOWN_COMMANDS = {
     "benchmark.sh", "quick_bench.sh", "sl_eval_v100.sh",
     "pytest", "cmake", "make",
+}
+_COLLABORATION_LABELS = {
+    "executor": "Executor",
+    "searcher": "Searcher",
+    "proposer": "Proposer",
+    "challenger": "Challenger",
+    "reviewer": "Reviewer",
+    "continue_engagement": "Executor",
 }
 
 
@@ -84,6 +93,57 @@ def _tool_summary(name: str, inputs: dict) -> str:
     if name in {"WebSearch", "WebFetch"}:
         return f"{label} {_cap(inputs.get('query') or inputs.get('url'), 160)}"
     return f"{label} {_cap(inputs.get('description') or '', 160)}".strip()
+
+
+def _collaboration_arguments(value: object) -> dict[str, object] | None:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def _collaboration_events(
+    record: SourceRecord,
+) -> list[dict[str, object]]:
+    value = record.value
+    if not isinstance(value, dict):
+        return []
+    events: list[dict[str, object]] = []
+    for index, call in enumerate(value.get("tool_calls") or []):
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function")
+        if not isinstance(function, dict):
+            continue
+        name = str(function.get("name") or "")
+        if name not in _COLLABORATION_LABELS:
+            continue
+        arguments = _collaboration_arguments(function.get("arguments"))
+        task: dict[str, object] = {"available": False}
+        brief = arguments.get("brief") if arguments is not None else None
+        if isinstance(brief, str) and brief.strip():
+            task = {"brief": brief, "available": True}
+            definition = arguments.get("definition_of_done")
+            if isinstance(definition, str):
+                task["definition_of_done"] = definition
+        label = _COLLABORATION_LABELS[name]
+        action = "继续" if name == "continue_engagement" else "派出"
+        summary = f"{action} {label}"
+        if task["available"]:
+            summary += "：" + _cap(" ".join(brief.split()), 180)
+        call_id = str(call.get("id") or f"index-{index}")
+        events.append({
+            "id": f"{record.id}:{call_id}",
+            "role": "executor" if name == "continue_engagement" else name,
+            "summary": summary,
+            "task": task,
+        })
+    return events
 
 
 def _day_seconds(value: object) -> float | None:
@@ -218,6 +278,7 @@ class RunProjector:
         occurred_at: object = None,
         detail_ref: str | None = None,
         sort_key: float | None = None,
+        data: dict[str, object] | None = None,
     ) -> bool:
         if event_id in self._event_ids:
             return False
@@ -231,6 +292,8 @@ class RunProjector:
             "detail_refs": [detail_ref] if detail_ref else [],
             "_sort_key": sort_key,
         }
+        if data:
+            event.update(data)
         self._snapshot["timeline"].append(event)
         return True
 
@@ -427,6 +490,19 @@ class RunProjector:
             deltas.append({"type": "event_added",
                            "data": {"event_id": record.id}})
         elif source == "wire" and isinstance(record.value, dict):
+            collaboration = _collaboration_events(record)
+            if collaboration:
+                for item in collaboration:
+                    if self._event(
+                        str(item["id"]), "collaboration_task",
+                        str(item["summary"]), detail_ref=detail,
+                        data={"role": item["role"], "task": item["task"]},
+                    ):
+                        deltas.append({
+                            "type": "event_added",
+                            "data": {"event_id": item["id"]},
+                        })
+                return deltas
             role = str(record.value.get("role") or "wire")
             tool_names = [
                 str((item.get("function") or {}).get("name") or "tool")
