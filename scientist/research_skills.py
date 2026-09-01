@@ -30,6 +30,13 @@ _SKILLS = (
         "claude_use.md",
     ),
     ResearchSkill(
+        "delegation",
+        "The craft of working through colleagues: goal briefs, watching, "
+        "nudging, re-chartering at stalls, and the two ledgers — "
+        "experiments and colleagues.",
+        "delegation.md",
+    ),
+    ResearchSkill(
         "analogical_transfer",
         "Examine the current problem through structurally similar problems "
         "from distant domains, and map the mechanism back — changing the "
