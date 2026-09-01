@@ -134,54 +134,11 @@ def _box_from_action(action: dict, default_seconds: int,
     return max(1, min(minutes, max_minutes)) * 60
 
 
-# A forked data directory below this size is copied instead of symlinked;
-# anything at or above it (or named ``benchmarks``, the harness layout) is
-# symlinked into the read-only original so a 9 GB package costs nothing.
-_FORK_SYMLINK_MIN_BYTES = 512 * 1024 * 1024
-
-
-def _tree_bytes(path: Path) -> int:
-    total = 0
-    for root, _dirs, files in os.walk(path):
-        for name in files:
-            try:
-                total += os.path.getsize(os.path.join(root, name))
-            except OSError:
-                pass
-    return total
-
-
-def _fork_world(source: Path, dest: Path) -> None:
-    """Disposable copy of a world — the one way an experiment world is
-    made, whether pre-built for a speculative executor or self-served
-    through a seat's make-experiment kit.
-
-    Small trees (src/, scripts/, .git, docs) are copied so prototyping is
-    free; data-scale directories — anything named ``benchmarks`` or 512 MB
-    and up — become symlinks into the source, where the read-only mount
-    rejects writes at the kernel level. The PI's records (``.scientist``)
-    never ship: the private thought stream stays home, and the public
-    knowledge layer (research memory) is reached by pointing seats at
-    the live copy, not by packing it. (The include_ledger variant that
-    once lived here shipped the record into a reviewer's fork — and, the
-    seat home being inside .scientist/scratch, copied the destination
-    into itself; the redesign reads the record directly instead.)
-    """
-    dest.mkdir(parents=True, exist_ok=False)
-    source = Path(source).absolute()   # symlink targets must be absolute
-    for entry in sorted(source.iterdir()):
-        if entry.name == ".scientist":
-            continue
-        target = dest / entry.name
-        if entry.is_dir() and (
-                entry.name == "benchmarks"
-                or _tree_bytes(entry) >= _FORK_SYMLINK_MIN_BYTES):
-            target.symlink_to(entry, target_is_directory=True)
-        elif entry.is_dir():
-            shutil.copytree(entry, target,
-                            ignore=shutil.ignore_patterns(".scientist"))
-        else:
-            shutil.copy2(entry, target)
+# The one fork implementation lives in mkexp (kept self-contained so the
+# seat kit can copy that file alone); the speculative-executor prebuild
+# and the kit share it. Inheritance across a fork is within-run by
+# construction — only the PI's private record (.scientist) stays home.
+from .mkexp import fork_world as _fork_world
 
 
 def _partial_report(raw: str) -> tuple[str, int]:
@@ -312,6 +269,41 @@ class InWorldAssistant:
     def _seat_roots(self) -> list[Path]:
         return [self._base(), self._legacy_base()]
 
+    def _world_runtime(self) -> tuple[Path, Path]:
+        """One run, one claude runtime — fresh and world-scoped.
+
+        First principle (2026-09-01 ruling): a run's world opens brand
+        new; nothing outside it is visible; the channel is exactly what
+        the spec pins; nothing of the user's is borrowed for
+        compatibility. Isolation is run-by-run — inside the run,
+        inheritance is free. Concretely: the claude CLI applies the
+        user's ``~/.claude/settings.json`` env block OVER the subprocess
+        environment (every standalone-run seat silently answered glm-5.3
+        on the user's coding plan; ``--settings`` does not override it),
+        and reads skills/plugins/projects from the same tree. So the run
+        world carries its own ``.claude`` (settings = the spec's env,
+        sessions land here, resume works within the run) and its own
+        ``home`` (git identity belongs to the run, not the user)."""
+        config = self.world.work / ".claude"
+        home = self.world.work / "home"
+        config.mkdir(parents=True, exist_ok=True)
+        home.mkdir(parents=True, exist_ok=True)
+        settings = config / "settings.json"
+        payload = json.dumps({"env": self.config.env or {}}, indent=2)
+        if not settings.exists() or \
+                settings.read_text(encoding="utf-8") != payload:
+            settings.write_text(payload, encoding="utf-8")
+        settings.chmod(0o600)      # carries the run's credentials
+        gitconfig = home / ".gitconfig"
+        if not gitconfig.exists():
+            gitconfig.write_text(
+                "[user]\n"
+                f"\tname = {self.episode_id}\n"
+                f"\temail = {self.episode_id}@run.invalid\n",
+                encoding="utf-8",
+            )
+        return config, home
+
     def _dir_of(self, call_id: str) -> Path:
         new = self._base() / call_id
         if new.exists():
@@ -402,11 +394,17 @@ class InWorldAssistant:
     def _write_experiment_kit(self, seat_scratch: Path) -> None:
         """The make-experiment script: a cognitive seat's license to
         create a disposable world at the moment it needs one — resources
-        by behavior, not by role. The script backs onto scientist.mkexp
-        (the same cheap fork a speculative executor gets) and stamps each
-        experiment with the source world's git baseline so the Scientist
+        by behavior, not by role. The script backs onto a COPY of
+        scientist.mkexp placed in the seat's scratch (self-contained,
+        stdlib-only): a seat must not be handed the repository — its
+        harness prompts included — just to fork a world. Each experiment
+        is stamped with the source world's git baseline so the Scientist
         can read a seat's experiment against the state it forked from."""
-        repo_root = Path(__file__).resolve().parents[1]
+        support = seat_scratch / "kit"
+        support.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(
+            Path(__file__).resolve().parent / "mkexp.py",
+            support / "mkexp.py")
         script = seat_scratch / "make-experiment"
         script.write_text(
             "#!/usr/bin/env bash\n"
@@ -420,7 +418,7 @@ class InWorldAssistant:
             "  [ -d \"$d\" ] && N=$((N+1))\n"
             "done\n"
             "TARGET=$(printf 'exp-%03d' $((N+1)))\n"
-            f"PYTHONPATH={repo_root} {sys.executable} -m scientist.mkexp \\\n"
+            f"{sys.executable} \"$(dirname \"$0\")/kit/mkexp.py\" \\\n"
             f"    --source {self.world.work} --dest \"$TARGET\"\n"
             "echo \"experiment world: $TARGET/"
             " (baseline in $TARGET/EXPERIMENT_BASELINE)\"\n",
@@ -652,10 +650,20 @@ class InWorldAssistant:
         started = time.time()
         raw_path = self._raw_dir(collaborator_id) / "raw.txt"
         handle = raw_path.open("wb")
-        env = dict(os.environ)
+        # run-by-run isolation at the single spawn chokepoint: the seat
+        # sees the run world's .claude and home and nothing of the
+        # user's — no ambient session identity (CLAUDE_*), no inherited
+        # credentials/endpoints (ANTHROPIC_*), no user HOME. The spec's
+        # env, CLAUDE_CONFIG_DIR and HOME are the only claude-facing
+        # state that reaches the child.
+        env = {k: v for k, v in os.environ.items()
+               if not (k.startswith("CLAUDE") or k.startswith("ANTHROPIC"))}
         if self.config.env:
             env.update(
                 {str(k): str(v) for k, v in self.config.env.items()})
+        config_dir, home_dir = self._world_runtime()
+        env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+        env["HOME"] = str(home_dir)
         argv = self._command_payload(_SEAT_TOOLS,
                                      resume_session=session_hint)
         print(f"[research-team] {role} {collaborator_id} running "

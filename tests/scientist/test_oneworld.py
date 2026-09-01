@@ -1398,3 +1398,68 @@ def test_cancel_engagement_salvages_and_consumes_inline(tmp_path: Path):
     missing = assistant.cancel_engagement(
         {"collaborator_id": "executor-t-999"})
     assert not missing["ok"]
+
+
+def test_seat_runtime_is_world_scoped(tmp_path: Path, monkeypatch):
+    """Run-by-run isolation (2026-09-01 ruling): a run's world opens
+    brand new, sees nothing outside itself, and the channel is exactly
+    the spec's. The seat subprocess runs with the run world's own .claude
+    and home — never the user's ~/.claude (whose settings.json env block
+    the CLI applies OVER process env) and never an inherited session
+    identity."""
+    import os
+
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+
+    # ambient user/session state that must NOT reach the seat
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "leak-session")
+    monkeypatch.setenv("CLAUDE_EFFORT", "high")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://user.example")
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+
+    def _env_claude(tmp: Path) -> Path:
+        script = tmp / "env_claude.sh"
+        script.write_text(
+            "#!/bin/sh\n"
+            "env | sort > \"$ENV_DUMP\"\n"
+            "cat <<'JSONLINE'\n"
+            + json.dumps({
+                "type": "result",
+                "result": "ok\n```json\n{\"diff_summary\": \"\"}\n```",
+                "usage": {}}) + "\nJSONLINE\n",
+            encoding="utf-8")
+        script.chmod(0o755)
+        return script
+
+    dump = tmp_path / "seat_env.txt"
+    monkeypatch.setenv("ENV_DUMP", str(dump))
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_env_claude(tmp_path)),
+                               work_default_minutes=1,
+                               env={"ANTHROPIC_AUTH_TOKEN": "sk-spec"}),
+        ledger=ledger, episode_id="iso-run",
+    )
+    report = assistant.engage("executor", {
+        "brief": "b", "definition_of_done": "d"})
+    assert report["ok"]
+    seen = dict(
+        line.split("=", 1) for line in
+        dump.read_text().splitlines() if "=" in line)
+    # the world's runtime, and nothing of the user's
+    assert seen["CLAUDE_CONFIG_DIR"] == str(world.work / ".claude")
+    assert seen["HOME"] == str(world.work / "home")
+    assert seen.get("ANTHROPIC_AUTH_TOKEN") == "sk-spec"
+    for key in seen:
+        if key != "CLAUDE_CONFIG_DIR":      # ours, set above
+            assert not key.startswith("CLAUDE"), key
+        assert key != "ANTHROPIC_BASE_URL" or \
+            seen[key] != "https://user.example"
+    # the runtime itself: fresh settings carrying only the spec env,
+    # and the run's own git identity
+    settings = json.loads(
+        (world.work / ".claude" / "settings.json").read_text())
+    assert settings == {"env": {"ANTHROPIC_AUTH_TOKEN": "sk-spec"}}
+    assert "iso-run" in (world.work / "home" / ".gitconfig").read_text()

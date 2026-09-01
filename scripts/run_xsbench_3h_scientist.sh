@@ -10,7 +10,8 @@ set -euo pipefail
 cd /datafs/users/wujxy/agent-sci/omilrec_opt/v1.0/SimpleEvolution
 
 RUN_DIR=${1:-runs/xsbench-3h/scientist}
-WALL=10800
+# wall override: one knob drives the spec budget AND the snapshot sidecar
+WALL=${WALL:-10800}
 PY=/datafs/users/wujxy/py_venv/my_env/bin/python
 
 # Never clobber a live/finished run without an explicit override.
@@ -22,12 +23,7 @@ if [ -e "$RUN_DIR/run.log" ] || [ -d "$RUN_DIR/world" ]; then
     rm -rf "$RUN_DIR/world" "$RUN_DIR/snapshots" "$RUN_DIR/run.log"
 fi
 
-# ds runtime env for the assistant claude subprocesses (credentials —
-# never echoed). Token/base_url also baked into the spec below.
 unset APPTAINER_BIND
-set -a
-eval "$($PY -c 'import json,os;d=json.load(open(os.path.expanduser("~/.claude/settings_ds.json.backup")))["env"];[print(f"export {k}=\x27{v}\x27") for k,v in d.items()]')"
-set +a
 
 mkdir -p "$RUN_DIR"
 
@@ -43,7 +39,17 @@ tide = json.load(open("runs/tide-demo-1/spec.json"))
 ds = json.load(open(os.path.expanduser(
     "~/.claude/settings_ds.json.backup")))["env"]
 spec["model"]["api_key"] = tide["model"]["api_key"]
+goal_file = os.environ.get("GOAL_FILE")
+if goal_file:
+    spec["goal"] = open(goal_file).read().strip()
+spec["budget"]["wall_seconds"] = int(os.environ.get("WALL", "10800"))
+spec["episode_id"] = os.environ.get("EPISODE", spec["episode_id"])
 spec["assistant"]["env"]["ANTHROPIC_AUTH_TOKEN"] = ds["ANTHROPIC_AUTH_TOKEN"]
+# seat model explicit in argv: with the run world's own .claude the CLI
+# default-model resolution must never be consulted (see assistant_tools
+# _world_runtime — user settings once stomped every standalone seat onto
+# glm-5.3)
+spec["assistant"]["model"] = ds["ANTHROPIC_DEFAULT_SONNET_MODEL"]
 spec["assistant"]["env"]["ANTHROPIC_BASE_URL"] = ds["ANTHROPIC_BASE_URL"]
 open(sys.argv[1], "w").write(
     json.dumps(spec, indent=2, ensure_ascii=False))
@@ -55,6 +61,15 @@ $PY -m scientist.cli --spec "$RUN_DIR/spec.json" \
     --world "$RUN_DIR/world" --probe
 
 # 4) the scientist (detached) + read-only snapshot sidecar (detached)
+#    Run-by-run isolation for the PI process itself, applied AFTER the
+#    spec is built (credential assembly needs the real HOME): no ambient
+#    session identity, no user HOME. The seat side enforces the same at
+#    its own spawn chokepoint — see assistant_tools._world_runtime.
+for v in $(env | grep -oE '^(CLAUDE|ANTHROPIC)[A-Za-z0-9_]*'); do
+    unset "$v"
+done
+export HOME="$RUN_DIR/world/home"
+mkdir -p "$HOME"
 setsid nohup $PY -m scientist.cli \
     --spec "$RUN_DIR/spec.json" --world "$RUN_DIR/world" \
     >> "$RUN_DIR/run.log" 2>&1 &
