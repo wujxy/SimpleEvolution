@@ -1449,8 +1449,8 @@ def test_seat_runtime_is_world_scoped(tmp_path: Path, monkeypatch):
         line.split("=", 1) for line in
         dump.read_text().splitlines() if "=" in line)
     # the world's runtime, and nothing of the user's
-    assert seen["CLAUDE_CONFIG_DIR"] == str(world.work / ".claude")
-    assert seen["HOME"] == str(world.work / "home")
+    assert seen["CLAUDE_CONFIG_DIR"] == str(world.scratch / ".claude")
+    assert seen["HOME"] == str(world.scratch / "home")
     assert seen.get("ANTHROPIC_AUTH_TOKEN") == "sk-spec"
     for key in seen:
         if key != "CLAUDE_CONFIG_DIR":      # ours, set above
@@ -1460,6 +1460,6 @@ def test_seat_runtime_is_world_scoped(tmp_path: Path, monkeypatch):
     # the runtime itself: fresh settings carrying only the spec env,
     # and the run's own git identity
     settings = json.loads(
-        (world.work / ".claude" / "settings.json").read_text())
+        (world.scratch / ".claude" / "settings.json").read_text())
     assert settings == {"env": {"ANTHROPIC_AUTH_TOKEN": "sk-spec"}}
-    assert "iso-run" in (world.work / "home" / ".gitconfig").read_text()
+    assert "iso-run" in (world.scratch / "home" / ".gitconfig").read_text()

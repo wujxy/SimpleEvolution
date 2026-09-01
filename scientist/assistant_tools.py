@@ -270,7 +270,7 @@ class InWorldAssistant:
         return [self._base(), self._legacy_base()]
 
     def _world_runtime(self) -> tuple[Path, Path]:
-        """One run, one claude runtime — fresh and world-scoped.
+        """One run, one claude runtime — fresh and run-scoped.
 
         First principle (2026-09-01 ruling): a run's world opens brand
         new; nothing outside it is visible; the channel is exactly what
@@ -280,12 +280,19 @@ class InWorldAssistant:
         user's ``~/.claude/settings.json`` env block OVER the subprocess
         environment (every standalone-run seat silently answered glm-5.3
         on the user's coding plan; ``--settings`` does not override it),
-        and reads skills/plugins/projects from the same tree. So the run
-        world carries its own ``.claude`` (settings = the spec's env,
+        and reads skills/plugins/projects from the same tree. So the
+        run carries its own ``.claude`` (settings = the spec's env,
         sessions land here, resume works within the run) and its own
-        ``home`` (git identity belongs to the run, not the user)."""
-        config = self.world.work / ".claude"
-        home = self.world.work / "home"
+        ``home`` (git identity belongs to the run, not the user).
+
+        Placement — the scratch root, beside the seat homes: the claude
+        runtime is BODY (three-zone design), and bodies live in the
+        scratch mount, never in the research face. Inside the git tree
+        it would be untracked noise at best and, at worst, food for a
+        colleague's legitimate ``git clean``/``stash -u`` — the exact
+        structural hole that once ate a run's whole record."""
+        config = self.world.scratch / ".claude"
+        home = self.world.scratch / "home"
         config.mkdir(parents=True, exist_ok=True)
         home.mkdir(parents=True, exist_ok=True)
         settings = config / "settings.json"

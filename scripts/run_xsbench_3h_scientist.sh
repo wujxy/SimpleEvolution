@@ -62,8 +62,8 @@ chmod 600 "$RUN_DIR/spec.json"
 $PY -m scientist.cli --spec "$RUN_DIR/spec.json" \
     --world "$RUN_DIR/world" --probe
 
-# 3b) seat-channel preflight through the run world's own runtime — the
-# exact environment a seat gets (stripped ambient, world .claude/home,
+# 3b) seat-channel preflight through the run runtime (scratch root) — the
+# exact environment a seat gets (stripped ambient, scratch .claude/home,
 # explicit --model). A broken channel aborts HERE instead of dying as
 # per-seat failures mid-run. Empty or wrong credentials fail loudly;
 # a silent fallback into the user's settings is impossible by
@@ -71,15 +71,15 @@ $PY -m scientist.cli --spec "$RUN_DIR/spec.json" \
 (
     SEAT_MODEL=$($PY -c "import json;print(json.load(open('$RUN_DIR/spec.json'))['assistant'].get('model') or '')")
     SEAT_ENV=$($PY -c "import json;print(' '.join(f'{k}={v}' for k,v in json.load(open('$RUN_DIR/spec.json'))['assistant'].get('env',{}).items()))")
-    mkdir -p "$RUN_DIR/world/.claude" "$RUN_DIR/world/home"
+    mkdir -p "$RUN_DIR/seats/.claude" "$RUN_DIR/seats/home"
     $PY -c "import json,os,sys; \
 json.dump({'env': json.load(open('$RUN_DIR/spec.json'))['assistant'].get('env') or {}}, \
-open('$RUN_DIR/world/.claude/settings.json','w'), indent=2); \
-open('$RUN_DIR/world/home/.gitconfig','w').write('[user]\n\tname = preflight\n\temail = preflight@run.invalid\n')"
-    chmod 600 "$RUN_DIR/world/.claude/settings.json"
+open('$RUN_DIR/seats/.claude/settings.json','w'), indent=2); \
+open('$RUN_DIR/seats/home/.gitconfig','w').write('[user]\n\tname = preflight\n\temail = preflight@run.invalid\n')"
+    chmod 600 "$RUN_DIR/seats/.claude/settings.json"
     RC=0
-    env -i PATH="$PATH" HOME="$RUN_DIR/world/home" \
-        CLAUDE_CONFIG_DIR="$RUN_DIR/world/.claude" $SEAT_ENV \
+    env -i PATH="$PATH" HOME="$RUN_DIR/seats/home" \
+        CLAUDE_CONFIG_DIR="$RUN_DIR/seats/.claude" $SEAT_ENV \
         timeout 120 claude -p 'reply with exactly: ok' \
         --input-format text --output-format json \
         ${SEAT_MODEL:+--model "$SEAT_MODEL"} \
@@ -112,7 +112,7 @@ fi
 for v in $(env | grep -oE '^(CLAUDE|ANTHROPIC)[A-Za-z0-9_]*'); do
     unset "$v"
 done
-export HOME="$RUN_DIR/world/home"
+export HOME="$RUN_DIR/seats/home"
 mkdir -p "$HOME"
 setsid nohup $PY -m scientist.cli \
     --spec "$RUN_DIR/spec.json" --world "$RUN_DIR/world" \
