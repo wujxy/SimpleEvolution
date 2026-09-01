@@ -170,3 +170,41 @@ live 判据（下一次 xsbench 类活跑）：
    实测 25 工具 2300 词——较 v4 前基线 2106 的 +194 全部来自 v4 已付
    租金的语义句（fuse 从句×6/executor 整目标/View 态势），非本设计
    产物；fuse 参数描述已瘦至最短诚实形。
+
+---
+
+## 十、live 验收记录（2026-09-01，双跑）
+
+sew 跑（runs/xsbench-2h/scientist-sew，wall 7200s，自 deliver 于
+step 191）+ shakedown 跑（runs/xsbench-2h/shakedown，wall 5400s，
+goal 即工作区七件套自查，自 deliver 于 step 88）。**六判据 6/6 绿**：
+
+1. 零自动 fork：两跑 10 席位发射，认知席位全 mode=scratch；
+   seats/ 下唯一世界=isolated executor 预建。
+2. challenger 直读活世界：transcript 内 24 处活世界路径引用
+   （Simulation.c×6、GridInit.c×2）；报告本体死于 ds 429（infra）。
+3. **席位自发 make-experiment ×6**：sew searcher（复现前人工作于
+   自建 exp-001，7.43M 过闸后才报告）、sew reviewer（自建 exp 重跑
+   闸门×3 + 从真 baseline 建工作树验 15 长度 bit-identity 15/15 +
+   甄别灰色变体）、shake searcher×1、shake proposer×3——渐进阶梯
+   第三层是认知席位的常态工作方式，不是边缘路径。
+4. reviewer 直读记录：sew reviewer 无 fork 无账本特例完成全深度
+   回望审计（出处 git-archive diff、闸门复跑、越闸验证、合法性甄别）。
+5. executor/continue 无回归：current 直写活世界（2 commits）；
+   isolated 003 超盒打捞（fuse 语义）→ **续用为 004**（session+
+   workspace 复用，manifest 佐证）；续用产物 C1+C2 "validated but
+   NOT promoted"——diff 回报、PI 判断不合并，④句场景真实发生。
+6. 载荷：如上，未增。
+
+附带读数：①PI 在 junction 的诚实度——429 杀 reviewer 后，conclusion
+warning 显式声明"frontier 未获 reviewer 背书，请独立验证"；②sew 主
+战役 PI 全程 solo 未开 executor（7.2M 自己打满）——正是 v5 文本轮
+"delegatability 自问"要松的反例；③searcher 在磁盘上找到前人 v4 run
+并复现后移植——入世无沙箱下的合法研究行为（发现→自建世界复现→
+带证据报告→PI 判断），非泄漏事故；④**ds token 5h 用量窗是硬墙**：
+双跑并行 18:10 烧穿，四席位 429 陪葬——**r6 必须单跑**。
+
+v5 文本轮同日落地（见 memory/commit）：_COLD_START 的排队句替换为
+delegatability 自问+分叉；delegation.md 落 "Share what you learned,
+not the path you would take from it" + hypothesis-status 段与
+"returns evidence and a candidate world, not an obligation to merge"。
