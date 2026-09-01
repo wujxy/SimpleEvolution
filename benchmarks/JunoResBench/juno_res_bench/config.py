@@ -111,11 +111,10 @@ class DetectorConfig:
     three_gamma_frac: float = 0.022
 
     # ---- Cherenkov (B4; default ON) ---------------------------------------
-    # N_C ~ Poisson(E_dep * ly_cherenkov * (1 - 1/(n*beta)^2)) with beta from
-    # the electron kinetic energy; ly_cherenkov is calibrated so that
-    # N_C/N_scint ~ 2.5% at 1 MeV (JUNO-SW CherenkovYieldFactor=0.517 scale).
-    # None disables.
-    ly_cherenkov: Optional[float] = 500.0
+    # Frank-Tamm-like path yield.  Per local charged step:
+    # N_C ~ Poisson(dx * yield * (1 - 1/(n*beta)^2)).  The synthetic value
+    # gives N_C/N_scint ~2.5% for a 1 MeV electron.  None disables.
+    cherenkov_photons_per_m: Optional[float] = 120000.0
 
     # ---- angular collection efficiency (D2; enabled with stage-4 physics) -
     # NNVT MCP CE(θ) table, incidence angle in degrees (PMTSimParamSvc)

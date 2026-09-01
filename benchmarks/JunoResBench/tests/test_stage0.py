@@ -113,32 +113,30 @@ def test_calibration():
     print("ok  calibration shapes and spreads")
 
 
-# --- electron bit-compat golden lock (v1 particle upgrade) ------------------
+# --- deterministic v2 electron golden lock ----------------------------------
 # Digests of the full EventTruth (ints + per-PE arrays + adc rows) for three
 # fixed electron events x {fast, trace} x {waveforms on/off}, taken from the
-# trigger-readout architecture (v4). Any drift in RNG draw order or float
-# arithmetic for the electron path breaks these — the anchors elsewhere have
-# tolerances and will NOT catch it. Regenerate only together with the full
-# e- anchor suite if the numpy build changes (pinned in MANIFEST.md).
+# local-transport and trigger-readout architecture. Any drift in RNG draw
+# order or float arithmetic breaks these; regenerate only with a reviewed
+# forward-model change and the full physical-anchor suite.
 GOLDEN_EVENTS = (
     EventInput(1.0, 2.0, -3.0, 5.0, t0_ns=17.0),
     EventInput(15.0, 0.0, 0.0, 1.0),
     EventInput(0.0, 0.0, 0.0, 2.5, t0_ns=-4.0),
 )
-# Lock taken against the trigger-readout architecture (v4).
 GOLDEN_DIGESTS = {
-    "fast_wf0_ev0": "f71af9f4401543d6356758de788c88d67e08fb8677a904e9c00e6699cc544a80",
-    "fast_wf0_ev1": "5d142ed20e7746e56f6bac9348c3b051ee5da7df71cd0e0f4effc1c78bbc13e6",
-    "fast_wf0_ev2": "54bee1582534a0d2c25bdd294a504f0d3d10e205a7afa982ca0dd39677e9aafd",
-    "fast_wf1_ev0": "c57059aa465dd6046a4ec62ce9b51911c12d94c2e2803e0a24182193942b562d",
-    "fast_wf1_ev1": "74cb9ed02f5461ba0c64a9f9f1e5334d21246f398b02bfb3ee43fa2e3739012e",
-    "fast_wf1_ev2": "6b23454ef41aab416bf2edb7274b809e85ebe768bde9fd07990c12093dbbee33",
-    "trace_wf0_ev0": "0fb21248ebd0bb1b4fee9e225711166c5bf10d7650f4ad3725dc354ebceb4842",
-    "trace_wf0_ev1": "8ce2ddbca5a8247514003c7b82c99cd5ed314cd26f4705fca9160ff4fb65fb56",
-    "trace_wf0_ev2": "5e2714c226f2819fd7fe7a14c41ed187390251aad9dc6bf8cfa66da3dce325a4",
-    "trace_wf1_ev0": "9e9884488243494a1ad9d3818e4caa43a451581b5058e0993e3900a516f74baf",
-    "trace_wf1_ev1": "d9e58c0b94aaf3473737c4d3efe3f976ac1381c5f720c83f2bd43549451d9268",
-    "trace_wf1_ev2": "625229e2e7dd595f3dd9b5cd2a201ca1b2ba1987a7e9bdc8cc108fd32eb89a9a",
+    "fast_wf0_ev0": "672f34459ee4e62eca15e8a8b0cdb1f0d7e4c703c26e2ee4aecf5045aa31b793",
+    "fast_wf0_ev1": "56a92cc4eac4f1fc6ef2fd0198bf942bb1dcb2e10e77fc070c641d5727605061",
+    "fast_wf0_ev2": "86b945b70c84915ae34b131b2e2f89343d9f0e1a6e3b451690b48a75cab6d32e",
+    "fast_wf1_ev0": "5004e4c83b8ed86a984f278f0454d16d9d6225759945a3bf41204a2c9264a1a7",
+    "fast_wf1_ev1": "71ef2b1773d1e3b82dc2d8934cb38d2affec59f605400cf37b7ca24357ef5353",
+    "fast_wf1_ev2": "6e84fd1114d578396c33a6826473e65951e60c73a27ccbc995342e51c284db8f",
+    "trace_wf0_ev0": "e352e6c8fb8cef0ebef86f3e03256a2a8bdab4e557ae513be706fcdb532cb006",
+    "trace_wf0_ev1": "88b4d1ac04fd6f6b75912266572438892c536c9cdefd568e4ac13e219ff5b74f",
+    "trace_wf0_ev2": "75fb0a62abad47ee67431f6619c43ec8b953aaed0340998b33b02b4661466d68",
+    "trace_wf1_ev0": "03f2d73a5ecaf835c41db8b6f0792d101eb21d8999c20f03ecf819c92bf7bae1",
+    "trace_wf1_ev1": "bda01b6c02d64ebbe8377ce0a4c099c215a8b21325c419bc0df5444e3b2ba9d0",
+    "trace_wf1_ev2": "40b4bf4af3161fb617ec026a812dc6d8771a7faaf09a54341d36c947a33e58df",
 }
 
 
@@ -159,7 +157,7 @@ def _truth_digest(ev):
     return h.hexdigest()
 
 
-def test_electron_bitcompat_golden():
+def test_v2_electron_golden():
     if not GOLDEN_DIGESTS:
         print("skip golden digests (empty — regenerate after architecture "
               "changes, see comment above)")
@@ -172,10 +170,10 @@ def test_electron_bitcompat_golden():
                 got = _truth_digest(sim.generate_event(e, with_waveforms=wf))
                 key = f"{mode}_wf{int(wf)}_ev{i}"
                 assert got == GOLDEN_DIGESTS[key], (
-                    f"electron bit-compat broken: {key}\n"
+                    f"v2 electron golden changed: {key}\n"
                     f"  got      {got}\n  expected {GOLDEN_DIGESTS[key]}"
                 )
-    print("ok  electron bit-compat golden digests (12/12)")
+    print("ok  v2 electron golden digests (12/12)")
 
 
 def test_particle_type_dispatch():
@@ -196,16 +194,22 @@ def test_particle_type_dispatch():
     print("ok  gamma/positron dispatch: end-to-end + deterministic")
 
 
-def test_s1_stream_isolation():
-    """Burning the s1 stream must not perturb electron output (no draws)."""
-    lay = PMTLayout.uniform(100, 19.365)
-    a = DetectorSim(DetectorConfig(), lay, seed=5).generate_event(
-        EventInput(0, 0, 0, 1.5), with_waveforms=False)
-    sim_b = DetectorSim(DetectorConfig(), lay, seed=5)
-    sim_b.rngs["s1_response"].normal(size=10000)        # burn the stream
-    b = sim_b.generate_event(EventInput(0, 0, 0, 1.5), with_waveforms=False)
-    assert np.array_equal(a.t_rel_ns, b.t_rel_ns) and a.n_pe_total == b.n_pe_total
-    print("ok  electron path consumes no s1 rng draws")
+def test_s1_stream_controls_track_shape_not_response_integral():
+    """Angular diffusion uses s1 RNG without changing deposited response."""
+    from benchmarks.JunoResBench.juno_res_bench.stages.s1_response import run_s1
+
+    cfg = DetectorConfig()
+    event = EventInput(0, 0, 0, 1.5)
+    rng_a = np.random.default_rng(5)
+    rng_b = np.random.default_rng(5)
+    rng_b.normal(size=10000)
+
+    a = run_s1(event, cfg, rng_a)
+    b = run_s1(event, cfg, rng_b)
+
+    assert not np.array_equal(a.steps.pos_m, b.steps.pos_m)
+    assert a.e_dep_mev == b.e_dep_mev
+    assert a.e_vis_mev == b.e_vis_mev
 
 
 if __name__ == "__main__":
@@ -216,7 +220,7 @@ if __name__ == "__main__":
     test_rng_isolation_across_stages()
     test_direction_grid()
     test_calibration()
-    test_electron_bitcompat_golden()
+    test_v2_electron_golden()
     test_particle_type_dispatch()
-    test_s1_stream_isolation()
+    test_s1_stream_controls_track_shape_not_response_integral()
     print(f"\nall stage-0 tests passed ({time.time()-t0:.1f}s)")

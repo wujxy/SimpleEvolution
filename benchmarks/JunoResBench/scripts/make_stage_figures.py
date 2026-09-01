@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from benchmarks.JunoResBench.juno_res_bench.config import DetectorConfig  # noqa: E402
 from benchmarks.JunoResBench.juno_res_bench.detector import DetectorSim  # noqa: E402
 from benchmarks.JunoResBench.juno_res_bench.geometry import PMTLayout  # noqa: E402
-from benchmarks.JunoResBench.juno_res_bench.stages.s1_response import nl_corr  # noqa: E402
+from benchmarks.JunoResBench.juno_res_bench.stages.s1_response import run_s1  # noqa: E402
 from benchmarks.JunoResBench.juno_res_bench.stages.s2_photons import (  # noqa: E402
     beta_from_kinetic,
 )
@@ -33,28 +33,25 @@ from benchmarks.JunoResBench.juno_res_bench.stages.s3_optics import (  # noqa: E
 from benchmarks.JunoResBench.juno_res_bench.stages.s4_detection import (  # noqa: E402
     ce_factor,
 )
+from benchmarks.JunoResBench.juno_res_bench.truth import (  # noqa: E402
+    EventInput,
+    ParticleType,
+)
 
 
 def stage1(cfg, out):
-    """E_true -> E_vis: Birks + low-E nonlinearity (B3/B7) + v1 particles."""
-    from benchmarks.JunoResBench.juno_res_bench.stages.s1_response import run_s1
-    from benchmarks.JunoResBench.juno_res_bench.truth import (
-        EventInput,
-        ParticleType,
-    )
-
+    """E_true -> E_vis: local stopping-power Birks response."""
     e = np.geomspace(0.1, 20, 200)
-    vis = e / (1 + cfg.birks_kB_ddx) * np.array([nl_corr(x, cfg) for x in e])
+    vis = np.array([
+        run_s1(EventInput(0, 0, 0, float(x)), cfg).e_vis_mev for x in e
+    ])
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
     ax = axes[0]
     ax.plot(e, vis / e, "b-", lw=2)
-    ax.axhline(1 / (1 + cfg.birks_kB_ddx), color="r", ls="--", lw=1,
-               label=f"Birks only ({1/(1+cfg.birks_kB_ddx):.4f})")
     ax.set_xscale("log")
     ax.set_xlabel("E_true [MeV]")
     ax.set_ylabel("E_vis / E_true")
-    ax.set_title("electron: quenching + low-E nonlinearity")
-    ax.legend()
+    ax.set_title("electron: integrated local Birks response")
 
     # v1: per-particle visible-energy response (stage-1 MC, vertex at center)
     es = np.geomspace(0.3, 8.0, 8)
@@ -102,7 +99,7 @@ def stage2(cfg, out):
     fig, axes = plt.subplots(1, 3, figsize=(15, 3.8))
     axes[0].hist(ng, bins=40)
     axes[0].set_title(f"N_gamma @1MeV: <{np.mean(ng):.0f}>, "
-                      f"sigma {np.std(ng):.0f} (~sqrt={np.sqrt(cfg.ly_photons_mev*cfg.quench(1)*cfg.nl_correction(1)):.0f})")
+                      f"sigma {np.std(ng):.0f} (~sqrt={np.sqrt(np.mean(ng)):.0f})")
     axes[1].hist(ev.t_emit_ns, bins=100, range=(0, 150))
     for tau, w in cfg.scint_taus_ns:
         axes[1].axvline(tau, color="r", ls=":", lw=0.8)
@@ -112,9 +109,11 @@ def stage2(cfg, out):
     es = np.linspace(0.3, 10, 40)
     frac = []
     for e in es:
-        beta = beta_from_kinetic(e)
-        f_c = max(1 - 1 / (cfg.ls_refractive_index * beta) ** 2, 0)
-        frac.append(cfg.ly_cherenkov * f_c / (cfg.ly_photons_mev * cfg.quench(1)))
+        s1 = run_s1(EventInput(0, 0, 0, float(e)), cfg)
+        beta = np.array([beta_from_kinetic(x) for x in s1.steps.kinetic_mev])
+        f_c = np.maximum(1 - 1 / (cfg.ls_refractive_index * beta) ** 2, 0)
+        n_c = np.sum(s1.steps.step_length_m * cfg.cherenkov_photons_per_m * f_c)
+        frac.append(n_c / (cfg.ly_photons_mev * s1.e_vis_mev))
     axes[2].plot(es, np.array(frac) * 100)
     axes[2].set_xlabel("E [MeV]"); axes[2].set_ylabel("N_C / N_scint [%]")
     axes[2].set_title("Cherenkov fraction (threshold 0.17 MeV)")

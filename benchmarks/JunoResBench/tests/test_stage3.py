@@ -103,7 +103,9 @@ def test_stream_isolation_transport():
     lay = PMTLayout.uniform()
     e_on = DetectorSim(DetectorConfig(), lay, seed=8).generate(
         1.0, 2.0, -1.0, 3.0, with_waveforms=False)
-    e_off = DetectorSim(DetectorConfig(ly_cherenkov=None), lay, seed=8).generate(
+    e_off = DetectorSim(
+        DetectorConfig(cherenkov_photons_per_m=None), lay, seed=8
+    ).generate(
         1.0, 2.0, -1.0, 3.0, with_waveforms=False)
     assert e_on.n_gamma == e_off.n_gamma
     assert np.array_equal(
