@@ -140,16 +140,17 @@ def build_collaboration_prompt(
         )
     elif role == "reviewer":
         # No judgment, no evidence index, no curated context — the
-        # briefing is the claim, the workspace and the run record are
+        # briefing is the claim, the live world and the run record are
         # the facts, and this colleague digs for itself.
         sections.append(
             "Mandate: look back over this research as a whole. The "
             "briefing you received is the Scientist's own account — a "
-            "claim, not a fact. The workspace holds the world AND the "
-            "full run record (``.scientist/``: wire, views, research "
-            "memory, collaborator reports); verify the account against "
-            "it, judge the work on its merits, and name what you would "
-            "dig into next that the Scientist has not tried."
+            "claim, not a fact. The live world and the full run record "
+            "(the wire, views, research memory, collaborator reports — "
+            "paths in your workspace note) are readable; verify the "
+            "account against them, judge the work on its merits, and "
+            "name what you would dig into next that the Scientist has "
+            "not tried."
         )
     elif role == "executor":
         done = str(action.get("definition_of_done") or "").strip()

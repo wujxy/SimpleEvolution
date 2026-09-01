@@ -64,10 +64,17 @@ def _resolve_roots(args, spec: dict) -> dict:
         "work": work,
         "repo": Path(args.repo).resolve() if args.repo else Path(
             paths.get("repo") or work).resolve(),
+        # Seat ≠ World: the scratch area holds seat homes and disposable
+        # experiment worlds — runtime detail, outside the run's record.
+        # Container geometry pins it via spec paths (a mount); standalone
+        # it defaults to the run-level seats/ sibling of the world (the
+        # old default, world/.scientist/scratch, put seat bodies inside
+        # the record tree — the geometry behind the reviewer fork
+        # recursion bug).
         "scratch": (
             Path(args.scratch).resolve() if args.scratch else Path(
                 paths.get("scratch")
-                or work / ".scientist" / "scratch").resolve()
+                or work.parent / "seats").resolve()
         ),
         "state": (
             Path(args.state).resolve() if args.state else Path(
@@ -163,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", type=Path, default=None,
                         help="read-only repo root (default: the world)")
     parser.add_argument("--scratch", type=Path, default=None,
-                        help="scratch root (default: world/.scientist/scratch)")
+                        help="scratch/seats root (default: run-level seats/ next to the world)")
     parser.add_argument("--state", type=Path, default=None,
                         help="harness body root — wire/session/memory/"
                              "assistant (default: world/.scientist; the "

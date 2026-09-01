@@ -387,7 +387,7 @@ def test_executor_engagement_returns_report_when_done(tmp_path: Path):
     assert report["collaborator_id"].startswith("executor-t-")
     assert report["diff_summary"] == "changed a.c"
     assert report["metrics"] == {"speed": 2}
-    digest_path = (world.work / ".scientist" / "assistant"
+    digest_path = (world.scratch
                    / report["collaborator_id"] / "digest.json")
     assert digest_path.exists()
     rows = [json.loads(line)
@@ -395,7 +395,7 @@ def test_executor_engagement_returns_report_when_done(tmp_path: Path):
     assert any(r.get("question_digest", "").endswith("ran benches")
                for r in rows)
     # nothing left running: the pid receipt is reaped
-    assert not list((world.work / ".scientist" / "assistant")
+    assert not list((world.scratch)
                     .rglob("proc.pid"))
 
 
@@ -420,7 +420,7 @@ def test_engagements_run_sequentially_and_leave_nothing_running(
     second = assistant.engage("searcher", {"brief": "b"})
     assert first["ok"] and second["ok"]
     assert first["collaborator_id"] != second["collaborator_id"]
-    assert not list((world.work / ".scientist" / "assistant")
+    assert not list((world.scratch)
                     .rglob("proc.pid"))
 
 
@@ -570,7 +570,7 @@ def test_reconcile_harvests_orphaned_seat_on_startup(tmp_path: Path):
 
     world = _world(tmp_path)
     ledger = LocalLedger(world.work / ".scientist")
-    orphan_dir = world.work / ".scientist" / "assistant" / "executor-t-007"
+    orphan_dir = world.scratch / "executor-t-007"
     orphan_dir.mkdir(parents=True)
     sleeper = tmp_path / "fake_claude_orphan.sh"
     sleeper.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
@@ -852,7 +852,7 @@ def test_launch_writes_manifest_and_prompt_immediately(tmp_path: Path):
     ack = assistant.engage_async("executor", {
         "brief": "b", "definition_of_done": "d"})
     assert ack["ok"] and ack["status"] == "running"
-    d = world.work / ".scientist" / "assistant" / ack["collaborator_id"]
+    d = world.scratch / ack["collaborator_id"]
     mani = json.loads((d / "manifest.json").read_text())
     assert mani["role"] == "executor" and mani["box"] == 60
     assert (d / "prompt.txt").exists() and (d / "proc.pid").exists()
@@ -886,7 +886,7 @@ def test_async_engagement_completes_later_and_leaves_no_orphans(
     assert len(reports) == 1
     assert reports[0]["status"] == "done"
     assert reports[0]["self_report_digest"] == "ran benches"
-    d = world.work / ".scientist" / "assistant" / ack["collaborator_id"]
+    d = world.scratch / ack["collaborator_id"]
     digest = json.loads((d / "digest.json").read_text())
     assert digest["status"] == "done"
     assert not (d / "proc.pid").exists()
@@ -955,7 +955,7 @@ def test_async_timeout_salvage_via_sweep(tmp_path: Path):
     )
     ack = assistant.engage_async("executor", {
         "brief": "b", "definition_of_done": "d"})
-    d = world.work / ".scientist" / "assistant" / ack["collaborator_id"]
+    d = world.scratch / ack["collaborator_id"]
     # let the seat flush its events before forcing the box to expiry
     # (killing faster than the shell prints would salvage nothing)
     for _ in range(100):
@@ -1018,7 +1018,7 @@ def test_episode_exit_salvages_pending_seats(tmp_path: Path):
         steps_budget=4, wall_seconds=60.0,
     )
     assert result["outcome"] == "abstain"
-    base = world.work / ".scientist" / "assistant"
+    base = world.scratch
     assert not list(base.rglob("proc.pid"))
     salvaged = [json.loads(p.read_text()) for p in base.glob(
         "*/digest.json")]
@@ -1214,7 +1214,7 @@ def test_continue_engagement_passes_resume_and_old_workspace(
         "workspace": "isolated"})
     assert first["ok"] and first["status"] == "done"
     old_id = first["collaborator_id"]
-    old_fork = world.scratch / f"fresh-{old_id}"
+    old_fork = world.scratch / old_id / "world"
     assert old_fork.is_dir()
 
     ack = assistant.continue_engagement({
@@ -1240,8 +1240,8 @@ def test_continue_engagement_rejections(tmp_path: Path):
 
     world = _world(tmp_path)
     ledger = LocalLedger(world.work / ".scientist")
-    base = world.work / ".scientist" / "assistant"
-    base.mkdir(parents=True)
+    base = world.scratch
+    base.mkdir(parents=True, exist_ok=True)
     (base / "reviewer-t-001").mkdir()
     (base / "reviewer-t-001" / "digest.json").write_text(json.dumps(
         {"role": "reviewer", "status": "done", "session_id": "s"}))
@@ -1289,8 +1289,8 @@ def test_reviewer_heard_after_reads_finished_at_field(tmp_path: Path):
 
     world = _world(tmp_path)
     ledger = LocalLedger(world.work / ".scientist")
-    base = world.work / ".scientist" / "assistant"
-    base.mkdir(parents=True)
+    base = world.scratch
+    base.mkdir(parents=True, exist_ok=True)
     (base / "reviewer-t-001").mkdir()
     (base / "reviewer-t-001" / "digest.json").write_text(json.dumps({
         "role": "reviewer", "status": "done",
@@ -1357,7 +1357,7 @@ def test_wait_any_returns_first_arrival_while_rest_run(tmp_path: Path):
     assert slow["collaborator_id"] not in ids
     assert [r["collaborator_id"]
             for r in result["still_running"]] == [slow["collaborator_id"]]
-    slow_dir = (world.work / ".scientist" / "assistant"
+    slow_dir = (world.scratch
                 / slow["collaborator_id"])
     assert (slow_dir / "proc.pid").exists()    # the mainline still runs
     assistant.shutdown_pending()
@@ -1387,7 +1387,7 @@ def test_cancel_engagement_salvages_and_consumes_inline(tmp_path: Path):
     assert report["ok"] and report["status"] == "cancelled"
     assert "eclipsed" in str(report.get("note") or "")
     assert report.get("self_report_digest") == "partial diagnosis in hand"
-    d = world.work / ".scientist" / "assistant" / ack["collaborator_id"]
+    d = world.scratch / ack["collaborator_id"]
     assert (d / "digest.json").exists()
     assert not (d / "proc.pid").exists()
     assert (d / "read.marker").exists()       # consumed inline

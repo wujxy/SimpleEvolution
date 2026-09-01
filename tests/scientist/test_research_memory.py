@@ -321,8 +321,8 @@ def test_seat_prompt_gets_pointer_only_when_memory_exists(tmp_path):
     with_mem = _assistant(tmp_path / "a", with_memory=True)
     report = with_mem.engage("challenger", {"brief": "attack the view"})
     assert report["ok"]
-    prompt = (tmp_path / "a" / "work" / ".scientist" / "assistant"
-              / report["collaborator_id"] / "prompt.txt").read_text()
+    prompt = (tmp_path / "a" / "scratch" / report["collaborator_id"]
+              / "prompt.txt").read_text()
     # the pointer: existence and location, factually stated
     assert "research memory is at" in prompt
     assert "research_memory.jsonl" in prompt
@@ -333,22 +333,29 @@ def test_seat_prompt_gets_pointer_only_when_memory_exists(tmp_path):
     without_mem = _assistant(tmp_path / "b", with_memory=False)
     report = without_mem.engage("challenger", {"brief": "attack the view"})
     assert report["ok"]
-    prompt = (tmp_path / "b" / "work" / ".scientist" / "assistant"
-              / report["collaborator_id"] / "prompt.txt").read_text()
+    prompt = (tmp_path / "b" / "scratch" / report["collaborator_id"]
+              / "prompt.txt").read_text()
     assert "research memory is at" not in prompt
 
 
-def test_fork_ships_memory_file_and_keeps_wire_home(tmp_path):
+def test_seat_points_at_live_memory_and_ships_nothing(tmp_path):
+    """Seat ≠ World: a cognitive seat's prompt POINTS at the live world's
+    memory (public knowledge layer, read where it lives) and carries no
+    copy — nothing of the record travels with a seat anymore."""
     assistant = _assistant(tmp_path, with_memory=True)
     report = assistant.engage("proposer",
                               {"brief": "find the next direction",
                                "scope": "open"})
     assert report["ok"]
-    fork = tmp_path / "scratch" / f"fresh-{report['collaborator_id']}"
-    assert (fork / ".scientist" / "research_memory.jsonl").is_file()
-    session = (tmp_path / "work" / ".scientist").rglob("wire.jsonl")
-    for wire in session:
-        assert not (fork / ".scientist" / wire.parent.name / wire.name).exists()
+    seat = tmp_path / "scratch" / report["collaborator_id"]
+    # the pointer: the live memory path, in the prompt
+    prompt = (seat / "prompt.txt").read_text()
+    assert str(tmp_path / "work" / ".scientist"
+               / "research_memory.jsonl") in prompt
+    # nothing shipped: no .scientist anywhere in the seat home, and the
+    # experiment kit is the only thing its scratch holds besides it
+    assert not list(seat.rglob(".scientist"))
+    assert (seat / "scratch" / "make-experiment").is_file()
 
 
 def test_challenger_view_contract_unchanged():

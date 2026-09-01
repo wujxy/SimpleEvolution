@@ -36,6 +36,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -53,14 +54,6 @@ _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 # separates a cognitive seat from an executor is the workspace (disposable
 # fork vs the live tree) and the digest contract, nothing else.
 _SEAT_TOOLS = "Read,Grep,Glob,Edit,Write,Bash,WebSearch,WebFetch,Task"
-
-_FORK_NOTE = (
-    "Workspace: a DISPOSABLE COPY of the world, made just for you — data "
-    "directories are symlinks into the read-only originals, src/ is your "
-    "own private copy. You have full tool access: read anything, run code, "
-    "prototype freely inside this copy. Nothing you change here reaches the "
-    "live world; your ONLY deliverable is the report you return.")
-
 
 def _cap_words(text: str, cap: int) -> tuple[str, bool]:
     words = text.split()
@@ -158,38 +151,26 @@ def _tree_bytes(path: Path) -> int:
     return total
 
 
-def _fork_world(source: Path, dest: Path,
-                include_ledger: bool = False) -> None:
-    """Disposable copy of a world for a cognitive seat.
+def _fork_world(source: Path, dest: Path) -> None:
+    """Disposable copy of a world — the one way an experiment world is
+    made, whether pre-built for a speculative executor or self-served
+    through a seat's make-experiment kit.
 
     Small trees (src/, scripts/, .git, docs) are copied so prototyping is
     free; data-scale directories — anything named ``benchmarks`` or 512 MB
     and up — become symlinks into the source, where the read-only mount
     rejects writes at the kernel level. The PI's records (``.scientist``)
-    never ship, with two exceptions: the research memory
-    (``research_memory.jsonl``) is a public knowledge layer and ships
-    with EVERY fork — the private thought stream (wire, session) stays
-    home — and for a reviewer, whose whole job is to look back over the
-    run, ``include_ledger`` ships the full record.
+    never ship: the private thought stream stays home, and the public
+    knowledge layer (research memory) is reached by pointing seats at
+    the live copy, not by packing it. (The include_ledger variant that
+    once lived here shipped the record into a reviewer's fork — and, the
+    seat home being inside .scientist/scratch, copied the destination
+    into itself; the redesign reads the record directly instead.)
     """
     dest.mkdir(parents=True, exist_ok=False)
     source = Path(source).absolute()   # symlink targets must be absolute
     for entry in sorted(source.iterdir()):
         if entry.name == ".scientist":
-            if include_ledger:
-                # The reviewer's side world lives INSIDE .scientist/scratch,
-                # so shipping scratch would copy the destination into itself
-                # (observed live: fresh-reviewer-N/.scientist/scratch/
-                # fresh-reviewer-N/... nesting to path exhaustion). Scratch
-                # is disposable by contract; the record a reviewer digs is
-                # wire, judgments, reports, and memory — none of it scratch.
-                shutil.copytree(entry, dest / ".scientist",
-                                ignore=shutil.ignore_patterns("scratch"))
-            else:
-                memory = entry / "research_memory.jsonl"
-                if memory.is_file():
-                    (dest / ".scientist").mkdir()
-                    shutil.copy2(memory, dest / ".scientist" / memory.name)
             continue
         target = dest / entry.name
         if entry.is_dir() and (
@@ -197,8 +178,8 @@ def _fork_world(source: Path, dest: Path,
                 or _tree_bytes(entry) >= _FORK_SYMLINK_MIN_BYTES):
             target.symlink_to(entry, target_is_directory=True)
         elif entry.is_dir():
-            shutil.copytree(entry, target, ignore=None if include_ledger
-                            else shutil.ignore_patterns(".scientist"))
+            shutil.copytree(entry, target,
+                            ignore=shutil.ignore_patterns(".scientist"))
         else:
             shutil.copy2(entry, target)
 
@@ -318,10 +299,25 @@ class InWorldAssistant:
     # -- plumbing ----------------------------------------------------------
 
     def _base(self) -> Path:
+        """Seat homes live in the scratch area (Seat ≠ World): runtime
+        detail, not record. Container: /scratch/<id>; standalone: the
+        run-level seats/ sibling of the world."""
+        return self.world.scratch
+
+    def _legacy_base(self) -> Path:
+        """Pre-redesign seat homes (.scientist/assistant) — kept readable
+        so an old run resumed on this code still finds its seats."""
         return self.world.state_dir / "assistant"
 
+    def _seat_roots(self) -> list[Path]:
+        return [self._base(), self._legacy_base()]
+
     def _dir_of(self, call_id: str) -> Path:
-        return self._base() / call_id
+        new = self._base() / call_id
+        if new.exists():
+            return new
+        legacy = self._legacy_base() / call_id
+        return legacy if legacy.exists() else new
 
     def _next_call_id(self, kind: str) -> str:
         with self._lock:
@@ -382,11 +378,12 @@ class InWorldAssistant:
         ``finished_at`` is the recorded field; mtime is the fallback for
         records written before the field existed.
         """
-        root = self._base()
-        try:
-            digests = list(root.glob("reviewer-*/digest.json"))
-        except OSError:
-            return False
+        digests = []
+        for root in self._seat_roots():
+            try:
+                digests += list(root.glob("reviewer-*/digest.json"))
+            except OSError:
+                continue
         for path in digests:
             try:
                 finished = json.loads(
@@ -402,32 +399,50 @@ class InWorldAssistant:
                 return True
         return False
 
-    def _ship_memory(self, fork_root: Path) -> None:
-        """The research memory ships with every fork — including forks
-        cloned from the pristine node world, where it would otherwise be
-        absent. Public knowledge layer: the memory file travels, the
-        private thought stream does not."""
-        memory = self.ledger.research_memory_path
-        if not memory.is_file():
-            return
-        target_dir = fork_root / ".scientist"
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target = target_dir / memory.name
-        if not target.exists():
-            shutil.copy2(memory, target)
+    def _write_experiment_kit(self, seat_scratch: Path) -> None:
+        """The make-experiment script: a cognitive seat's license to
+        create a disposable world at the moment it needs one — resources
+        by behavior, not by role. The script backs onto scientist.mkexp
+        (the same cheap fork a speculative executor gets) and stamps each
+        experiment with the source world's git baseline so the Scientist
+        can read a seat's experiment against the state it forked from."""
+        repo_root = Path(__file__).resolve().parents[1]
+        script = seat_scratch / "make-experiment"
+        script.write_text(
+            "#!/usr/bin/env bash\n"
+            "# make-experiment — create a disposable copy of the live\n"
+            "# world to modify and test in. Reading the live world stays\n"
+            "# reading; a world-changing test lives in the copy. Creates\n"
+            "# exp-NNN/ beside this script and prints its path.\n"
+            "set -euo pipefail\n"
+            "N=0\n"
+            "for d in exp-[0-9][0-9][0-9]; do\n"
+            "  [ -d \"$d\" ] && N=$((N+1))\n"
+            "done\n"
+            "TARGET=$(printf 'exp-%03d' $((N+1)))\n"
+            f"PYTHONPATH={repo_root} {sys.executable} -m scientist.mkexp \\\n"
+            f"    --source {self.world.work} --dest \"$TARGET\"\n"
+            "echo \"experiment world: $TARGET/"
+            " (baseline in $TARGET/EXPERIMENT_BASELINE)\"\n",
+            encoding="utf-8",
+        )
+        script.chmod(0o755)
 
     def _gc_forks(self) -> None:
-        """Trim kept forks to the most recent _FORK_KEEP_MAX. Only forks
-        older than _FORK_MIN_AGE_SECONDS are eligible, so a sibling seat
-        running in a batch (box capped at 480 min) is never touched."""
-        root = self.world.scratch
+        """Trim kept experiment worlds to the most recent _FORK_KEEP_MAX.
+        Only worlds older than _FORK_MIN_AGE_SECONDS are eligible, so a
+        sibling seat running in a batch (box capped at 480 min) is never
+        touched. Covers both layouts: seats/<id>/world (redesign) and the
+        pre-redesign scratch/fresh-* of an old run resumed here."""
         now = time.time()
-        try:
-            forks = sorted(
-                (p for p in root.glob("fresh-*") if p.is_dir()),
-                key=lambda p: p.stat().st_mtime)
-        except OSError:
-            return
+        forks: list[Path] = []
+        for root in self._seat_roots():
+            try:
+                forks += [p for p in root.glob("*/world") if p.is_dir()]
+                forks += [p for p in root.glob("fresh-*") if p.is_dir()]
+            except OSError:
+                continue
+        forks.sort(key=lambda p: p.stat().st_mtime)
         for stale in forks[:max(0, len(forks) - self._FORK_KEEP_MAX)]:
             try:
                 if now - stale.stat().st_mtime < self._FORK_MIN_AGE_SECONDS:
@@ -523,42 +538,19 @@ class InWorldAssistant:
             self._gc_forks()
 
             # -- seat plan: workspace, time box ----------------------------
+            # Seat ≠ World (docs/design/席位工作区重设计). A seat's home
+            # is its directory in the scratch area; the live world is
+            # readable reality; a world to MODIFY is created by behavior —
+            # pre-built for a speculative executor (its brief already is
+            # one), self-served through the make-experiment kit by anyone
+            # else. Cognitive seats get no fork by default: their value is
+            # independent cognition, not an independent filesystem.
+            seat_home = self._dir_of(collaborator_id)
             work_dir = self.world.work
             workspace = "read-only"
             workspace_note = ""
 
-            if role == "searcher":
-                read = action.get("read", "none")
-                if read not in {"none", "node", "lab"}:
-                    return {"ok": False,
-                            "error": "searcher.read must be none|node|lab"}
-                timeout = _box_from_action(
-                    action, self.config.consult_timeout_seconds,
-                    self.config.seat_timeout_max_minutes)
-                if read == "none":
-                    work_dir = self.world.scratch
-                    workspace_note = (
-                        "Workspace: bare scratch. This engagement is "
-                        "literature-only: work from the open literature and "
-                        "your own knowledge, not from the world's data.")
-                elif read == "node":
-                    if self.config.node_world is None:
-                        return {"ok": False,
-                                "error": "searcher read=node requires "
-                                         "a node world"}
-                    work_dir = Path(self.config.node_world)
-                    workspace_note = (
-                        "Workspace: the pristine node world, mounted "
-                        "read-only — you may read it and run code against "
-                        "it, but it rejects writes; report only.")
-                else:
-                    # lab: the live tree FORKED — full tools must never be
-                    # able to touch the live src/ directly.
-                    side_dir = self.world.scratch / f"fresh-{collaborator_id}"
-                    _fork_world(work_dir, side_dir)
-                    work_dir = side_dir
-                workspace = str(read)
-            elif role == "executor":
+            if role == "executor":
                 workspace = str(action.get("workspace") or "current")
                 if workspace not in {"current", "isolated"}:
                     return {
@@ -569,48 +561,56 @@ class InWorldAssistant:
                     action, self.config.work_default_minutes * 60,
                     self.config.seat_timeout_max_minutes)
                 if workspace == "isolated":
-                    source = self.config.node_world or self.world.work
-                    side_dir = (self.world.scratch
-                                / f"fresh-{collaborator_id}")
+                    # mainline ownership (current) vs alternative world
+                    # (isolated): the speculative executor's brief IS a
+                    # world-changing test, so its world is pre-built —
                     # cheap fork (data dirs symlinked into the read-only
-                    # originals — nothing legitimate writes there; /scratch
-                    # is the sanctioned space for generated data). The PI's
-                    # records never ship: an isolated collaborator gets the
+                    # originals; nothing legitimate writes there). The
+                    # PI's records never ship: the collaborator gets the
                     # world, not the ledger.
+                    source = self.config.node_world or self.world.work
+                    side_dir = seat_home / "world"
                     _fork_world(Path(source), side_dir)
                     work_dir = side_dir
             else:
-                # proposer / challenger / reviewer: full tools inside a
-                # disposable fork of the CURRENT world (not the pristine
-                # template — a proposal must see the incumbent solver).
-                # The briefs demand evidence; the fork guarantees the live
-                # world stays untouched; the digest is the only channel
-                # home. Longer box: evidence-backed proposing is the
-                # expensive part of a run.
-                workspace = "fork"
-                timeout = _box_from_action(
-                    action, self.config.cognitive_timeout_seconds,
-                    self.config.seat_timeout_max_minutes)
-                side_dir = self.world.scratch / f"fresh-{collaborator_id}"
-                if role == "reviewer":
-                    # The one seat whose job is the run's history: the fork
-                    # ships the record. What to read stays its own call.
-                    _fork_world(work_dir, side_dir, include_ledger=True)
-                    workspace_note = (
-                        "Workspace: a disposable copy of the current world "
-                        "INCLUDING the run record under .scientist/ (the "
-                        "wire, your predecessors' judgments, collaborator "
-                        "reports). Digs are free; your ONLY deliverable is "
-                        "the report you return — nothing you write here "
-                        "reaches the Scientist's live world."
-                    )
+                # searcher / proposer / challenger / reviewer: own scratch,
+                # live world readable, experiment kit self-served.
+                if role == "searcher":
+                    timeout = _box_from_action(
+                        action, self.config.consult_timeout_seconds,
+                        self.config.seat_timeout_max_minutes)
                 else:
-                    _fork_world(work_dir, side_dir)
-                    workspace_note = _FORK_NOTE
-                work_dir = side_dir
-
-            if side_dir is not None:
-                self._ship_memory(side_dir)
+                    timeout = _box_from_action(
+                        action, self.config.cognitive_timeout_seconds,
+                        self.config.seat_timeout_max_minutes)
+                work_dir = seat_home / "scratch"
+                work_dir.mkdir(parents=True, exist_ok=True)
+                workspace = "scratch"
+                self._write_experiment_kit(work_dir)
+                workspace_note = (
+                    f"Workspace: this scratch directory is yours. The live "
+                    f"research world is readable at {self.world.work} — "
+                    f"inspect it freely (code, git history, benchmarks, "
+                    f"data) and treat it as read-only reality: what you "
+                    f"change belongs in your scratch. When a question can "
+                    f"only be answered by modifying the world, run "
+                    f"``./make-experiment`` here and work inside the "
+                    f"disposable copy it creates; report what it showed."
+                )
+                if role == "reviewer":
+                    # The one seat whose job is the run's history — it
+                    # reads the record directly, no packing, no fork.
+                    workspace_note += (
+                        f"\nThe run's record is readable at "
+                        f"{self.world.state_dir}/ — the wire, prior "
+                        f"judgments, collaborator reports, research "
+                        f"memory. It is your material; dig freely."
+                    )
+                if self.config.node_world is not None:
+                    workspace_note += (
+                        f"\nThe pristine baseline world (untouched by this "
+                        f"run) is readable at {self.config.node_world}."
+                    )
 
             if workspace_note:
                 prompt += f"\n\n{workspace_note}"
@@ -637,14 +637,15 @@ class InWorldAssistant:
         # EXISTS and where; whether and what to read stays each seat's
         # own professional call (a narrow executor may skip it; a
         # challenger that never checks old judgments has not done its
-        # job — that policing is the role's, not the harness's).
-        if (work_dir / ".scientist" / "research_memory.jsonl").is_file():
+        # job — that policing is the role's, not the harness's). The
+        # live world's copy is pointed at — seats no longer carry one.
+        if self.ledger.research_memory_path.is_file():
             prompt += (
                 "\n\nResearch memory: this run's research memory is at "
-                "``.scientist/research_memory.jsonl`` in this workspace — "
-                "the important recognitions, directions, and evidence "
-                "references the Scientist has recorded this run. "
-                "Consultable as your own judgment requires."
+                f"{self.ledger.research_memory_path} — the important "
+                "recognitions, directions, and evidence references the "
+                "Scientist has recorded this run. Consultable as your "
+                "own judgment requires."
             )
 
         # -- start the seat; the directory is born --------------------------
@@ -867,15 +868,17 @@ class InWorldAssistant:
         return digest
 
     def _unfinalized(self) -> list[Path]:
-        base = self._base()
-        if not base.is_dir():
-            return []
-        return sorted(
-            entry for entry in base.iterdir()
-            if entry.is_dir()
-            and (entry / "manifest.json").is_file()
-            and not (entry / "digest.json").exists()
-        )
+        out = []
+        for base in self._seat_roots():
+            if not base.is_dir():
+                continue
+            out += [
+                entry for entry in base.iterdir()
+                if entry.is_dir()
+                and (entry / "manifest.json").is_file()
+                and not (entry / "digest.json").exists()
+            ]
+        return sorted(out)
 
     def sweep(self, now: float | None = None) -> list[dict]:
         """Collect every engagement that has finished or blown its box.
@@ -1156,14 +1159,14 @@ class InWorldAssistant:
         crash-salvage the transcript, and resume the call-id counter past
         the highest sequence ever used (a reused id would truncate the
         orphan's still-growing raw.txt)."""
-        base = self._base()
-        if not base.is_dir():
-            return
-        for entry in base.iterdir():
-            match = self._CALL_SEQ_RE.search(entry.name) if entry.is_dir() \
-                else None
-            if match:
-                self._counter = max(self._counter, int(match.group(1)))
+        for base in self._seat_roots():
+            if not base.is_dir():
+                continue
+            for entry in base.iterdir():
+                match = self._CALL_SEQ_RE.search(entry.name) \
+                    if entry.is_dir() else None
+                if match:
+                    self._counter = max(self._counter, int(match.group(1)))
         for entry in self._unfinalized():
             try:
                 pid = int((entry / "proc.pid").read_text().strip())

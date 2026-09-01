@@ -108,20 +108,19 @@ WRITE_FILE_TOOL = _fn(
 def _box_param(defaults: str) -> dict:
     """The per-engagement timeout parameter, one wording in one place.
 
-    The box is a fuse — how long a colleague may run before salvage
-    looks for them — never a budget that sizes the work. The budget
-    reading is not hypothetical: interview point Cb answered "the brief
-    I write has to be completable inside the box", and that reading is
-    what cuts whole goals into task-sized legs.
+    A fuse, not a budget (the full teaching lives in the delegation
+    skill): it bounds how long a colleague runs unwatched, never the
+    size of the work. The budget reading is not hypothetical — interview
+    point Cb answered "the brief I write has to be completable inside
+    the box" — so the clause stays, in its shortest honest form.
     """
     return {
         "type": "integer", "minimum": 1, "maximum": 480,
         "description": (
-            "how long this engagement may run before it is salvaged — "
-            "the colleague's report, transcript, and session survive, "
-            "and a salvaged executor can be continued; it guards "
-            "against a colleague running unwatched, it does not size "
-            "the work. Omitted: " + defaults),
+            "minutes this seat may run unwatched before salvage — "
+            "report, transcript, and session survive, and a salvaged "
+            "executor can be continued; a fuse, not a work size. "
+            "Omitted: " + defaults),
     }
 
 
@@ -131,10 +130,11 @@ SEARCHER_TOOL = _fn(
     "what is already known — literature, precedent, or the code in this "
     "world. They investigate independently and report sources, findings, "
     "disagreements, and uncertainty. The call returns an acknowledgment; "
-    "their report arrives as a later observation.",
+    "their report arrives as a later observation. Whether the question is "
+    "answered from literature or from the world's code is the brief's to "
+    "say; the colleague reads the live world either way.",
     {
         "brief": {"type": "string"},
-        "read": {"type": "string", "enum": ["none", "node", "lab"]},
         "experiment_ids": {
             "type": "array", "items": {"type": "string"},
         },
