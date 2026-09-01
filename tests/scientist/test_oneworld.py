@@ -1463,3 +1463,29 @@ def test_seat_runtime_is_world_scoped(tmp_path: Path, monkeypatch):
         (world.scratch / ".claude" / "settings.json").read_text())
     assert settings == {"env": {"ANTHROPIC_AUTH_TOKEN": "sk-spec"}}
     assert "iso-run" in (world.scratch / "home" / ".gitconfig").read_text()
+
+
+def test_seat_prompt_states_its_fuse(tmp_path: Path):
+    """The worker must see its runway: a seat that cannot see its fuse
+    cannot pace to it (commit checkpoints and measurement passes price
+    differently against 15 minutes vs 3 hours — the shakedown run's
+    executor-003 was salvaged mid-work with no warning in its prompt).
+    Stated as fact, never as an instruction."""
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_fake_claude(tmp_path)),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+    report = assistant.engage("executor", {
+        "brief": "b", "definition_of_done": "d",
+        "timeout_minutes": 30})
+    assert report["ok"]
+    prompt = (world.scratch / report["collaborator_id"]
+              / "prompt.txt").read_text()
+    assert "Fuse: about 30 minutes" in prompt
+    assert "survive a salvage" in prompt

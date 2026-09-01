@@ -516,6 +516,21 @@ class InWorldAssistant:
 
         side_dir: Path | None = None
         if resume is None:
+            # the fuse is computed FIRST: the seat's own prompt states
+            # its runway (a worker that cannot see its fuse cannot
+            # pace to it), so the box must exist before the prompt does
+            if role == "searcher":
+                timeout = _box_from_action(
+                    action, self.config.consult_timeout_seconds,
+                    self.config.seat_timeout_max_minutes)
+            elif role == "executor":
+                timeout = _box_from_action(
+                    action, self.config.work_default_minutes * 60,
+                    self.config.seat_timeout_max_minutes)
+            else:
+                timeout = _box_from_action(
+                    action, self.config.cognitive_timeout_seconds,
+                    self.config.seat_timeout_max_minutes)
             evidence_index = self.ledger.neutral_experiment_index()
             selected_experiments: list[dict] = []
             if not (role == "proposer" and action.get("scope") == "open"):
@@ -535,6 +550,7 @@ class InWorldAssistant:
                     current_judgment=self.ledger.current_judgment(),
                     evidence_index=evidence_index,
                     selected_experiments=selected_experiments,
+                    fuse_seconds=timeout,
                 )
             except ValueError as exc:
                 return {"ok": False, "error": str(exc)}
@@ -562,9 +578,6 @@ class InWorldAssistant:
                         "ok": False,
                         "error": "executor.workspace must be current|isolated",
                     }
-                timeout = _box_from_action(
-                    action, self.config.work_default_minutes * 60,
-                    self.config.seat_timeout_max_minutes)
                 if workspace == "isolated":
                     # mainline ownership (current) vs alternative world
                     # (isolated): the speculative executor's brief IS a
@@ -580,14 +593,6 @@ class InWorldAssistant:
             else:
                 # searcher / proposer / challenger / reviewer: own scratch,
                 # live world readable, experiment kit self-served.
-                if role == "searcher":
-                    timeout = _box_from_action(
-                        action, self.config.consult_timeout_seconds,
-                        self.config.seat_timeout_max_minutes)
-                else:
-                    timeout = _box_from_action(
-                        action, self.config.cognitive_timeout_seconds,
-                        self.config.seat_timeout_max_minutes)
                 work_dir = seat_home / "scratch"
                 work_dir.mkdir(parents=True, exist_ok=True)
                 workspace = "scratch"
@@ -623,8 +628,12 @@ class InWorldAssistant:
             session_hint: str | None = None
         else:
             # -- continuation: the seat's world is the record --------------
+            timeout = _box_from_action(
+                action, self.config.work_default_minutes * 60,
+                self.config.seat_timeout_max_minutes)
             try:
-                prompt = build_continuation_prompt(action)
+                prompt = build_continuation_prompt(
+                    action, fuse_seconds=timeout)
             except ValueError as exc:
                 return {"ok": False, "error": str(exc)}
             collaborator_id = self._next_call_id("executor")
@@ -632,9 +641,6 @@ class InWorldAssistant:
             side_dir = (Path(resume["side_dir"])
                         if resume.get("side_dir") else None)
             workspace = str(resume.get("mode") or "current")
-            timeout = _box_from_action(
-                action, self.config.work_default_minutes * 60,
-                self.config.seat_timeout_max_minutes)
             continued_from = str(resume.get("continued_from") or "")
             session_hint = str(resume.get("session_id") or "") or None
 
