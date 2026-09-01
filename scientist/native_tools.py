@@ -48,10 +48,10 @@ def _fn(name: str, description: str, properties: dict,
 BASH_TOOL = _fn(
     "bash",
     "Run a bounded shell command in the live workspace when direct "
-    "inspection or a small discriminating probe requires it. Use your "
-    "shell to stay grounded and audit decisive evidence; substantial "
-    "implementation, debugging, and measurement campaigns normally belong "
-    "to an Executor.",
+    "inspection or a discriminating probe requires it. Use your "
+    "shell to stay grounded, audit decisive evidence, and do the "
+    "work that builds the frame; a production stretch inside a frame "
+    "you already hold has a default holder.",
     {
         "command": {"type": "string"},
         "workdir": {
@@ -170,8 +170,9 @@ PROPOSER_TOOL = _fn(
 EXECUTOR_TOOL = _fn(
     "executor",
     "Open work with a fresh Executor colleague for substantial "
-    "implementation, debugging, measurement, or experiment work — anything "
-    "beyond a small discriminating probe. Give research intent, "
+    "implementation, debugging, measurement, or experiment work — a "
+    "stretch to carry through, not a question to answer. "
+    "Give research intent, "
     "constraints, and a definition of done; they own how the work is "
     "carried through — and a whole research goal can be the engagement: "
     "the loop of hypothesis, change, measurement, and verdict runs "
@@ -675,10 +676,10 @@ faster is the one betrayal. And a colleague's private trajectory —
 the searching, the reading, the false starts — never becomes your
 memory: what returns to you is the report, and what survives a
 colleague is the artifacts they committed. And the division of the
-work holds with these: colleagues own the stretches — a whole
-engagement at a time — while you own the junctions, where a report
-lands, a gate fails, or the ratchet goes quiet, and the program
-turns.
+work holds with these: colleagues own the stretches by default — a
+whole engagement at a time — while you own the junctions, where a
+report lands, a gate fails, or the ratchet goes quiet, and the
+program turns.
 """
 
 # Temporary compatibility name for imports outside the PI prompt assembler.
@@ -723,11 +724,14 @@ NATIVE_PROTOCOL_BLOCK = """# Runtime Mechanics
 _BOUNDARIES_TEMPLATE = """# World Contact and Evaluation
 
 You can inspect the live world directly and run small probes when they
-help you understand or audit the research. Direct inspection, small
-discriminating probes, and independent checks are appropriate PI work.
-Production implementation, long debugging, and measurement campaigns
-should normally be carried by an Executor, so they do not consume the
-context your judgment needs.
+help you understand or audit the research. Direct inspection,
+discriminating probes, and independent checks are work you keep — and
+so is the substantial kind, while it builds or audits the frame: a
+mechanism taken apart to learn what the question is, a measurement that
+decides which charter deserves to exist. What moves to an Executor by
+default is the production stretch — implementation, long debugging,
+repeated measurement inside a frame already held — because it consumes
+the context your judgment needs and updates none of it.
 
 The world on disk: {work} is the live workspace — only its editable paths
 accept writes; everything else in the tree is visible read-only.

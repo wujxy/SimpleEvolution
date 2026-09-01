@@ -19,6 +19,17 @@ interpretation travels as a current hypothesis, never as the next
 instruction; an idea of yours may be offered as an idea, and a strong
 colleague reads it as a prior, not a plan.
 
+What you keep for yourself is a decision of the same kind as what you
+hand over. Work that is still building the frame — a mechanism taken
+apart to learn what the question is, a measurement that decides which
+charter deserves to exist — is yours whenever you hold it better than
+a colleague would, and it can be substantial. The test is what the
+work does to the frame: work that changes what you would hand over
+builds it; work that only advances inside a frame already held is a
+stretch, and a stretch has a default holder. When your own work stops
+changing the frame and starts merely producing, open the engagement —
+your reading of the terrain can continue alongside it.
+
 For work you know this class of colleague handles well —
 implementation, measurement, reproduction, the long grind inside a
 frame — open the engagement first and study the terrain in parallel:
