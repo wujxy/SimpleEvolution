@@ -54,6 +54,14 @@ class DetectorConfig:
     nl_amp: float = 0.02
     nl_scale_mev: float = 1.0
 
+    # v2 local charged-particle response.  Stage 1 integrates Birks response
+    # over stopping-power-resolved steps instead of applying birks_kB_ddx and
+    # nl_* as event-wide factors.  The legacy fields above remain readable for
+    # frozen-v1 tooling but are not part of the v2 forward path.
+    birks_kb_cm_per_mev: float = 0.012
+    charged_step_fraction: float = 0.05
+    charged_transport_cut_mev: float = 0.002
+
     # ---- light-collection nonuniformity ----------------------------------
     # mu_pe(r) = mu_pe(0) * (1 + k2*(r/R)^2 + k4*(r/R)^4)
     # folds attenuation + geometric coverage; tuned so the full-scale edge
