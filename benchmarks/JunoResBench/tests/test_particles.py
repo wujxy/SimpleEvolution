@@ -51,9 +51,12 @@ def test_dataset_invariants(d):
     assert np.abs(dep + d["evt_e_escaped"] - e_exp).max() < 1e-9
     assert d["evt_e_scored"][d["evt_particle_type"] == 2].min() > \
         d["evt_e_true"][d["evt_particle_type"] == 2].min()
-    # electrons: exact single-point legacy behavior
+    for key in ("step_kinetic", "step_dedx", "step_length"):
+        assert len(d[key]) == so[-1]
+    # Electrons are local charged tracks, all tagged as primary.
     m = d["evt_particle_type"] == 0
-    assert (d["evt_e_escaped"][m] == 0).all() and (d["evt_n_steps"][m] == 1).all()
+    assert (d["evt_e_escaped"][m] == 0).all()
+    assert (d["evt_n_steps"][m] > 1).all()
     kinds = np.concatenate([d["step_kind"][so[i]:so[i + 1]] for i in np.where(m)[0]])
     assert (kinds == 0).all()
     # per-PE step tags in bounds
@@ -91,7 +94,8 @@ def test_blind_hygiene(d):
                 "pmt_ids", "n_pe_pmt", "pe_offsets", "pe_step",
                 "t_emit_ns", "t_tof_ns", "t_rel_ns", "q_pe",
                 "step_offsets", "step_pos", "step_e_dep", "step_e_vis",
-                "step_t_ns", "step_dir", "step_kind",
+                "step_t_ns", "step_dir", "step_kind", "step_kinetic",
+                "step_dedx", "step_length",
             ]
             for k in truth_keys:
                 out.pop(k, None)

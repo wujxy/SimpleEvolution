@@ -141,6 +141,12 @@ class DetectorSim:
             step_t_ns=s1.steps.t_ns if s1.steps is not None else None,
             step_dir=s1.steps.dir if s1.steps is not None else None,
             step_kind=s1.steps.kind if s1.steps is not None else None,
+            step_kinetic_mev=(s1.steps.kinetic_mev
+                              if s1.steps is not None else None),
+            step_dedx_mev_cm=(s1.steps.dedx_mev_cm
+                              if s1.steps is not None else None),
+            step_length_m=(s1.steps.step_length_m
+                           if s1.steps is not None else None),
             pe_step=(photons.step_idx[pe_photon]
                      if s1.steps is not None and len(photons.step_idx) else None),
         )

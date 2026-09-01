@@ -64,10 +64,9 @@ class EventInput:
 class DepositionSteps:
     """Stage-1 output: energy depositions of one event as SoA.
 
-    One row per deposition point. Electrons are a single step at the vertex;
-    gamma/positron events carry the Compton/annihilation chain. Light is
-    generated per step (stage 2) at pos_m with emission-time offset t_ns
-    (o-Ps delay for annihilation gammas).
+    One row per local charged-particle deposition step. Gamma/positron events
+    additionally carry the Compton/annihilation chain. Light is generated per
+    step (stage 2) at pos_m with emission-time offset t_ns.
 
     kind: see DEPOSITION_KINDS (primary / compton / photoelectric /
     annih_compton / annih_photo / sub_cutoff).
@@ -79,6 +78,9 @@ class DepositionSteps:
     t_ns: np.ndarray         # (M,) float64, deposition time rel. t0
     dir: np.ndarray          # (M, 3) float64, charged-particle direction (unit)
     kind: np.ndarray         # (M,) int8
+    kinetic_mev: np.ndarray  # (M,) float64, charged kinetic energy at midpoint
+    dedx_mev_cm: np.ndarray  # (M,) float64, local stopping power
+    step_length_m: np.ndarray  # (M,) float64, charged path represented by row
 
     @property
     def n_steps(self) -> int:
@@ -87,7 +89,11 @@ class DepositionSteps:
     @classmethod
     def single(cls, vertex_m, e_dep_mev, e_vis_mev, direction, t_ns=0.0,
                kind=DEPOSITION_KINDS["primary"]) -> "DepositionSteps":
-        """The electron case: one fully-contained point deposition."""
+        """Compatibility constructor for one local charged deposit."""
+        from .stopping_power import electron_stopping_power_mev_cm
+
+        kinetic = max(float(e_dep_mev) * 0.5, 0.0)
+        dedx = float(electron_stopping_power_mev_cm(kinetic))
         return cls(
             pos_m=vertex_m.reshape(1, 3).astype(np.float64),
             e_dep_mev=np.asarray([e_dep_mev], np.float64),
@@ -95,6 +101,9 @@ class DepositionSteps:
             t_ns=np.asarray([t_ns], np.float64),
             dir=np.asarray([direction], np.float64),
             kind=np.asarray([kind], np.int8),
+            kinetic_mev=np.asarray([kinetic], np.float64),
+            dedx_mev_cm=np.asarray([dedx], np.float64),
+            step_length_m=np.asarray([float(e_dep_mev) / dedx / 100.0], np.float64),
         )
 
 
@@ -255,4 +264,7 @@ class EventTruth:
     step_t_ns: Optional[np.ndarray] = None       # (M,) float64
     step_dir: Optional[np.ndarray] = None        # (M, 3) float64
     step_kind: Optional[np.ndarray] = None       # (M,) int8
+    step_kinetic_mev: Optional[np.ndarray] = None  # (M,) float64
+    step_dedx_mev_cm: Optional[np.ndarray] = None  # (M,) float64
+    step_length_m: Optional[np.ndarray] = None     # (M,) float64
     pe_step: Optional[np.ndarray] = None         # (n_pe,) int32, per-PE step

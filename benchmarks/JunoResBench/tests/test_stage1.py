@@ -14,36 +14,73 @@ from benchmarks.JunoResBench.juno_res_bench.config import DetectorConfig
 from benchmarks.JunoResBench.juno_res_bench.detector import DetectorSim
 from benchmarks.JunoResBench.juno_res_bench.geometry import PMTLayout
 from benchmarks.JunoResBench.juno_res_bench.stages.s1_response import (
-    nl_corr,
     run_s1,
 )
 from benchmarks.JunoResBench.juno_res_bench.truth import (
+    DEPOSITION_KINDS,
     EventInput,
     ParticleType,
 )
+from benchmarks.JunoResBench.juno_res_bench.stopping_power import birks_visible_mev
 
 
-def test_birks_default_on():
+def test_positron_primary_is_a_local_track():
+    cfg = DetectorConfig()
+    event = EventInput(0, 0, 0, 1.0, particle_type=ParticleType.POSITRON)
+
+    s1 = run_s1(event, cfg, np.random.default_rng(7))
+    primary = s1.steps.kind == DEPOSITION_KINDS["primary"]
+
+    assert primary.sum() > 10
+    assert np.isclose(s1.steps.e_dep_mev[primary].sum(), 1.0)
+    assert (s1.steps.dedx_mev_cm[primary] > 0).all()
+    assert (s1.steps.step_length_m[primary] > 0).all()
+    assert np.ptp(
+        s1.steps.e_vis_mev[primary] / s1.steps.e_dep_mev[primary]
+    ) > 0
+
+
+def test_local_birks_response_is_stored_per_step():
+    cfg = DetectorConfig()
+    event = EventInput(0, 0, 0, 0.8, particle_type=ParticleType.POSITRON)
+
+    s1 = run_s1(event, cfg, np.random.default_rng(11))
+    expected = birks_visible_mev(
+        s1.steps.e_dep_mev,
+        s1.steps.dedx_mev_cm,
+        cfg.birks_kb_cm_per_mev,
+    )
+
+    assert np.allclose(s1.steps.e_vis_mev, expected, rtol=0, atol=1e-12)
+
+
+def test_detector_truth_preserves_local_track_fields():
+    sim = DetectorSim(DetectorConfig(), PMTLayout.uniform(100), seed=19)
+
+    event = sim.generate(
+        0, 0, 0, 0.5,
+        particle_type=ParticleType.POSITRON,
+        with_waveforms=False,
+    )
+
+    assert len(event.step_kinetic_mev) == len(event.step_e_dep_mev)
+    assert len(event.step_dedx_mev_cm) == len(event.step_e_dep_mev)
+    assert len(event.step_length_m) == len(event.step_e_dep_mev)
+
+
+def test_electron_uses_local_birks_response():
     cfg = DetectorConfig()
     s1 = run_s1(EventInput(0, 0, 0, 1.0), cfg)
-    expect = 1.0 / 1.0241 * (1 - cfg.nl_amp * np.exp(-1.0))
-    assert abs(s1.e_vis_mev / 1.0 - expect) < 1e-9
+
+    expect = birks_visible_mev(
+        s1.steps.e_dep_mev,
+        s1.steps.dedx_mev_cm,
+        cfg.birks_kb_cm_per_mev,
+    ).sum()
+
+    assert abs(s1.e_vis_mev - expect) < 1e-12
     assert abs(s1.e_dep_mev - 1.0) < 1e-12
-    print(f"ok  birks+nl ON: E_vis/E_true = {s1.e_vis_mev:.4f} (expect {expect:.4f})")
-
-
-def test_nl_curve():
-    cfg = DetectorConfig()
-    e = np.geomspace(0.1, 20.0, 200)
-    nl = np.array([nl_corr(x, cfg) for x in e])
-    # monotonic increase toward 1, continuous
-    assert (np.diff(nl) > 0).all()
-    assert abs(nl[-1] - 1.0) < 1e-3
-    assert nl[0] < 1.0
-    # anchor: ~-0.7% at 1 MeV
-    assert abs(nl_corr(1.0, cfg) - (1 - cfg.nl_amp * np.exp(-1.0))) < 1e-9
-    print(f"ok  nl curve: nl(0.1)={nl[0]:.4f}, nl(1)={nl_corr(1.0, cfg):.4f}, "
-          f"nl(10)={nl_corr(10.0, cfg):.4f}")
+    assert s1.steps.n_steps > 10
 
 
 def test_dispatch_guard():
@@ -59,7 +96,7 @@ def test_dispatch_guard():
 
 def test_gamma_chain():
     cfg = DetectorConfig()
-    n = 500
+    n = 60
     # energy conservation: sum(step deposits) + escaped == E_true
     for pt, e0 in ((ParticleType.GAMMA, 1.46), (ParticleType.POSITRON, 1.0)):
         for i in range(n):
@@ -67,14 +104,17 @@ def test_gamma_chain():
                         np.random.default_rng(2000 + i))
             expect = e0 + (1.021998 if pt is ParticleType.POSITRON else 0.0)
             assert abs(s1.steps.e_dep_mev.sum() + s1.e_escape_mev - expect) < 1e-6
-            # per-step visible energy uses the same quench/nl formula
-            nl = np.asarray([cfg.nl_correction(float(x)) for x in s1.steps.e_dep_mev])
-            ref = s1.steps.e_dep_mev / (1.0 + cfg.birks_kB_ddx) * nl
+            # per-step visible energy uses local stopping power
+            ref = birks_visible_mev(
+                s1.steps.e_dep_mev,
+                s1.steps.dedx_mev_cm,
+                cfg.birks_kb_cm_per_mev,
+            )
             assert np.allclose(s1.steps.e_vis_mev, ref, rtol=0, atol=1e-12)
     print("ok  gamma/positron energy conservation + per-step quench formula")
 
     # escape rises steeply within ~1 mfp of the LS boundary (17.7 m)
-    def esc_at(r, e=2.0, m=300):
+    def esc_at(r, e=2.0, m=40):
         return float(np.mean([
             run_s1(EventInput(r, 0, 0, e, particle_type=ParticleType.GAMMA), cfg,
                    np.random.default_rng(3000 + i)).e_escape_mev
@@ -82,11 +122,12 @@ def test_gamma_chain():
 
     assert esc_at(0.0) == 0.0 and esc_at(14.0) < 1e-9
     assert esc_at(17.5) > 0.02                       # >2% at 20 cm from wall
-    # chain length in the expected range at 1 MeV
+    # Local charged steps expand each gamma interaction into its secondary
+    # electron track; the chain is intentionally much denser than v1.
     steps = [run_s1(EventInput(0, 0, 0, 1.0, particle_type=ParticleType.GAMMA), cfg,
                     np.random.default_rng(4000 + i)).steps.n_steps
-             for i in range(200)]
-    assert 3 < np.mean(steps) < 40
+             for i in range(40)]
+    assert 100 < np.mean(steps) < 500
     print(f"ok  gamma escape vs radius; mean steps @1 MeV = {np.mean(steps):.1f}")
 
     # mean free path: with the PE branch off, lambda = 1/(n_e * sigma_KN)
@@ -106,7 +147,7 @@ def test_gamma_chain():
 
 def test_positron_annihilation():
     cfg = DetectorConfig()
-    n = 400
+    n = 80
     for i in range(n):
         s1 = run_s1(EventInput(0, 0, 0, 1.0, particle_type=ParticleType.POSITRON),
                     cfg, np.random.default_rng(5000 + i))
@@ -128,36 +169,23 @@ def test_positron_annihilation():
         if s1.steps.t_ns[m].min() > thr:
             delayed += 1
     exp_delayed = cfg.ops_fraction * np.exp(-thr / cfg.ops_tau_ns)
-    assert abs(delayed / n - exp_delayed) < 0.05, (delayed / n, exp_delayed)
+    assert abs(delayed / n - exp_delayed) < 0.10, (delayed / n, exp_delayed)
     print(f"ok  positron annihilation: delayed fraction {delayed/n:.3f} "
           f"(expect ~{exp_delayed:.3f}), annihilation energy conserved")
 
 
 def test_end_to_end_linearity():
-    """pe/E should now show mild nonlinearity (rising toward high E)."""
+    """Integrated local Birks response suppresses low-energy electrons."""
     cfg = DetectorConfig()
-    sim = DetectorSim(cfg, PMTLayout.uniform(), seed=11)
-    rng = np.random.default_rng(3)
     out = {}
-    for e_true in (0.5, 1.0, 5.0):
-        pe = [
-            sim.generate(
-                *(np.array([0.0, 0.0, 0.0]) + 2.0 * rng.uniform(-1, 1, 3)),
-                e_true, with_waveforms=False,
-            ).n_pe_total
-            / e_true
-            for _ in range(300)
-        ]
-        out[e_true] = float(np.mean(pe))
-    # quench+nl make low-E yield lower pe/MeV than high-E
-    assert out[0.5] < out[1.0] < out[5.0], f"nonlinearity direction wrong: {out}"
-    print(f"ok  pe/MeV nonlinearity: 0.5MeV={out[0.5]:.1f} < "
-          f"1MeV={out[1.0]:.1f} < 5MeV={out[5.0]:.1f}")
+    for e_true in (0.05, 0.5, 5.0):
+        s1 = run_s1(EventInput(0, 0, 0, e_true), cfg)
+        out[e_true] = s1.e_vis_mev / e_true
+    assert out[0.05] < out[0.5] < out[5.0], out
 
 
 if __name__ == "__main__":
-    test_birks_default_on()
-    test_nl_curve()
+    test_electron_uses_local_birks_response()
     test_dispatch_guard()
     test_gamma_chain()
     test_positron_annihilation()

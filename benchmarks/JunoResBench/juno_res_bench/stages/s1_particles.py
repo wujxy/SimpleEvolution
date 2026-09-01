@@ -41,6 +41,11 @@ from ..truth import (
     ParticleType,
     S1Output,
 )
+from ..stopping_power import (
+    birks_visible_mev,
+    charged_steps,
+    electron_stopping_power_mev_cm,
+)
 
 ELECTRON_MASS_MEV = 0.510999
 ANNIH_ENERGY_MEV = 2.0 * ELECTRON_MASS_MEV      # 1.021998
@@ -115,15 +120,69 @@ class _Acc:
         self.t = []
         self.dir = []
         self.kind = []
+        self.kinetic = []
+        self.dedx = []
+        self.length = []
 
-    def deposit(self, pos, e_dep_mev, t_ns, direction, kind: int,
-                cfg: DetectorConfig):
+    def deposit(self, pos, e_dep_mev, e_vis_mev, t_ns, direction, kind: int,
+                kinetic_mev, dedx_mev_cm, step_length_m):
         self.pos.append(np.asarray(pos, np.float64))
         self.e_dep.append(float(e_dep_mev))
-        self.e_vis.append(cfg.quench(e_dep_mev) * cfg.nl_correction(e_dep_mev))
+        self.e_vis.append(float(e_vis_mev))
         self.t.append(float(t_ns))
         self.dir.append(np.asarray(direction, np.float64))
         self.kind.append(kind)
+        self.kinetic.append(float(kinetic_mev))
+        self.dedx.append(float(dedx_mev_cm))
+        self.length.append(float(step_length_m))
+
+    def deposit_charged_track(self, pos, direction, kinetic_mev, t_ns,
+                              kind: int, cfg: DetectorConfig, rng=None):
+        """Deposit one e-/e+ track; return (end_pos, end_time, escaped_E)."""
+        pos = np.asarray(pos, np.float64).copy()
+        d = np.asarray(direction, np.float64)
+        d /= np.linalg.norm(d)
+        t = float(t_ns)
+        remaining = float(kinetic_mev)
+        d_e, e_mid, ds_cm = charged_steps(
+            remaining, cfg.charged_step_fraction,
+            cfg.charged_transport_cut_mev,
+        )
+        for loss, midpoint, length_cm in zip(d_e, e_mid, ds_cm):
+            length_m = float(length_cm) / 100.0
+            distance_out = _exit_distance(pos, d, cfg.nonuniform_radius_m)
+            fraction = min(1.0, max(0.0, distance_out / length_m))
+            actual_loss = float(loss) * fraction
+            actual_length = length_m * fraction
+            if actual_loss <= 0.0:
+                break
+
+            actual_midpoint = max(remaining - 0.5 * actual_loss, 0.0)
+            dedx = float(electron_stopping_power_mev_cm(actual_midpoint))
+            visible = float(birks_visible_mev(
+                actual_loss, dedx, cfg.birks_kb_cm_per_mev
+            ))
+            beta = _beta_from_kinetic(actual_midpoint)
+            dt = actual_length / (max(beta, 1e-6) * C_M_PER_NS)
+            self.deposit(
+                pos + 0.5 * actual_length * d,
+                actual_loss,
+                visible,
+                t + 0.5 * dt,
+                d,
+                kind,
+                actual_midpoint,
+                dedx,
+                actual_length,
+            )
+            pos = pos + actual_length * d
+            t += dt
+            remaining -= actual_loss
+            if fraction < 1.0:
+                return pos, t, max(remaining, 0.0)
+            if rng is not None and remaining > 0:
+                d = _scatter_direction(d, length_cm, actual_midpoint, rng)
+        return pos, t, max(remaining, 0.0)
 
     def finish(self) -> DepositionSteps:
         return DepositionSteps(
@@ -133,7 +192,23 @@ class _Acc:
             t_ns=np.asarray(self.t, np.float64),
             dir=np.asarray(self.dir, np.float64).reshape(-1, 3),
             kind=np.asarray(self.kind, np.int8),
+            kinetic_mev=np.asarray(self.kinetic, np.float64),
+            dedx_mev_cm=np.asarray(self.dedx, np.float64),
+            step_length_m=np.asarray(self.length, np.float64),
         )
+
+
+def _beta_from_kinetic(energy_mev: float) -> float:
+    gamma = 1.0 + max(float(energy_mev), 0.0) / ELECTRON_MASS_MEV
+    return float(np.sqrt(max(0.0, 1.0 - 1.0 / gamma**2)))
+
+
+def _scatter_direction(direction, length_cm, kinetic_mev, rng):
+    """Small synthetic angular diffusion for an electron transport step."""
+    sigma = min(0.5, 0.08 * np.sqrt(length_cm / max(kinetic_mev, 0.02)))
+    theta = abs(float(rng.normal(0.0, sigma)))
+    phi = float(rng.uniform(0.0, 2.0 * np.pi))
+    return _rotate(direction, np.cos(theta), np.sin(theta), phi)
 
 
 def _gamma_chain(pos_m, direction, energy_mev, t_ns, kind_compton: int,
@@ -144,22 +219,27 @@ def _gamma_chain(pos_m, direction, energy_mev, t_ns, kind_compton: int,
     d = d / np.linalg.norm(d)
     e = float(energy_mev)
     t = float(t_ns)
+    escaped = 0.0
     cut = cfg.gamma_abs_cut_kev / 1000.0
     for _ in range(cfg.gamma_max_steps):
         if e <= cut:
             # residual range <= ~1 cm: absorb at the last interaction point
-            acc.deposit(pos, e, t, d, DEPOSITION_KINDS["sub_cutoff"], cfg)
-            return 0.0
+            _, _, charged_escape = acc.deposit_charged_track(
+                pos, d, e, t, DEPOSITION_KINDS["sub_cutoff"], cfg, rng
+            )
+            return escaped + charged_escape
         lam = gamma_mfp_m(e, cfg)
         s = rng.exponential(lam)
         if s > _exit_distance(pos, d, cfg.nonuniform_radius_m):
-            return e                                  # escaped the LS
+            return escaped + e                        # escaped the LS
         pos = pos + s * d
         t += s / C_M_PER_NS
         pr = _pe_ratio(e, cfg)
         if rng.uniform() < pr / (1.0 + pr):
-            acc.deposit(pos, e, t, d, kind_photo, cfg)  # photoelectric
-            return 0.0
+            _, _, charged_escape = acc.deposit_charged_track(
+                pos, d, e, t, kind_photo, cfg, rng
+            )
+            return escaped + charged_escape
         ct, eps = _sample_compton(e, rng)
         e2 = e * eps
         e_rec = e - e2
@@ -170,12 +250,17 @@ def _gamma_chain(pos_m, direction, energy_mev, t_ns, kind_compton: int,
             p_el = e * d - e2 * d_new       # momentum transfer = recoil electron
             norm = np.linalg.norm(p_el)
             e_dir = p_el / norm if norm > 1e-12 else d
-            acc.deposit(pos, e_rec, t, e_dir, kind_compton, cfg)
+            _, _, charged_escape = acc.deposit_charged_track(
+                pos, e_dir, e_rec, t, kind_compton, cfg, rng
+            )
+            escaped += charged_escape
         d = d_new
         e = e2
     # safety net: should not happen (energy-conservation test trips on it)
-    acc.deposit(pos, e, t, d, DEPOSITION_KINDS["sub_cutoff"], cfg)
-    return 0.0
+    _, _, charged_escape = acc.deposit_charged_track(
+        pos, d, e, t, DEPOSITION_KINDS["sub_cutoff"], cfg, rng
+    )
+    return escaped + charged_escape
 
 
 # ---- event-level branches ---------------------------------------------------
@@ -196,34 +281,60 @@ def run_s1_gamma(event: EventInput, cfg: DetectorConfig, rng) -> S1Output:
     )
 
 
+def run_s1_electron(event: EventInput, cfg: DetectorConfig, rng=None) -> S1Output:
+    acc = _Acc()
+    _, _, escaped = acc.deposit_charged_track(
+        event.vertex_m, event.direction, event.e_true_mev, 0.0,
+        DEPOSITION_KINDS["primary"], cfg, rng,
+    )
+    steps = acc.finish()
+    return S1Output(
+        e_dep_mev=float(steps.e_dep_mev.sum()),
+        e_vis_mev=float(steps.e_vis_mev.sum()),
+        steps=steps,
+        e_escape_mev=escaped,
+        particle_type=ParticleType.ELECTRON,
+    )
+
+
 def run_s1_positron(event: EventInput, cfg: DetectorConfig, rng) -> S1Output:
     acc = _Acc()
-    acc.deposit(event.vertex_m, event.e_true_mev, 0.0, event.direction,
-                DEPOSITION_KINDS["primary"], cfg)
+    ann_pos, ann_start_t, escaped = acc.deposit_charged_track(
+        event.vertex_m, event.direction, event.e_true_mev, 0.0,
+        DEPOSITION_KINDS["primary"], cfg, rng,
+    )
+    if escaped > 0:
+        steps = acc.finish()
+        return S1Output(
+            e_dep_mev=float(steps.e_dep_mev.sum()),
+            e_vis_mev=float(steps.e_vis_mev.sum()),
+            steps=steps,
+            e_escape_mev=escaped + ANNIH_ENERGY_MEV,
+            particle_type=ParticleType.POSITRON,
+        )
     # annihilation branching: one uniform decides 3gamma / o-Ps 2gamma /
     # prompt 2gamma (3gamma is a subset of o-Ps; absolute fraction 2.2%)
     u = rng.uniform()
     if u < cfg.three_gamma_frac:
         mode = "3g"
-        t_ann = rng.exponential(cfg.ops_tau_ns)
+        t_ann = ann_start_t + rng.exponential(cfg.ops_tau_ns)
     elif u < cfg.ops_fraction:
         mode = "2g"
-        t_ann = rng.exponential(cfg.ops_tau_ns)
+        t_ann = ann_start_t + rng.exponential(cfg.ops_tau_ns)
     else:
         mode = "2g"
-        t_ann = 0.0                                   # prompt (p-Ps / direct)
+        t_ann = ann_start_t                           # prompt (p-Ps / direct)
 
-    escaped = 0.0
     kc, kp = DEPOSITION_KINDS["annih_compton"], DEPOSITION_KINDS["annih_photo"]
     if mode == "3g":
         w = rng.exponential(1.0, 3)                   # uniform on the simplex
         for e_i, d_i in zip(ANNIH_ENERGY_MEV * w / w.sum(), _isotropic3(rng)):
-            escaped += _gamma_chain(event.vertex_m, d_i, e_i, t_ann, kc, kp,
+            escaped += _gamma_chain(ann_pos, d_i, e_i, t_ann, kc, kp,
                                     cfg, rng, acc)
     else:
         axis = _isotropic3(rng)[0]
         for sign in (1.0, -1.0):
-            escaped += _gamma_chain(event.vertex_m, sign * axis,
+            escaped += _gamma_chain(ann_pos, sign * axis,
                                     ELECTRON_MASS_MEV, t_ann, kc, kp,
                                     cfg, rng, acc)
     steps = acc.finish()

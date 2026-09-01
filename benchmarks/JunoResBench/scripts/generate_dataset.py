@@ -132,7 +132,8 @@ def main():
     pmt_ids_all, pmt_cnt_all = [], []
     pe = {k: [] for k in "t_emit_ns t_tof_ns t_rel_ns q_pe pe_step".split()}
     steps = {k: [] for k in
-             "step_pos step_e_dep step_e_vis step_t_ns step_dir step_kind".split()}
+             "step_pos step_e_dep step_e_vis step_t_ns step_dir step_kind "
+             "step_kinetic step_dedx step_length".split()}
     adc_blocks = []
     wf_pmt_ids = []
     # dir format streams waveform bytes to a raw file (multi-GB readout
@@ -191,6 +192,15 @@ def main():
         steps["step_t_ns"].append(np.asarray(ev.step_t_ns, np.float64))
         steps["step_dir"].append(np.asarray(ev.step_dir, np.float64))
         steps["step_kind"].append(np.asarray(ev.step_kind, np.int8))
+        steps["step_kinetic"].append(
+            np.asarray(ev.step_kinetic_mev, np.float64)
+        )
+        steps["step_dedx"].append(
+            np.asarray(ev.step_dedx_mev_cm, np.float64)
+        )
+        steps["step_length"].append(
+            np.asarray(ev.step_length_m, np.float64)
+        )
         step_off.append(step_off[-1] + len(ev.step_e_dep_mev))
 
         if not args.truth_only:

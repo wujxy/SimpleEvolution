@@ -42,7 +42,8 @@ BENCH = Path(__file__).resolve().parents[1]
 TRUTH_RAGGED_PMT = ("pmt_ids", "n_pe_pmt")
 TRUTH_RAGGED_PE = ("t_emit_ns", "t_tof_ns", "t_rel_ns", "q_pe", "pe_step")
 TRUTH_RAGGED_STEP = ("step_pos", "step_e_dep", "step_e_vis", "step_t_ns",
-                     "step_dir", "step_kind")
+                     "step_dir", "step_kind", "step_kinetic", "step_dedx",
+                     "step_length")
 
 
 class Subsetter:
