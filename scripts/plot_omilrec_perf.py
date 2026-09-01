@@ -138,6 +138,71 @@ def scientist_points(run: str) -> tuple[list[tuple[float, float]],
     return sorted(all_pts), sorted(ratchet_pts)
 
 
+# --- r5-scientist relay: official teeth = world commits ----------------------
+#
+# r5's wire carries ts on every line (0d9e7de) but holds no 100-event
+# readings — the PI banked through executors, and the readings that
+# moved the official needle ARE the world commits. Seat raws hold
+# fuller numbers (including the 189-191 "悬读" the PI judged
+# un-bankable) — those stay scatter, never staircase.
+
+
+def relay_teeth(run: str) -> list[tuple[float, float]]:
+    """(time, official SPEED_MS) per banked tooth, from commit messages;
+    the final tooth takes the conclusion's pinned median."""
+    world = RUNS / run / "world"
+    out = subprocess.run(
+        ["git", "-C", str(world), "log", "--format=%ct %s"],
+        capture_output=True, text=True, check=True).stdout
+    final_v = None
+    concl = RUNS / run / "world" / ".scientist" / "conclusion.json"
+    if concl.is_file():
+        m = re.search(r"median is ([0-9.]+)ms",
+                      concl.read_text(encoding="utf-8",
+                                      errors="replace"))
+        if m:
+            final_v = float(m.group(1))
+    rows = []            # oldest first: (ts, value_or_None, after_handoff)
+    after = False
+    for line in reversed(out.splitlines()):
+        ts_s, subject = line.split(" ", 1)
+        ts = float(ts_s)
+        if "-> " in subject and " ms" in subject:   # relay handoff tooth
+            m = re.search(r"-> ([0-9.]+) ms", subject)
+            if m:
+                rows.append((ts, float(m.group(1))))
+                after = True
+                continue
+        m = re.search(r"\(([0-9.]+)ms/", subject)   # banked tooth w/ value
+        if m:
+            rows.append((ts, float(m.group(1))))
+        elif after and final_v is not None:
+            rows.append((ts, None))                 # final teeth, no value
+    # collapse trailing valueless teeth onto the LAST one: the pinned
+    # median belongs where the dust settled, not at every silent commit
+    last_fill = max((i for i, r in enumerate(rows)
+                     if r[1] is None), default=None)
+    teeth = [(ts, v) for i, (ts, v) in enumerate(rows)
+             if v is not None or i == last_fill]
+    return [(ts, final_v if v is None else v) for ts, v in teeth]
+
+
+def relay_scatter(run: str) -> list[tuple[float, float]]:
+    """Seat readings for scatter, anchored at each digest's mtime."""
+    base = RUNS / run / "world" / ".scientist" / "assistant"
+    pts: list[tuple[float, float]] = []
+    for d in sorted(base.iterdir()):
+        raw_p = d / "raw.txt"
+        if not raw_p.is_file():
+            continue
+        digest_p = d / "digest.json"
+        t = raw_p.stat().st_mtime
+        if digest_p.is_file():
+            t = digest_p.stat().st_mtime
+        pts += [(t, v) for _i, v in stream_readings(raw_p)]
+    return sorted(pts)
+
+
 # --- coding relay: commit anchors + index interpolation ----------------------
 
 
@@ -202,6 +267,18 @@ def main() -> None:
     t0 = min(t for t, _ in sci_all)
     sci_all = [(t - t0, v) for t, v in sci_all if t <= now]
     sci_ratchet = [(t - t0, v) for t, v in sci_ratchet if t <= now]
+    sci_span = (RUNS / "omilrec-v100-r1-scientist" / "world" / ".scientist"
+                / "session" / "wire.jsonl").stat().st_mtime - t0
+
+    # r5 relay: teeth from world commits, seat readings as scatter;
+    # spliced after r1's span (idle gap excluded, like the coding legs)
+    r5_run = "omilrec-v100-r5-scientist"
+    r5_t0 = first_snapshot_ts(r5_run)
+    r5_teeth = [(t - r5_t0, v) for t, v in relay_teeth(r5_run) if t <= now]
+    r5_scatter = [(t, v) for t, v in relay_scatter(r5_run) if t <= now]
+    sci_all += [(sci_span + t - r5_t0, v) for t, v in r5_scatter]
+    sci_ratchet += [(sci_span + t, v) for t, v in r5_teeth]
+    sci_relay_mark = sci_span / 3600.0
 
     legs = ["omilrec-v100-r1-coding", "omilrec-v100-r2-coding",
             "omilrec-v100-r3-coding"]
@@ -225,8 +302,10 @@ def main() -> None:
         st, sv = staircase(sci_ratchet)
         ax.step([t / 3600.0 for t in st], sv, where="post",
                 color="#1f77b4", lw=2,
-                label=f"r1 scientist (v6) — best {min(sv):.1f} ms"
+                label=f"scientist agent (r1→r5 relay) — best {min(sv):.1f} ms"
                       f" ({len(sci_all)} readings)")
+        ax.axvline(sci_relay_mark, color="#1f77b4", lw=0.7, ls=":",
+                   alpha=0.6)
     if code_pts:
         ax.scatter([t / 3600.0 for t, _ in code_pts],
                    [v for _, v in code_pts], s=9, alpha=0.25, color="#ff7f0e")
@@ -254,9 +333,10 @@ def main() -> None:
     fig.tight_layout()
     fig.savefig(out, dpi=150)
     print(f"wrote {out}")
-    print(f"r1-scientist: {len(sci_all)} readings "
+    print(f"scientist relay: {len(sci_all)} readings "
           f"(staircase on {len(sci_ratchet)}), "
-          f"span {max(t for t, _ in sci_all) / 3600:.1f} h")
+          f"span {max(t for t, _ in sci_all) / 3600:.1f} h; "
+          f"r5 teeth: {[v for _, v in r5_teeth]}")
     print(f"coding relay: {len(code_pts)} readings, "
           f"span {offset / 3600:.1f} h")
 
