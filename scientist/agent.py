@@ -245,7 +245,15 @@ def dispatch_action(action: dict, *, world, assistant, ledger) -> dict:
     """Run one non-terminal tool action against its in-world organ."""
     name = action["action"]
     if name in ("bash", "read_file", "write_file"):
-        return world.execute(action)
+        # Same law as engagements below: one failed dispatch reads as
+        # an error observation the PI can act on, never a dead run
+        # (first observed live: a write_file missing its path argument
+        # killed the run 11 minutes in).
+        try:
+            return world.execute(action)
+        except Exception as exc:  # noqa: BLE001 — surfaced to the PI
+            return {"ok": False, "error": f"world dispatch failed: "
+                                          f"{exc}"}
     if name == "note":
         return ledger.append_note(action.get("text"))
     if name in ROLE_NAMES:

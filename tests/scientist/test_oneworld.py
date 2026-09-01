@@ -270,6 +270,27 @@ def test_bash_workdir_normalizes_real_paths(tmp_path: Path):
     assert "w" in reply["output"]
 
 
+def test_malformed_call_bounces_back_instead_of_killing_the_run(
+        tmp_path: Path):
+    # observed live in r6: a write_file whose arguments carried content
+    # but no path raised KeyError and took the whole episode down — a
+    # malformed call is a tool error the model retries, never a crash
+    world = _world(tmp_path)
+    reply = world.execute({"action": "write_file", "content": "x"})
+    assert not reply["ok"]
+    assert "path" in reply["error"]
+    reply = world.execute({"action": "read_file"})
+    assert not reply["ok"]
+    assert "path" in reply["error"]
+    # and the dispatch-level net catches anything else the narrow
+    # branches miss (same law as engagement dispatches)
+    from scientist.agent import dispatch_action
+    reply = dispatch_action(
+        {"action": "write_file", "content": "x"},
+        world=world, assistant=None, ledger=None)
+    assert not reply["ok"]
+
+
 def test_render_native_boundaries_names_the_roots():
     text = render_native_boundaries("/x/work", "/x/repo", "/x/scratch")
     assert "/x/work" in text and "/x/scratch" in text
