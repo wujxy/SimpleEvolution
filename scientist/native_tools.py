@@ -104,6 +104,27 @@ WRITE_FILE_TOOL = _fn(
 # same colleagues (simpleevo/host/research_tools.py); this is the native
 # surface, not a mirror of that one.
 
+
+def _box_param(defaults: str) -> dict:
+    """The per-engagement timeout parameter, one wording in one place.
+
+    The box is a fuse — how long a colleague may run before salvage
+    looks for them — never a budget that sizes the work. The budget
+    reading is not hypothetical: interview point Cb answered "the brief
+    I write has to be completable inside the box", and that reading is
+    what cuts whole goals into task-sized legs.
+    """
+    return {
+        "type": "integer", "minimum": 1, "maximum": 480,
+        "description": (
+            "how long this engagement may run before it is salvaged — "
+            "the colleague's report, transcript, and session survive, "
+            "and a salvaged executor can be continued; it guards "
+            "against a colleague running unwatched, it does not size "
+            "the work. Omitted: " + defaults),
+    }
+
+
 SEARCHER_TOOL = _fn(
     "searcher",
     "Open work with a fresh Searcher colleague on a factual question about "
@@ -117,11 +138,9 @@ SEARCHER_TOOL = _fn(
         "experiment_ids": {
             "type": "array", "items": {"type": "string"},
         },
-        "timeout_minutes": {
-            "type": "integer", "minimum": 1, "maximum": 480,
-            "description": "engagement time box in minutes; when omitted the "
-                           "role default applies (searcher 60, executor 120, proposer/challenger/reviewer 180)",
-        },
+        "timeout_minutes": _box_param(
+            "role default (searcher 60, executor 120, "
+            "proposer/challenger/reviewer 180)"),
     },
     ["brief"],
 )
@@ -141,11 +160,9 @@ PROPOSER_TOOL = _fn(
         "experiment_ids": {
             "type": "array", "items": {"type": "string"},
         },
-        "timeout_minutes": {
-            "type": "integer", "minimum": 1, "maximum": 480,
-            "description": "engagement time box in minutes; when omitted the "
-                           "role default applies (searcher 60, executor 120, proposer/challenger/reviewer 180)",
-        },
+        "timeout_minutes": _box_param(
+            "role default (searcher 60, executor 120, "
+            "proposer/challenger/reviewer 180)"),
     },
     ["brief", "scope"],
 )
@@ -156,10 +173,12 @@ EXECUTOR_TOOL = _fn(
     "implementation, debugging, measurement, or experiment work — anything "
     "beyond a small discriminating probe. Give research intent, "
     "constraints, and a definition of done; they own how the work is "
-    "carried through. The call returns an acknowledgment and their "
-    "attributable report arrives as an observation when they finish; "
-    "continue_engagement resumes a finished Executor with their context "
-    "and workspace intact.",
+    "carried through — and a whole research goal can be the engagement: "
+    "the loop of hypothesis, change, measurement, and verdict runs "
+    "inside their stretch, not your decomposition. The call returns an "
+    "acknowledgment and their attributable report arrives as an "
+    "observation when they finish; continue_engagement resumes a "
+    "finished Executor with their context and workspace intact.",
     {
         "brief": {"type": "string"},
         "definition_of_done": {"type": "string"},
@@ -173,9 +192,9 @@ EXECUTOR_TOOL = _fn(
                            "current (the default) works directly in the "
                            "live tree the Scientist shares",
         },
-        "timeout_minutes": {
-            "type": "integer", "minimum": 1, "maximum": 480,
-        },
+        "timeout_minutes": _box_param(
+            "role default (searcher 60, executor 120, "
+            "proposer/challenger/reviewer 180)"),
     },
     ["brief", "definition_of_done"],
 )
@@ -194,11 +213,7 @@ CONTINUE_ENGAGEMENT_TOOL = _fn(
         },
         "brief": {"type": "string"},
         "definition_of_done": {"type": "string"},
-        "timeout_minutes": {
-            "type": "integer", "minimum": 1, "maximum": 480,
-            "description": "engagement time box in minutes; when omitted "
-                           "the executor default (120) applies",
-        },
+        "timeout_minutes": _box_param("executor default (120)"),
     },
     ["collaborator_id", "brief", "definition_of_done"],
 )
@@ -261,19 +276,19 @@ CHALLENGER_TOOL = _fn(
         "experiment_ids": {
             "type": "array", "items": {"type": "string"},
         },
-        "timeout_minutes": {
-            "type": "integer", "minimum": 1, "maximum": 480,
-            "description": "engagement time box in minutes; when omitted the "
-                           "role default applies (searcher 60, executor 120, proposer/challenger/reviewer 180)",
-        },
+        "timeout_minutes": _box_param(
+            "role default (searcher 60, executor 120, "
+            "proposer/challenger/reviewer 180)"),
     },
     ["brief"],
 )
 
 REVISE_RESEARCH_STATE_TOOL = _fn(
     "revise_research_state",
-    "Rewrite your Current Research View — the one page of how you "
-    "understand the problem now — at a real research junction where your "
+    "Rewrite your Current Research View — the one page of where the "
+    "research stands: what you believe about the problem, which lines "
+    "are still paying, the decisive uncertainty, and whether the "
+    "framing itself is tiring — at a real research junction where your "
     "working understanding, decisive evidence, or key uncertainty "
     "materially changes. The new view replaces the old one in your "
     "active context; prior versions remain reachable through the "
@@ -527,12 +542,9 @@ REVIEWER_TOOL = _fn(
         "experiment_ids": {
             "type": "array", "items": {"type": "string"},
         },
-        "timeout_minutes": {
-            "type": "integer", "minimum": 1, "maximum": 480,
-            "description": "engagement time box in minutes; when omitted "
-                           "the role default applies (searcher 60, "
-                           "executor 120, proposer/challenger/reviewer 180)",
-        },
+        "timeout_minutes": _box_param(
+            "role default (searcher 60, executor 120, "
+            "proposer/challenger/reviewer 180)"),
     },
     ["brief"],
 )
@@ -653,7 +665,7 @@ when to watch, when to interrupt, when to take a task back — is
 craft, not law. The delegation skill carries it; load it when the
 moment asks.
 
-Three things are identity, not craft. Independent hypotheses open as
+Four things are identity, not craft. Independent hypotheses open as
 separate seats in one turn — the time they spend is yours to think
 in — and seats are opened because a hypothesis deserves them, never
 to fill them. A report is testimony from a colleague: read it
@@ -662,7 +674,11 @@ matters — agreement is not proof, and cutting verification to go
 faster is the one betrayal. And a colleague's private trajectory —
 the searching, the reading, the false starts — never becomes your
 memory: what returns to you is the report, and what survives a
-colleague is the artifacts they committed.
+colleague is the artifacts they committed. And the division of the
+work holds with these: colleagues own the stretches — a whole
+engagement at a time — while you own the junctions, where a report
+lands, a gate fails, or the ratchet goes quiet, and the program
+turns.
 """
 
 # Temporary compatibility name for imports outside the PI prompt assembler.

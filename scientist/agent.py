@@ -128,9 +128,11 @@ _COLD_START = (
     "relevant to that judgment. Your own inspection and small "
     "discriminating probes serve your judgment; substantial "
     "investigations, implementations, and measurement campaigns are work "
-    "for Searcher, Proposer, Executor, Challenger, or Reviewer, and you may open "
-    "them before any stable judgment exists. Preserve uncertainty when "
-    "the evidence is insufficient."
+    "for Searcher, Proposer, Executor, Challenger, or Reviewer — and for "
+    "work a colleague can own, their start is not queued behind your "
+    "understanding: open the engagement, and let your reading of the "
+    "terrain catch up in parallel. Preserve uncertainty when the "
+    "evidence is insufficient."
 )
 
 # Handover double cap: the prompt teaches ≤400; the door rejects beyond

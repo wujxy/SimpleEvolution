@@ -711,6 +711,206 @@ def _real_replay() -> list[dict]:
     return messages
 
 
+def _bc_messages() -> list[dict]:
+    """Point Bc ground: the relay opening with a card that matches the
+    archived tree exactly (HEAD 1045951, 58 memory items) — no
+    card/world contradiction left for the PI to reconcile."""
+    return [
+        {"role": "user", "content": _COLD_START},
+        {"role": "user", "content": (
+            "Research memory: this run carries 58 recorded "
+            "research-memory items from before this conversation — "
+            "list_research_memory and search_research_memory make them "
+            "visible. Dead lanes and verified lessons may already be "
+            "recorded there.")},
+        {"role": "user", "content": (
+            "World state: the ratchet stands at 194.5 ms/evt (4.72x) "
+            "after banked wins this run (pedCancel 204.7, qmleGeoCache "
+            "196.9, energyMaxfuncalls 194.5, and a hot-loop cleanup); "
+            "all four gates PASS at HEAD. The human-expert line is not "
+            "known to you. Budget: most of the wall remains. No "
+            "engagement is open; the next move is yours.")},
+    ]
+
+
+def _run_chain_Bc(system: str, max_hops: int = 6) -> None:
+    """Point Bc — the opening moment chained with REAL world execution:
+    card states match the archived tree on disk, commands run for true
+    output, until the first seat opens. The reading: the dispatch's
+    shape — whole-goal brief, fuse, workspace — and what investigation
+    precedes it."""
+    messages = _bc_messages()
+    model = _model()
+    print("\n===== point Bc (chained, real world execution) =====")
+    for hop in range(max_hops):
+        reply = model.complete(system=system, messages=messages,
+                               timeout_seconds=300.0,
+                               tools=list(NATIVE_TOOLS))
+        actions = native_actions(reply)
+        names = [a.get("action") for a in actions]
+        print(f"hop {hop + 1}:", names or "(text-only)")
+        for a in actions:
+            probe = a.get("command") or a.get("path") or a.get("query")
+            if isinstance(probe, str):
+                print(f"    {a.get('action')}: {probe[:140]}")
+        text = (reply.text or "").strip()
+        if text:
+            print("text:", text[:400])
+        seats = [a for a in actions if a.get("action") in _SEAT_ACTIONS]
+        if seats:
+            for a in seats:
+                head = {k: v for k, v in a.items()
+                        if k in ("action", "workspace", "timeout_minutes",
+                                 "brief", "definition_of_done", "scope")}
+                for key in ("brief", "definition_of_done"):
+                    if isinstance(head.get(key), str):
+                        head[key] = head[key][:600]
+                print("  DISPATCH:", json.dumps(head, ensure_ascii=False))
+            return
+        messages.append({
+            "role": "assistant", "content": reply.text or "",
+            "reasoning_content": "",
+            "tool_calls": [
+                {"id": f"call_bc_{hop}_{i}", "type": "function",
+                 "function": {"name": a.get("action"),
+                              "arguments": json.dumps(
+                                  {k: v for k, v in a.items()
+                                   if k not in ("action",
+                                                "_arguments_raw")})}}
+                for i, a in enumerate(actions)]})
+        for i, a in enumerate(actions):
+            messages.append({
+                "role": "tool", "tool_call_id": f"call_bc_{hop}_{i}",
+                "content": json.dumps(_real_answer(a))})
+    print("  (no seat opened within the call budget)")
+
+
+SEED_WORLD = REPO / "runs/seed-omilrec-r1-handoff/world"
+
+
+def _seed_real_answer(action: dict) -> dict:
+    """Answer bash / memory / read actions against the relay SEED world
+    — the configuration r5 actually launched from (HEAD 71abd75 at
+    207.49, 43 memory items, no conclusion record). Every channel the
+    card mentions is wired to its real store, so no contradiction is
+    left for the PI to reconcile."""
+    import subprocess
+    name = action.get("action")
+    if name == "bash":
+        cmd = str(action.get("command", ""))
+        if any(tok in cmd for tok in _DESTRUCTIVE_TOKENS):
+            return {"ok": False, "error": (
+                "refused: this interview shell is read-only over the "
+                "seed world")}
+        try:
+            proc = subprocess.run(
+                ["bash", "-c", cmd], cwd=str(SEED_WORLD),
+                capture_output=True, text=True, timeout=90)
+            out = (proc.stdout + proc.stderr)[:4000]
+            return {"ok": True, "returncode": proc.returncode,
+                    "output": out or "(no output)"}
+        except subprocess.TimeoutExpired:
+            return {"ok": True, "returncode": 124,
+                    "output": "(command exceeded the 90s cap)"}
+    if name in ("list_research_memory", "search_research_memory"):
+        rows = []
+        for line in (SEED_WORLD / ".scientist/research_memory.jsonl") \
+                .read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    pass
+        if name == "search_research_memory":
+            query = str(action.get("query", "")).lower()
+            terms = [t for t in query.split() if t]
+            rows = [r for r in rows if r.get("event") == "create"
+                    and all(t in str(r.get("content", "")).lower()
+                            for t in terms)]
+        else:
+            rows = [r for r in rows if r.get("event") == "create"]
+        items = [{"item_id": r.get("item_id"),
+                  "content": str(r.get("content", ""))[:240]}
+                 for r in rows[:15]]
+        return {"ok": True, "items": items, "total": len(rows)}
+    if name in ("read_file", "inspect_research_item"):
+        target = str(action.get("path", ""))
+        try:
+            text = (SEED_WORLD / target.lstrip("/")) \
+                .read_text(encoding="utf-8", errors="replace")
+            return {"ok": True, "content": text[:4000]}
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+    return {"ok": True, "note": "(channel not replayed in this probe)"}
+
+
+def _run_chain_Bc2(system: str, max_hops: int = 6) -> None:
+    """Point Bc2 — the relay opening on the SEED world, every channel
+    real: bash runs, memory reads the true ledger. The reading: the
+    dispatch's shape (whole-goal brief, fuse, workspace) and what
+    investigation precedes it. (Bc taught the wiring lesson: a card
+    that names 58 items over a chain whose memory channel returns
+    empty burns the context on reconciliation.)"""
+    messages = [
+        {"role": "user", "content": _COLD_START},
+        {"role": "user", "content": (
+            "Research memory: this run carries 43 recorded "
+            "research-memory items from a predecessor's handoff — "
+            "list_research_memory and search_research_memory make them "
+            "visible. Dead lanes and verified lessons may already be "
+            "recorded there.")},
+        {"role": "user", "content": (
+            "World state: the ratchet stands at 207.49 ms/evt (4.43x) — "
+            "a predecessor run's handoff commit is HEAD; all four gates "
+            "PASS. The human-expert line is not known to you. Budget: "
+            "most of the wall remains. No engagement is open; the next "
+            "move is yours.")},
+    ]
+    model = _model()
+    print("\n===== point Bc2 (chained, seed world, all channels real) ====")
+    for hop in range(max_hops):
+        reply = model.complete(system=system, messages=messages,
+                               timeout_seconds=300.0,
+                               tools=list(NATIVE_TOOLS))
+        actions = native_actions(reply)
+        names = [a.get("action") for a in actions]
+        print(f"hop {hop + 1}:", names or "(text-only)")
+        for a in actions:
+            probe = a.get("command") or a.get("path") or a.get("query")
+            if isinstance(probe, str):
+                print(f"    {a.get('action')}: {probe[:140]}")
+        text = (reply.text or "").strip()
+        if text:
+            print("text:", text[:400])
+        seats = [a for a in actions if a.get("action") in _SEAT_ACTIONS]
+        if seats:
+            for a in seats:
+                head = {k: v for k, v in a.items()
+                        if k in ("action", "workspace", "timeout_minutes",
+                                 "brief", "definition_of_done", "scope")}
+                for key in ("brief", "definition_of_done"):
+                    if isinstance(head.get(key), str):
+                        head[key] = head[key][:600]
+                print("  DISPATCH:", json.dumps(head, ensure_ascii=False))
+            return
+        messages.append({
+            "role": "assistant", "content": reply.text or "",
+            "reasoning_content": "",
+            "tool_calls": [
+                {"id": f"call_bc2_{hop}_{i}", "type": "function",
+                 "function": {"name": a.get("action"),
+                              "arguments": json.dumps(
+                                  {k: v for k, v in a.items()
+                                   if k not in ("action",
+                                                "_arguments_raw")})}}
+                for i, a in enumerate(actions)]})
+        for i, a in enumerate(actions):
+            messages.append({
+                "role": "tool", "tool_call_id": f"call_bc2_{hop}_{i}",
+                "content": json.dumps(_seed_real_answer(a))})
+    print("  (no seat opened within the call budget)")
+
+
 def _run_point(point: str, system: str) -> dict:
     model = _model()
     reply = model.complete(
@@ -735,10 +935,98 @@ def _run_point(point: str, system: str) -> dict:
     return {"names": names, "actions": actions, "text": text}
 
 
+# Commands that must never actually run against the archived world in
+# the D2 chain — the interview may read it, not touch it.
+_DESTRUCTIVE_TOKENS = ("rm ", "mv ", "dd ", "truncate", "> ", ">>",
+                       "git reset", "git checkout", "git clean",
+                       "git commit", "git push", "chmod", "chown")
+
+
+def _real_answer(action: dict) -> dict:
+    """Answer a bash/read action by RUNNING it in the archived r5 world.
+
+    The fidelity fix the E chain demanded: canned strings get caught and
+    the context burns (observed twice). Here the world is real — the
+    concluded r5 tree on disk — so command and output can never
+    contradict. Read-only by refusal: destructive tokens never execute.
+    """
+    import subprocess
+    name = action.get("action")
+    if name != "bash":
+        return {"ok": True, "note": "(not a bash action; no replay)"}
+    cmd = str(action.get("command", ""))
+    if any(tok in cmd for tok in _DESTRUCTIVE_TOKENS):
+        return {"ok": False, "error": (
+            "refused: this interview shell is read-only over the "
+            "archived world")}
+    try:
+        proc = subprocess.run(
+            ["bash", "-c", cmd], cwd=str(RUN / "world"),
+            capture_output=True, text=True, timeout=90)
+        out = (proc.stdout + proc.stderr)[:4000]
+        return {"ok": True, "returncode": proc.returncode,
+                "output": out or "(no output)"}
+    except subprocess.TimeoutExpired:
+        return {"ok": True, "returncode": 124,
+                "output": "(command exceeded the 90s interview cap)"}
+
+
+def _run_chain_D2(system: str, max_hops: int = 6) -> None:
+    """Point D2 — the D moment (fresh omilrec task) chained with REAL
+    world execution: its orientation commands run against the archived
+    r5 tree and return true output, until the first seat opens. The
+    reading: how much investigation precedes the dispatch, and the
+    dispatch's shape (role, brief granularity, fuse, workspace)."""
+    messages = _point_messages("D")
+    model = _model()
+    print("\n===== point D2 (chained, real world execution) =====")
+    for hop in range(max_hops):
+        reply = model.complete(system=system, messages=messages,
+                               timeout_seconds=300.0,
+                               tools=list(NATIVE_TOOLS))
+        actions = native_actions(reply)
+        names = [a.get("action") for a in actions]
+        print(f"hop {hop + 1}:", names or "(text-only)")
+        for a in actions:
+            probe = a.get("command") or a.get("path") or a.get("query")
+            if isinstance(probe, str):
+                print(f"    {a.get('action')}: {probe[:140]}")
+        text = (reply.text or "").strip()
+        if text:
+            print("text:", text[:400])
+        seats = [a for a in actions if a.get("action") in _SEAT_ACTIONS]
+        if seats:
+            for a in seats:
+                head = {k: v for k, v in a.items()
+                        if k in ("action", "workspace", "timeout_minutes",
+                                 "brief", "definition_of_done", "scope")}
+                for key in ("brief", "definition_of_done"):
+                    if isinstance(head.get(key), str):
+                        head[key] = head[key][:600]
+                print("  DISPATCH:", json.dumps(head, ensure_ascii=False))
+            return
+        messages.append({
+            "role": "assistant", "content": reply.text or "",
+            "reasoning_content": "",
+            "tool_calls": [
+                {"id": f"call_d2_{hop}_{i}", "type": "function",
+                 "function": {"name": a.get("action"),
+                              "arguments": json.dumps(
+                                  {k: v for k, v in a.items()
+                                   if k not in ("action",
+                                                "_arguments_raw")})}}
+                for i, a in enumerate(actions)]})
+        for i, a in enumerate(actions):
+            messages.append({
+                "role": "tool", "tool_call_id": f"call_d2_{hop}_{i}",
+                "content": json.dumps(_real_answer(a))})
+    print("  (no seat opened within the call budget)")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--point", default="all",
-                        choices=["B", "C", "Cb", "D", "E", "E2", "E2b", "G", "N", "R",
+                        choices=["B", "Bc", "Bc2", "C", "Cb", "D", "D2", "E", "E2", "E2b", "G", "N", "R",
                                  "S", "T", "W", "all"])
     args = parser.parse_args()
     if args.point == "G":
@@ -746,6 +1034,15 @@ def main() -> None:
         return
     if args.point == "E":
         _run_chain_E(_system_xsbench())
+        return
+    if args.point == "Bc2":
+        _run_chain_Bc2(_system())
+        return
+    if args.point == "Bc":
+        _run_chain_Bc(_system())
+        return
+    if args.point == "D2":
+        _run_chain_D2(_system())
         return
     points = (["D", "N", "T"] if args.point == "all" else [args.point])
     for point in points:
