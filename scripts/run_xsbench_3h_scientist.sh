@@ -60,6 +60,48 @@ chmod 600 "$RUN_DIR/spec.json"
 $PY -m scientist.cli --spec "$RUN_DIR/spec.json" \
     --world "$RUN_DIR/world" --probe
 
+# 3b) seat-channel preflight through the run world's own runtime — the
+# exact environment a seat gets (stripped ambient, world .claude/home,
+# explicit --model). A broken channel aborts HERE instead of dying as
+# per-seat failures mid-run. Empty or wrong credentials fail loudly;
+# a silent fallback into the user's settings is impossible by
+# construction (proved 2026-09-01: empty runtime -> "Not logged in").
+(
+    SEAT_MODEL=$($PY -c "import json;print(json.load(open('$RUN_DIR/spec.json'))['assistant'].get('model') or '')")
+    SEAT_ENV=$($PY -c "import json;print(' '.join(f'{k}={v}' for k,v in json.load(open('$RUN_DIR/spec.json'))['assistant'].get('env',{}).items()))")
+    mkdir -p "$RUN_DIR/world/.claude" "$RUN_DIR/world/home"
+    $PY -c "import json,os,sys; \
+json.dump({'env': json.load(open('$RUN_DIR/spec.json'))['assistant'].get('env') or {}}, \
+open('$RUN_DIR/world/.claude/settings.json','w'), indent=2); \
+open('$RUN_DIR/world/home/.gitconfig','w').write('[user]\n\tname = preflight\n\temail = preflight@run.invalid\n')"
+    chmod 600 "$RUN_DIR/world/.claude/settings.json"
+    RC=0
+    env -i PATH="$PATH" HOME="$RUN_DIR/world/home" \
+        CLAUDE_CONFIG_DIR="$RUN_DIR/world/.claude" $SEAT_ENV \
+        timeout 120 claude -p 'reply with exactly: ok' \
+        --input-format text --output-format json \
+        ${SEAT_MODEL:+--model "$SEAT_MODEL"} \
+        > "$RUN_DIR/seat_preflight.json" 2>"$RUN_DIR/seat_preflight.err" || RC=$?
+    $PY - "$RC" "$RUN_DIR" <<'PYEOF' || exit 1
+import json, sys
+rc, run_dir = int(sys.argv[1]), sys.argv[2]
+try:
+    d = json.load(open(f"{run_dir}/seat_preflight.json"))
+except Exception:
+    sys.exit(f"seat preflight: no parseable reply (rc={rc}) — "
+             f"channel broken, aborting launch")
+if d.get("is_error") or str(d.get("result", "")).strip() != "ok":
+    sys.exit(f"seat preflight failed: {str(d.get('result'))[:200]}")
+print("seat preflight: channel OK through the run world's own runtime")
+PYEOF
+) || { echo "seat-channel preflight FAILED — see $RUN_DIR/seat_preflight.*" >&2; exit 1; }
+
+# escape hatch for testing the preflights without launching a run
+if [ "${PREFLIGHT_ONLY:-0}" = "1" ]; then
+    echo "PREFLIGHT_ONLY=1 — both channels verified, not launching"
+    exit 0
+fi
+
 # 4) the scientist (detached) + read-only snapshot sidecar (detached)
 #    Run-by-run isolation for the PI process itself, applied AFTER the
 #    spec is built (credential assembly needs the real HOME): no ambient
