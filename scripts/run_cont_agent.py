@@ -267,7 +267,11 @@ SELF_REPORT block (see the protocol in your role brief) and stop.
             world=self._session_world(ws_path),
             command="claude",
             timeout_seconds=timeout,
-            allowed_tools="Read,Edit,Write,Bash",
+            # WebSearch/WebFetch parity with scientist seats: the web is
+            # the sanctioned external-information entrance, and a
+            # controlled comparison cannot give one arm a channel the
+            # other lacks (2026-09-01 controlled-trial audit).
+            allowed_tools="Read,Edit,Write,Bash,WebSearch,WebFetch",
             model=self.config.executor.get("model") or None,
             extra_args=extra,
             trace_store=TraceStore(self.run_dir),
