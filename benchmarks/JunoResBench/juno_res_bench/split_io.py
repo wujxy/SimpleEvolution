@@ -1,4 +1,4 @@
-"""Load a JunoResBench dataset split — single npz or dir format.
+"""Load a JunoResBench dataset split — v1 dense or v2 sparse format.
 
 dir format (the full-readout era):
 
@@ -20,8 +20,12 @@ from pathlib import Path
 import numpy as np
 
 
-def load_split(path, mmap_adc: bool = True) -> dict:
+def load_split(path, mmap_adc: bool = True):
     p = Path(path)
+    if p.is_dir() and (p / "index.npz").exists() and (p / "metadata.json").exists():
+        from .sparse_waveforms import SparseSplit
+
+        return SparseSplit(p)
     if p.is_dir():
         meta = None
         mf = p / "meta.json"
