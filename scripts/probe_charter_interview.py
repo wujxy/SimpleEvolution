@@ -147,10 +147,111 @@ def _mainline_dispatched() -> list[dict]:
     return _opening() + [turn, result]
 
 
+def _run_chain_G(system: str, max_calls: int = 3) -> None:
+    """Point G — goal-brief craft: the real r5 wire replayed, its own
+    survey turns answered with results CONSISTENT with that wire state
+    (the dispatch cut predates the first tooth: the tree shows only the
+    handoff), chained until an executor/continue dispatch appears or
+    the calls run out. The brief at that moment is the reading."""
+    messages = _real_replay()
+    model = _model()
+    print("\n===== point G (chained real replay) =====")
+    for hop in range(max_calls):
+        reply = model.complete(system=system, messages=messages,
+                               timeout_seconds=300.0,
+                               tools=list(NATIVE_TOOLS))
+        actions = native_actions(reply)
+        names = [a.get("action") for a in actions]
+        print(f"hop {hop + 1}:", names or "(text-only)")
+        dispatched = [a for a in actions if a.get("action") in
+                      ("executor", "continue_engagement")]
+        if dispatched:
+            for a in dispatched:
+                head = {k: v for k, v in a.items()
+                        if k in ("action", "workspace", "timeout_minutes",
+                                 "brief", "definition_of_done")}
+                for key in ("brief", "definition_of_done"):
+                    if isinstance(head.get(key), str):
+                        head[key] = head[key][:600]
+                print("  DISPATCH:", json.dumps(head,
+                                                ensure_ascii=False))
+            return
+        # feed its own survey back: results consistent with the wire
+        messages.append({
+            "role": "assistant", "content": reply.text or "",
+            "reasoning_content": "",
+            "tool_calls": [
+                {"id": f"call_g{hop}_{i}", "type": "function",
+                 "function": {"name": a.get("action"),
+                              "arguments": json.dumps(
+                                  {k: v for k, v in a.items()
+                                   if k not in ("action",
+                                                "_arguments_raw")})}}
+                for i, a in enumerate(actions)]})
+        for i, a in enumerate(actions):
+            messages.append({
+                "role": "tool", "tool_call_id": f"call_g{hop}_{i}",
+                "content": json.dumps(_survey_answer(a))})
+    print("  (no dispatch within the call budget)")
+
+
+def _survey_answer(action: dict) -> dict:
+    """A reply to a survey action that is consistent with the replayed
+    wire state (handoff tree, no teeth yet)."""
+    name = action.get("action")
+    if name == "bash":
+        return {"ok": True, "returncode": 0, "output": (
+            "71abd75 relay handoff from r1 (v6): bit-exact ratchet "
+            "919.9 -> 207.49 ms/evt\n"
+            "8bbf2f5 omilrec v1.0.0 baseline\n"
+            "(working tree clean at 71abd75)")}
+    if name in ("list_research_memory", "search_research_memory"):
+        return {"ok": True, "items": [
+            {"item_id": "M31", "title": "tolerance lanes are dead"},
+            {"item_id": "M39", "title": "stage caches are the living "
+                                        "lane"},
+        ], "total": 43}
+    if name.startswith(("search_experiments", "inspect")):
+        return {"ok": True, "results": [], "note": "no prior experiments"}
+    if name.startswith(("list_", "read_file")):
+        return {"ok": True, "note": "(content consistent with the "
+                                    "handoff state above)"}
+    return {"ok": True, "note": "(done)"}
+
+
 def _point_messages(point: str) -> list[dict]:
     base = _mainline_dispatched()
     if point == "B":
         messages = _opening()
+    elif point == "D":
+        # dispatch-at-first-contact: a fresh task has just arrived and
+        # the resources are sketched. Reading: does the first turn open
+        # an executor (delegate now, study in parallel) or survey first?
+        messages = [
+            {"role": "user", "content": _COLD_START},
+            {"role": "user", "content": (
+                "New task, just arrived: reduce the runtime of the "
+                "reconstruction kernel in OMILRECV2 (single-threaded, "
+                "bit-exact gates frozen). Resources on hand: the source "
+                "under OMILRECV2/src, the evaluation script and frozen "
+                "gates under scripts/ and tests/, benchmark data under "
+                "/data, the git history of every change so far. Where "
+                "do you begin?")},
+        ]
+    elif point == "T":
+        # take-back judgment: two consecutive executors foundered on
+        # the SAME framing error class. Reading: a third identical
+        # dispatch, a narrowed/widened re-frame, taking the task back,
+        # or loading the delegation skill?
+        messages = _mainline_dispatched() + [
+            {"role": "user", "content":
+                _collaborator_report_message(FOUNDERING_1)},
+            {"role": "user", "content":
+                _collaborator_report_message(FOUNDERING_2)},
+            {"role": "user", "content": (
+                "Budget note: ~70% of wall remains. Two engagements "
+                "foundered on framing, not craft.")},
+        ]
     elif point == "B2":
         # follow-through: grounding done, read the brief it writes
         messages = _grounded([{"role": "user", "content": (
@@ -239,6 +340,39 @@ GROUNDING_RESULTS = [
 ]
 
 
+FOUNDERING_1 = {
+    "ok": True, "status": "done", "role": "executor",
+    "collaborator_id": "executor-omilrec-v100-002-021",
+    "self_report_digest": (
+        "Half the box spent on the wrong question. The brief said "
+        "'reduce ENERGY-stage cost'; I instrumented the minimizer loop, "
+        "but the decisive cost is before Minimize() even starts — the "
+        "per-PMT table setup the loop then never reuses. I noticed this "
+        "only at hour two. Nothing banked; a profile exists now."),
+    "diff_summary": "instrumentation only, reverted",
+    "metrics": {}, "evidence": ["profile in scratch"],
+    "artifacts": [], "uncertainty": "framing was mine to check first",
+    "recommended_follow_up": "whoever continues should start at setup",
+}
+
+FOUNDERING_2 = {
+    "ok": True, "status": "done", "role": "executor",
+    "collaborator_id": "executor-omilrec-v100-002-022",
+    "self_report_digest": (
+        "Same shape of failure as my predecessor, I think: I took the "
+        "brief's lever (stage-keyed cache) and implemented it cleanly, "
+        "but against the wrong stage boundary — the cache rebuilds once "
+        "per FCN call instead of once per stage, so it costs more than "
+        "it saves. The gates passed; the speed did not move. The frame, "
+        "not the craft, was wrong."),
+    "diff_summary": "cache at wrong boundary, no net gain",
+    "metrics": {}, "evidence": ["before/after timings"],
+    "artifacts": [], "uncertainty": "which boundary is right",
+    "recommended_follow_up": "someone should decide the boundary before "
+                             "more implementation",
+}
+
+
 def _grounded(extra: list[dict]) -> list[dict]:
     return _opening() + [GROUNDING_TURN] + GROUNDING_RESULTS + [
         {"role": "user", "content": (
@@ -309,11 +443,13 @@ def _run_point(point: str, system: str) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--point", default="all",
-                        choices=["B", "B2", "W", "N", "S", "S2", "R",
+                        choices=["B", "D", "G", "N", "S", "T", "W",
                                  "all"])
     args = parser.parse_args()
-    points = (["B", "B2", "W", "N", "S", "S2", "R"] if args.point == "all"
-              else [args.point])
+    if args.point == "G":
+        _run_chain_G(_system())
+        return
+    points = (["D", "N", "T"] if args.point == "all" else [args.point])
     system = _system()
     for point in points:
         _run_point(point, system)
