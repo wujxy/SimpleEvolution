@@ -48,10 +48,10 @@ def _fn(name: str, description: str, properties: dict,
 BASH_TOOL = _fn(
     "bash",
     "Run a bounded shell command in the live workspace when direct "
-    "inspection or a small discriminating probe requires it. Use your "
-    "shell to stay grounded and audit decisive evidence; substantial "
-    "implementation, debugging, and measurement campaigns normally belong "
-    "to an Executor.",
+    "inspection or a discriminating probe requires it. Use your "
+    "shell to stay grounded, audit decisive evidence, and do the "
+    "work that builds the frame; a production stretch inside a frame "
+    "you already hold has a default holder.",
     {
         "command": {"type": "string"},
         "workdir": {
@@ -104,24 +104,43 @@ WRITE_FILE_TOOL = _fn(
 # same colleagues (simpleevo/host/research_tools.py); this is the native
 # surface, not a mirror of that one.
 
+
+def _box_param(defaults: str) -> dict:
+    """The per-engagement timeout parameter, one wording in one place.
+
+    A fuse, not a budget (the full teaching lives in the delegation
+    skill): it bounds how long a colleague runs unwatched, never the
+    size of the work. The budget reading is not hypothetical — interview
+    point Cb answered "the brief I write has to be completable inside
+    the box" — so the clause stays, in its shortest honest form.
+    """
+    return {
+        "type": "integer", "minimum": 1, "maximum": 480,
+        "description": (
+            "minutes this seat may run unwatched before salvage — "
+            "report, transcript, and session survive, and a salvaged "
+            "executor can be continued; a fuse, not a work size. "
+            "Omitted: " + defaults),
+    }
+
+
 SEARCHER_TOOL = _fn(
     "searcher",
     "Open work with a fresh Searcher colleague on a factual question about "
     "what is already known — literature, precedent, or the code in this "
     "world. They investigate independently and report sources, findings, "
     "disagreements, and uncertainty. The call returns an acknowledgment; "
-    "their report arrives as a later observation.",
+    "their report arrives as a later observation. Whether the question is "
+    "answered from literature or from the world's code is the brief's to "
+    "say; the colleague reads the live world either way.",
     {
         "brief": {"type": "string"},
-        "read": {"type": "string", "enum": ["none", "node", "lab"]},
         "experiment_ids": {
             "type": "array", "items": {"type": "string"},
         },
-        "timeout_minutes": {
-            "type": "integer", "minimum": 1, "maximum": 480,
-            "description": "engagement time box in minutes; when omitted the "
-                           "role default applies (searcher 60, executor 120, proposer/challenger/reviewer 180)",
-        },
+        "timeout_minutes": _box_param(
+            "role default (searcher 60, executor 120, "
+            "proposer/challenger/reviewer 180)"),
     },
     ["brief"],
 )
@@ -141,11 +160,9 @@ PROPOSER_TOOL = _fn(
         "experiment_ids": {
             "type": "array", "items": {"type": "string"},
         },
-        "timeout_minutes": {
-            "type": "integer", "minimum": 1, "maximum": 480,
-            "description": "engagement time box in minutes; when omitted the "
-                           "role default applies (searcher 60, executor 120, proposer/challenger/reviewer 180)",
-        },
+        "timeout_minutes": _box_param(
+            "role default (searcher 60, executor 120, "
+            "proposer/challenger/reviewer 180)"),
     },
     ["brief", "scope"],
 )
@@ -153,13 +170,16 @@ PROPOSER_TOOL = _fn(
 EXECUTOR_TOOL = _fn(
     "executor",
     "Open work with a fresh Executor colleague for substantial "
-    "implementation, debugging, measurement, or experiment work — anything "
-    "beyond a small discriminating probe. Give research intent, "
+    "implementation, debugging, measurement, or experiment work — a "
+    "stretch to carry through, not a question to answer. "
+    "Give research intent, "
     "constraints, and a definition of done; they own how the work is "
-    "carried through. The call returns an acknowledgment and their "
-    "attributable report arrives as an observation when they finish; "
-    "continue_engagement resumes a finished Executor with their context "
-    "and workspace intact.",
+    "carried through — and a whole research goal can be the engagement: "
+    "the loop of hypothesis, change, measurement, and verdict runs "
+    "inside their stretch, not your decomposition. The call returns an "
+    "acknowledgment and their attributable report arrives as an "
+    "observation when they finish; continue_engagement resumes a "
+    "finished Executor with their context and workspace intact.",
     {
         "brief": {"type": "string"},
         "definition_of_done": {"type": "string"},
@@ -173,9 +193,9 @@ EXECUTOR_TOOL = _fn(
                            "current (the default) works directly in the "
                            "live tree the Scientist shares",
         },
-        "timeout_minutes": {
-            "type": "integer", "minimum": 1, "maximum": 480,
-        },
+        "timeout_minutes": _box_param(
+            "role default (searcher 60, executor 120, "
+            "proposer/challenger/reviewer 180)"),
     },
     ["brief", "definition_of_done"],
 )
@@ -194,11 +214,7 @@ CONTINUE_ENGAGEMENT_TOOL = _fn(
         },
         "brief": {"type": "string"},
         "definition_of_done": {"type": "string"},
-        "timeout_minutes": {
-            "type": "integer", "minimum": 1, "maximum": 480,
-            "description": "engagement time box in minutes; when omitted "
-                           "the executor default (120) applies",
-        },
+        "timeout_minutes": _box_param("executor default (120)"),
     },
     ["collaborator_id", "brief", "definition_of_done"],
 )
@@ -261,19 +277,19 @@ CHALLENGER_TOOL = _fn(
         "experiment_ids": {
             "type": "array", "items": {"type": "string"},
         },
-        "timeout_minutes": {
-            "type": "integer", "minimum": 1, "maximum": 480,
-            "description": "engagement time box in minutes; when omitted the "
-                           "role default applies (searcher 60, executor 120, proposer/challenger/reviewer 180)",
-        },
+        "timeout_minutes": _box_param(
+            "role default (searcher 60, executor 120, "
+            "proposer/challenger/reviewer 180)"),
     },
     ["brief"],
 )
 
 REVISE_RESEARCH_STATE_TOOL = _fn(
     "revise_research_state",
-    "Rewrite your Current Research View — the one page of how you "
-    "understand the problem now — at a real research junction where your "
+    "Rewrite your Current Research View — the one page of where the "
+    "research stands: what you believe about the problem, which lines "
+    "are still paying, the decisive uncertainty, and whether the "
+    "framing itself is tiring — at a real research junction where your "
     "working understanding, decisive evidence, or key uncertainty "
     "materially changes. The new view replaces the old one in your "
     "active context; prior versions remain reachable through the "
@@ -527,12 +543,9 @@ REVIEWER_TOOL = _fn(
         "experiment_ids": {
             "type": "array", "items": {"type": "string"},
         },
-        "timeout_minutes": {
-            "type": "integer", "minimum": 1, "maximum": 480,
-            "description": "engagement time box in minutes; when omitted "
-                           "the role default applies (searcher 60, "
-                           "executor 120, proposer/challenger/reviewer 180)",
-        },
+        "timeout_minutes": _box_param(
+            "role default (searcher 60, executor 120, "
+            "proposer/challenger/reviewer 180)"),
     },
     ["brief"],
 )
@@ -653,7 +666,7 @@ when to watch, when to interrupt, when to take a task back — is
 craft, not law. The delegation skill carries it; load it when the
 moment asks.
 
-Three things are identity, not craft. Independent hypotheses open as
+Four things are identity, not craft. Independent hypotheses open as
 separate seats in one turn — the time they spend is yours to think
 in — and seats are opened because a hypothesis deserves them, never
 to fill them. A report is testimony from a colleague: read it
@@ -662,7 +675,11 @@ matters — agreement is not proof, and cutting verification to go
 faster is the one betrayal. And a colleague's private trajectory —
 the searching, the reading, the false starts — never becomes your
 memory: what returns to you is the report, and what survives a
-colleague is the artifacts they committed.
+colleague is the artifacts they committed. And the division of the
+work holds with these: colleagues own the stretches by default — a
+whole engagement at a time — while you own the junctions, where a
+report lands, a gate fails, or the ratchet goes quiet, and the
+program turns.
 """
 
 # Temporary compatibility name for imports outside the PI prompt assembler.
@@ -707,11 +724,15 @@ NATIVE_PROTOCOL_BLOCK = """# Runtime Mechanics
 _BOUNDARIES_TEMPLATE = """# World Contact and Evaluation
 
 You can inspect the live world directly and run small probes when they
-help you understand or audit the research. Direct inspection, small
-discriminating probes, and independent checks are appropriate PI work.
-Production implementation, long debugging, and measurement campaigns
-should normally be carried by an Executor, so they do not consume the
-context your judgment needs.
+help you understand or audit the research. Direct inspection,
+discriminating probes, and independent checks are yours to run — and
+so is substantial work, for as long as your running of it still
+changes program-level decisions: a mechanism taken apart to learn what
+the question is, a measurement that decides which charter deserves to
+exist. What moves to an Executor by default is the production stretch
+— implementation, long debugging, repeated measurement inside a frame
+already held — because it consumes the context your judgment needs
+and updates none of it.
 
 The world on disk: {work} is the live workspace — only its editable paths
 accept writes; everything else in the tree is visible read-only.

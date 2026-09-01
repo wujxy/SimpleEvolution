@@ -56,6 +56,21 @@ _CLOSING_CONTRACT = (
 )
 
 
+def _fuse_note(fuse_seconds: int | None) -> str:
+    """The seat's own runway, stated as fact. A worker that cannot see
+    its fuse cannot pace to it — commit checkpoints, measurement passes,
+    and the depth of a side investigation all price differently against
+    fifteen minutes versus three hours. Information only: the fuse
+    bounds the unwatched interval, never the work, and salvage (or a
+    continuation) keeps what was laid down."""
+    if not fuse_seconds:
+        return ""
+    return (f"Fuse: about {max(fuse_seconds, 0) // 60} minutes before "
+            "the harness salvages — report, transcript, and session "
+            "survive a salvage, and a continued engagement resumes "
+            "this work.")
+
+
 def build_collaboration_prompt(
     role: str,
     action: dict,
@@ -65,6 +80,7 @@ def build_collaboration_prompt(
     current_judgment: dict | None,
     evidence_index: list[dict],
     selected_experiments: list[dict],
+    fuse_seconds: int | None = None,
 ) -> str:
     """Render only the context allowed by one role's mandate."""
     if role not in ROLE_NAMES:
@@ -140,16 +156,17 @@ def build_collaboration_prompt(
         )
     elif role == "reviewer":
         # No judgment, no evidence index, no curated context — the
-        # briefing is the claim, the workspace and the run record are
+        # briefing is the claim, the live world and the run record are
         # the facts, and this colleague digs for itself.
         sections.append(
             "Mandate: look back over this research as a whole. The "
             "briefing you received is the Scientist's own account — a "
-            "claim, not a fact. The workspace holds the world AND the "
-            "full run record (``.scientist/``: wire, views, research "
-            "memory, collaborator reports); verify the account against "
-            "it, judge the work on its merits, and name what you would "
-            "dig into next that the Scientist has not tried."
+            "claim, not a fact. The live world and the full run record "
+            "(the wire, views, research memory, collaborator reports — "
+            "paths in your workspace note) are readable; verify the "
+            "account against them, judge the work on its merits, and "
+            "name what you would dig into next that the Scientist has "
+            "not tried."
         )
     elif role == "executor":
         done = str(action.get("definition_of_done") or "").strip()
@@ -174,11 +191,15 @@ def build_collaboration_prompt(
                 "the next colleague inherits."
             )
 
+    fuse = _fuse_note(fuse_seconds)
+    if fuse:
+        sections.append(fuse)
     sections.append(_CLOSING_CONTRACT)
     return "\n\n".join(sections)
 
 
-def build_continuation_prompt(action: dict) -> str:
+def build_continuation_prompt(action: dict, *,
+                              fuse_seconds: int | None = None) -> str:
     """Render the brief for resuming a finished Executor engagement.
 
     The resumed session already carries its own context — the codebase it
@@ -200,6 +221,9 @@ def build_continuation_prompt(action: dict) -> str:
         "the world since you worked is in the brief below.",
         f"Engagement brief:\n{brief}",
         f"Definition of done:\n{done}",
-        _CLOSING_CONTRACT,
     ]
+    fuse = _fuse_note(fuse_seconds)
+    if fuse:
+        sections.append(fuse)
+    sections.append(_CLOSING_CONTRACT)
     return "\n\n".join(sections)

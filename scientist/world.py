@@ -118,6 +118,11 @@ class LocalWorld:
                 return self._write_file(action)
             if name == "bash":
                 return self._bash(action)
+        except KeyError as exc:
+            # a malformed call (missing argument) bounces back to the
+            # model as a tool error to retry — it must not kill the run
+            return {"ok": False, "error": f"{name} is missing a required "
+                                          f"argument: {exc}"}
         except (ValueError, OSError) as exc:
             return {"ok": False, "error": str(exc)}
         return {"ok": False, "error": f"not a local action: {name}"}

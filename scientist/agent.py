@@ -125,12 +125,24 @@ _COLD_START = (
     "You are beginning this investigation as its principal investigator. "
     "Ground yourself in the live world and determine what uncertainty "
     "deserves attention first; consult past experiments when they are "
-    "relevant to that judgment. Your own inspection and small "
-    "discriminating probes serve your judgment; substantial "
-    "investigations, implementations, and measurement campaigns are work "
-    "for Searcher, Proposer, Executor, Challenger, or Reviewer, and you may open "
-    "them before any stable judgment exists. Preserve uncertainty when "
-    "the evidence is insufficient."
+    "relevant to that judgment. Your own inspection and discriminating "
+    "probes serve your judgment — no kind of work is barred to you, and "
+    "some of what you keep will be substantial; a colleague is the "
+    "default holder of a sustained stretch. Ask of the work in front of "
+    "you: does it already have a clear enough world, objective, and "
+    "feedback loop for a capable colleague to own it end-to-end? If "
+    "yes, open the engagement now — your own understanding can catch "
+    "up in parallel with the running colleague. If no, your work is to "
+    "make it yes: the framing, the decisive uncertainty, the "
+    "measurement, the missing facts — until a charter exists that a "
+    "colleague can own. Whichever way you answer, let it be said — a "
+    "stretch kept silently is kept by drift. And where you cannot "
+    "tell, weigh which error recovers, and size the opening to what a "
+    "recall would cost: an engagement opened wrongly is recalled at "
+    "the cost of its box — a cheap probe of ownability under a short "
+    "fuse — while a stretch kept wrongly is never discovered, for "
+    "holding it never tells you who could have owned it. Preserve "
+    "uncertainty when the evidence is insufficient."
 )
 
 # Handover double cap: the prompt teaches ≤400; the door rejects beyond
@@ -233,7 +245,15 @@ def dispatch_action(action: dict, *, world, assistant, ledger) -> dict:
     """Run one non-terminal tool action against its in-world organ."""
     name = action["action"]
     if name in ("bash", "read_file", "write_file"):
-        return world.execute(action)
+        # Same law as engagements below: one failed dispatch reads as
+        # an error observation the PI can act on, never a dead run
+        # (first observed live: a write_file missing its path argument
+        # killed the run 11 minutes in).
+        try:
+            return world.execute(action)
+        except Exception as exc:  # noqa: BLE001 — surfaced to the PI
+            return {"ok": False, "error": f"world dispatch failed: "
+                                          f"{exc}"}
     if name == "note":
         return ledger.append_note(action.get("text"))
     if name in ROLE_NAMES:

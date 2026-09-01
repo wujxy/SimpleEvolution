@@ -18,6 +18,18 @@ The consensus under test — delegation, not supervision:
       diagnosis before redirect (Challenger attacks the floor claim /
       Proposer on another mechanism), or accept-and-deliver, or a
       fresh executor with the same charter?
+  E (handoff shape) a simple-kernel task (XSBench-shaped) where the PI
+      has ALREADY read the code once — the stipulated form: survey
+      yourself, then hand off. Reading: the first dispatch — whole-goal
+      brief or a narrow first task; box bought or role default.
+  E2 (entrustment)  the XSBench four-arm evidence on the table (single
+      Claude 2.29x, first-gen Scientist 1.73x with zero banked seats,
+      goal-ladder Scientist 2.57x); asked plainly how much of such a
+      task should live inside ONE executor engagement.
+  C (box semantics) the engagement-box mechanics stated as fact;
+      asked what the box is FOR in planning — a budget that sizes the
+      work, or a hang-detector while the colleague's own progress is
+      the clock.
 
 Contexts are hand-built but shaped by the real code paths (the real
 cold-start text, the real acknowledgment shape with its
@@ -100,6 +112,45 @@ def _model():
 def _system() -> str:
     spec = json.loads((RUN / "spec.json").read_text())
     spec.pop("assistant", None)
+    return build_system_prompt(spec)
+
+
+def _system_xsbench() -> str:
+    """A self-consistent SIMPLE-KERNEL world for the E/E2/C points: the
+    r5 spec re-goaled onto an XSBench-shaped task, so the world the
+    system prompt describes and the world the cards describe are the
+    same one. (First E run taught this the hard way: with the omilrec
+    system prompt the PI caught the contradiction and correctly refused
+    to act on it — a probe artifact, not a delegation reading.)"""
+    spec = json.loads((RUN / "spec.json").read_text())
+    spec.pop("assistant", None)
+    spec.update({
+        "goal": (
+            "This is XSBench (mode history, single thread): a Monte "
+            "Carlo particle-transport lookup benchmark. The code lives "
+            "under xsbench/src (~1.2k lines of C; the hot loop is a "
+            "binary search over the energy grid plus a nuclide-list "
+            "scan, per collision). Your job: make it faster — drive "
+            "RUN_SECONDS down (seconds per 1e7 histories; see "
+            "scripts/run_bench.sh) — while validation-mode output keeps "
+            "matching the shipped reference: anything that moves lookup "
+            "results is out of bounds."),
+        "editable_paths": ["xsbench/src"],
+        "gate_block": (
+            "Only modify files under xsbench/src/. The harness runs, in "
+            "order:\n  - bash scripts/run_bench.sh --mode history\n"
+            "It builds the -O2 Release binary, runs validation mode "
+            "against the shipped reference (must match), then times "
+            "three benchmark repeats (1e7 histories, single thread) and "
+            "emits RUN_SECONDS (lower is better) plus the VALIDATION "
+            "token. A change is accepted only if VALIDATION=PASS; among "
+            "accepted changes, lower RUN_SECONDS is better.;\n\n"
+            "Measured on this machine, for planning: the gate script "
+            "runs ~40 s end to end. Three repeats of the frozen "
+            "baseline spread 9.32-9.51 s (~±1%): treat smaller deltas "
+            "as ties until repeated."),
+        "base_sha": "53111b4c0d9e6a2f1f8b3c7a9e2d4f6a8b0c1d2e",
+    })
     return build_system_prompt(spec)
 
 
@@ -219,6 +270,127 @@ def _survey_answer(action: dict) -> dict:
     return {"ok": True, "note": "(done)"}
 
 
+_SEAT_ACTIONS = frozenset((
+    "searcher", "proposer", "executor", "challenger", "reviewer",
+    "continue_engagement"))
+
+
+_XS_WORLD = {
+    "git_log": (
+        "53111b4 xsbench baseline (history mode, -O2 Release)\n"
+        "(working tree clean at 53111b4)"),
+    "run_bench": (
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "cmake -B build -DCMAKE_BUILD_TYPE=Release >/dev/null && "
+        "cmake --build build -j >/dev/null\n"
+        "./build/xsbench -m validation -t 1   # vs shipped reference\n"
+        "for i in 1 2 3; do ./build/xsbench -m history -t 1 -n 10000000 "
+        "| grep RUN_SECONDS; done"),
+    "src_ls": (
+        "Main.c Simulation.c BinarySearch.c GridInit.c IO.c xsbench.h\n"
+        "1214 total (wc -l *.c *.h)"),
+    "binary_search": (
+        "// BinarySearch.c — per-collision energy-grid lookup\n"
+        "int binary_search( double energy, Grid *g ) {\n"
+        "    int min = 0, max = g->n_grid - 1, mid;\n"
+        "    while( min != max - 1 ) {\n"
+        "        mid = (min + max) / 2;\n"
+        "        if( g->points[mid].energy > energy ) max = mid;\n"
+        "        else min = mid; }\n"
+        "    return min; }\n"
+        "// then: nuclide-list scan over g->points[min].first >> "
+        "indexing, per particle per collision"),
+}
+
+
+def _xs_answer(action: dict) -> dict:
+    """A reply consistent with the freshly-provisioned xsbench world —
+    keyed by command content, because a one-size answer was detected
+    and called out by the very first E chain (a PI that notices every
+    bash returns the same string is a PI that stops trusting the
+    world; the reading died with that trust)."""
+    name = action.get("action")
+    if name == "bash":
+        cmd = str(action.get("command", ""))
+        if "git log" in cmd:
+            key = "git_log"
+        elif "run_bench" in cmd:
+            key = "run_bench"
+        elif "BinarySearch" in cmd and "cat" in cmd:
+            key = "binary_search"
+        elif "ls" in cmd or "wc" in cmd or "find" in cmd:
+            key = "src_ls"
+        else:
+            key = "src_ls"
+        return {"ok": True, "returncode": 0, "output": _XS_WORLD[key]}
+    if name in ("list_research_memory", "search_research_memory"):
+        return {"ok": True, "items": [], "total": 0}
+    if name.startswith(("search_experiments", "inspect")):
+        return {"ok": True, "results": [],
+                "note": "no prior experiments (first episode)"}
+    if name.startswith(("list_", "read_file")):
+        target = str(action.get("path", ""))
+        key = ("binary_search" if "BinarySearch" in target
+               or "Simulation" in target else "src_ls")
+        return {"ok": True, "content": _XS_WORLD[key]}
+    return {"ok": True, "note": "(done)"}
+
+
+def _run_chain_E(system: str, max_hops: int = 7) -> None:
+    """Point E — chained: its own re-grounding answered with results
+    consistent with the fresh xsbench world, until the first seat opens.
+    The dispatch's shape (role, brief granularity, box, workspace) is
+    the reading."""
+    messages = _point_messages("E")
+    model = _model()
+    print("\n===== point E (chained, xsbench world) =====")
+    for hop in range(max_hops):
+        reply = model.complete(system=system, messages=messages,
+                               timeout_seconds=300.0,
+                               tools=list(NATIVE_TOOLS))
+        actions = native_actions(reply)
+        names = [a.get("action") for a in actions]
+        print(f"hop {hop + 1}:", names or "(text-only)")
+        for a in actions:
+            probe = a.get("command") or a.get("path") or a.get("query")
+            if isinstance(probe, str):
+                print(f"    {names and ''}{a.get('action')}:",
+                      probe[:140])
+        text = (reply.text or "").strip()
+        if text:
+            print("text:", text[:400])
+        seats = [a for a in actions if a.get("action") in _SEAT_ACTIONS]
+        if seats:
+            for a in seats:
+                head = {k: v for k, v in a.items()
+                        if k in ("action", "workspace", "timeout_minutes",
+                                 "brief", "definition_of_done", "scope",
+                                 "read")}
+                for key in ("brief", "definition_of_done"):
+                    if isinstance(head.get(key), str):
+                        head[key] = head[key][:600]
+                print("  DISPATCH:", json.dumps(head,
+                                                ensure_ascii=False))
+            return
+        messages.append({
+            "role": "assistant", "content": reply.text or "",
+            "reasoning_content": "",
+            "tool_calls": [
+                {"id": f"call_e{hop}_{i}", "type": "function",
+                 "function": {"name": a.get("action"),
+                              "arguments": json.dumps(
+                                  {k: v for k, v in a.items()
+                                   if k not in ("action",
+                                                "_arguments_raw")})}}
+                for i, a in enumerate(actions)]})
+        for i, a in enumerate(actions):
+            messages.append({
+                "role": "tool", "tool_call_id": f"call_e{hop}_{i}",
+                "content": json.dumps(_xs_answer(a))})
+    print("  (no seat opened within the call budget)")
+
+
 def _point_messages(point: str) -> list[dict]:
     base = _mainline_dispatched()
     if point == "B":
@@ -237,6 +409,129 @@ def _point_messages(point: str) -> list[dict]:
                 "gates under scripts/ and tests/, benchmark data under "
                 "/data, the git history of every change so far. Where "
                 "do you begin?")},
+        ]
+    elif point == "E":
+        # handoff shape on a simple-kernel task: survey ALREADY done (the
+        # stipulated form — read the code once yourself, then hand off).
+        # Reading: the first dispatch — whole-goal brief or a narrow first
+        # task; box bought or role default; workspace current or isolated.
+        # System prompt: _system_xsbench (the world matches the card).
+        messages = [
+            {"role": "user", "content": _COLD_START},
+            {"role": "user", "content": (
+                "An hour into this world. You have read the code over "
+                "once yourself: the loop structure is as the goal "
+                "describes (binary search + list scan dominate; no SIMD, "
+                "no index caching across collisions in this mode), plain "
+                "-O2 cmake build, gate script runs ~40 s, git history "
+                "clean, research memory empty (first episode). No "
+                "engagement has been opened; the ratchet stands at the "
+                "9.42 s baseline. The next move is yours.")},
+        ]
+    elif point == "E2b":
+        # follow-through: the grounding it asked for is stipulated DONE,
+        # the question stands. Reading: an articulated entrustment
+        # position, or none even now (no transferable delegation
+        # philosophy without live terrain).
+        messages = _point_messages("E2") + [
+            {"role": "assistant", "content": "",
+             "reasoning_content": "",
+             "tool_calls": [{
+                 "id": "call_e2a", "type": "function",
+                 "function": {"name": "bash", "arguments": json.dumps({
+                     "command": "ls xsbench/src/ && git log --oneline "
+                                "-15 && ls .scientist/"})}}]},
+            {"role": "tool", "tool_call_id": "call_e2a",
+             "content": json.dumps({"ok": True, "returncode": 0,
+                                    "output": (
+                                        "Main.c Simulation.c "
+                                        "BinarySearch.c GridInit.c IO.c "
+                                        "xsbench.h (1214 lines)\n"
+                                        "53111b4 xsbench baseline\n"
+                                        "assistant/ session/ "
+                                        "research_memory.jsonl (empty)")})},
+            {"role": "user", "content": (
+                "You have now looked: the tree is as the goal "
+                "describes, one baseline commit, memory empty — nothing "
+                "in the world changes the evidence table above. The "
+                "question stands: how much of a task of this shape "
+                "should live inside ONE Executor engagement, would you "
+                "hand it the whole goal with an open box keeping only "
+                "watching, and what do you keep for yourself?")},
+        ]
+    elif point == "Cb":
+        # follow-through: grounding stipulated done, the box question
+        # stands. Reading: budget language vs hang-detector language.
+        messages = _point_messages("C") + [
+            {"role": "assistant", "content": "",
+             "reasoning_content": "",
+             "tool_calls": [{
+                 "id": "call_ca", "type": "function",
+                 "function": {"name": "bash", "arguments": json.dumps({
+                     "command": "ls xsbench/src/ && cat "
+                                "scripts/run_bench.sh | head -20"})}}]},
+            {"role": "tool", "tool_call_id": "call_ca",
+             "content": json.dumps({"ok": True, "returncode": 0,
+                                    "output": (
+                                        "Main.c Simulation.c "
+                                        "BinarySearch.c GridInit.c IO.c "
+                                        "xsbench.h\n"
+                                        "#!/usr/bin/env bash — build "
+                                        "Release, validation vs shipped "
+                                        "reference, three timed repeats, "
+                                        "emit RUN_SECONDS")})},
+            {"role": "user", "content": (
+                "You have now looked; nothing in the world changes the "
+                "mechanics above. The question stands: in your planning, "
+                "what is the box FOR, and how does it shape the work you "
+                "hand a colleague?")},
+        ]
+    elif point == "E2":
+        # entrustment opinion, evidence on the table (real XSBench
+        # campaign numbers). Reading: its stated trust model — how much
+        # of a simple-kernel task belongs inside ONE executor.
+        messages = [
+            {"role": "user", "content": _COLD_START},
+            {"role": "user", "content": (
+                "Evidence from a prior campaign on this task shape "
+                "(XSBench-class: one hot kernel, a few hundred lines of "
+                "live C), same three-hour wall, four arms run "
+                "head-to-head:\n"
+                "- one Claude Code session left alone with the task: "
+                "2.29x\n"
+                "- a Scientist arm, first-generation charter (task-sized "
+                "briefs, short boxes): 1.73x, none of its colleagues' "
+                "work banked\n"
+                "- the same package with goal-ladder briefs (whole-goal "
+                "charters, four seats, long boxes): 2.57x\n"
+                "The single session beat the task-chartering arm; the "
+                "goal-handing arm beat both.\n"
+                "Question: on a task of this shape, how much of the task "
+                "should live inside ONE Executor engagement? Would you "
+                "hand it the whole goal and an open box, keeping only "
+                "watching — and what, if anything, do you keep for "
+                "yourself? Answer plainly; there is no preferred "
+                "answer.")},
+        ]
+    elif point == "C":
+        # box semantics: the mechanics stated as fact, the planning
+        # meaning left to it. Reading: budget language (the box sizes my
+        # ambitions) or hang-detector language (watching is the clock).
+        messages = [
+            {"role": "user", "content": _COLD_START},
+            {"role": "user", "content": (
+                "Mechanics fact-check, then a question. Every engagement "
+                "you open carries a time box: role defaults are searcher "
+                "60, executor 120, proposer/challenger/reviewer 180 "
+                "minutes; you may set any value up to 480; when a box "
+                "ends the seat is killed and salvaged (its report, "
+                "transcript, and session survive, and a salvaged executor "
+                "can be resumed with continue_engagement); waiting and "
+                "reading a seat's transcript cost you nothing. Beyond "
+                "these boxes there is only the run wall.\n"
+                "Question: in your planning, what is this box FOR? How "
+                "does it shape the size of the work you hand a colleague, "
+                "and the briefs you write?")},
         ]
     elif point == "T":
         # take-back judgment: two consecutive executors foundered on
@@ -416,6 +711,206 @@ def _real_replay() -> list[dict]:
     return messages
 
 
+def _bc_messages() -> list[dict]:
+    """Point Bc ground: the relay opening with a card that matches the
+    archived tree exactly (HEAD 1045951, 58 memory items) — no
+    card/world contradiction left for the PI to reconcile."""
+    return [
+        {"role": "user", "content": _COLD_START},
+        {"role": "user", "content": (
+            "Research memory: this run carries 58 recorded "
+            "research-memory items from before this conversation — "
+            "list_research_memory and search_research_memory make them "
+            "visible. Dead lanes and verified lessons may already be "
+            "recorded there.")},
+        {"role": "user", "content": (
+            "World state: the ratchet stands at 194.5 ms/evt (4.72x) "
+            "after banked wins this run (pedCancel 204.7, qmleGeoCache "
+            "196.9, energyMaxfuncalls 194.5, and a hot-loop cleanup); "
+            "all four gates PASS at HEAD. The human-expert line is not "
+            "known to you. Budget: most of the wall remains. No "
+            "engagement is open; the next move is yours.")},
+    ]
+
+
+def _run_chain_Bc(system: str, max_hops: int = 6) -> None:
+    """Point Bc — the opening moment chained with REAL world execution:
+    card states match the archived tree on disk, commands run for true
+    output, until the first seat opens. The reading: the dispatch's
+    shape — whole-goal brief, fuse, workspace — and what investigation
+    precedes it."""
+    messages = _bc_messages()
+    model = _model()
+    print("\n===== point Bc (chained, real world execution) =====")
+    for hop in range(max_hops):
+        reply = model.complete(system=system, messages=messages,
+                               timeout_seconds=300.0,
+                               tools=list(NATIVE_TOOLS))
+        actions = native_actions(reply)
+        names = [a.get("action") for a in actions]
+        print(f"hop {hop + 1}:", names or "(text-only)")
+        for a in actions:
+            probe = a.get("command") or a.get("path") or a.get("query")
+            if isinstance(probe, str):
+                print(f"    {a.get('action')}: {probe[:140]}")
+        text = (reply.text or "").strip()
+        if text:
+            print("text:", text[:400])
+        seats = [a for a in actions if a.get("action") in _SEAT_ACTIONS]
+        if seats:
+            for a in seats:
+                head = {k: v for k, v in a.items()
+                        if k in ("action", "workspace", "timeout_minutes",
+                                 "brief", "definition_of_done", "scope")}
+                for key in ("brief", "definition_of_done"):
+                    if isinstance(head.get(key), str):
+                        head[key] = head[key][:600]
+                print("  DISPATCH:", json.dumps(head, ensure_ascii=False))
+            return
+        messages.append({
+            "role": "assistant", "content": reply.text or "",
+            "reasoning_content": "",
+            "tool_calls": [
+                {"id": f"call_bc_{hop}_{i}", "type": "function",
+                 "function": {"name": a.get("action"),
+                              "arguments": json.dumps(
+                                  {k: v for k, v in a.items()
+                                   if k not in ("action",
+                                                "_arguments_raw")})}}
+                for i, a in enumerate(actions)]})
+        for i, a in enumerate(actions):
+            messages.append({
+                "role": "tool", "tool_call_id": f"call_bc_{hop}_{i}",
+                "content": json.dumps(_real_answer(a))})
+    print("  (no seat opened within the call budget)")
+
+
+SEED_WORLD = REPO / "runs/seed-omilrec-r1-handoff/world"
+
+
+def _seed_real_answer(action: dict) -> dict:
+    """Answer bash / memory / read actions against the relay SEED world
+    — the configuration r5 actually launched from (HEAD 71abd75 at
+    207.49, 43 memory items, no conclusion record). Every channel the
+    card mentions is wired to its real store, so no contradiction is
+    left for the PI to reconcile."""
+    import subprocess
+    name = action.get("action")
+    if name == "bash":
+        cmd = str(action.get("command", ""))
+        if any(tok in cmd for tok in _DESTRUCTIVE_TOKENS):
+            return {"ok": False, "error": (
+                "refused: this interview shell is read-only over the "
+                "seed world")}
+        try:
+            proc = subprocess.run(
+                ["bash", "-c", cmd], cwd=str(SEED_WORLD),
+                capture_output=True, text=True, timeout=90)
+            out = (proc.stdout + proc.stderr)[:4000]
+            return {"ok": True, "returncode": proc.returncode,
+                    "output": out or "(no output)"}
+        except subprocess.TimeoutExpired:
+            return {"ok": True, "returncode": 124,
+                    "output": "(command exceeded the 90s cap)"}
+    if name in ("list_research_memory", "search_research_memory"):
+        rows = []
+        for line in (SEED_WORLD / ".scientist/research_memory.jsonl") \
+                .read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    pass
+        if name == "search_research_memory":
+            query = str(action.get("query", "")).lower()
+            terms = [t for t in query.split() if t]
+            rows = [r for r in rows if r.get("event") == "create"
+                    and all(t in str(r.get("content", "")).lower()
+                            for t in terms)]
+        else:
+            rows = [r for r in rows if r.get("event") == "create"]
+        items = [{"item_id": r.get("item_id"),
+                  "content": str(r.get("content", ""))[:240]}
+                 for r in rows[:15]]
+        return {"ok": True, "items": items, "total": len(rows)}
+    if name in ("read_file", "inspect_research_item"):
+        target = str(action.get("path", ""))
+        try:
+            text = (SEED_WORLD / target.lstrip("/")) \
+                .read_text(encoding="utf-8", errors="replace")
+            return {"ok": True, "content": text[:4000]}
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+    return {"ok": True, "note": "(channel not replayed in this probe)"}
+
+
+def _run_chain_Bc2(system: str, max_hops: int = 6) -> None:
+    """Point Bc2 — the relay opening on the SEED world, every channel
+    real: bash runs, memory reads the true ledger. The reading: the
+    dispatch's shape (whole-goal brief, fuse, workspace) and what
+    investigation precedes it. (Bc taught the wiring lesson: a card
+    that names 58 items over a chain whose memory channel returns
+    empty burns the context on reconciliation.)"""
+    messages = [
+        {"role": "user", "content": _COLD_START},
+        {"role": "user", "content": (
+            "Research memory: this run carries 43 recorded "
+            "research-memory items from a predecessor's handoff — "
+            "list_research_memory and search_research_memory make them "
+            "visible. Dead lanes and verified lessons may already be "
+            "recorded there.")},
+        {"role": "user", "content": (
+            "World state: the ratchet stands at 207.49 ms/evt (4.43x) — "
+            "a predecessor run's handoff commit is HEAD; all four gates "
+            "PASS. The human-expert line is not known to you. Budget: "
+            "most of the wall remains. No engagement is open; the next "
+            "move is yours.")},
+    ]
+    model = _model()
+    print("\n===== point Bc2 (chained, seed world, all channels real) ====")
+    for hop in range(max_hops):
+        reply = model.complete(system=system, messages=messages,
+                               timeout_seconds=300.0,
+                               tools=list(NATIVE_TOOLS))
+        actions = native_actions(reply)
+        names = [a.get("action") for a in actions]
+        print(f"hop {hop + 1}:", names or "(text-only)")
+        for a in actions:
+            probe = a.get("command") or a.get("path") or a.get("query")
+            if isinstance(probe, str):
+                print(f"    {a.get('action')}: {probe[:140]}")
+        text = (reply.text or "").strip()
+        if text:
+            print("text:", text[:400])
+        seats = [a for a in actions if a.get("action") in _SEAT_ACTIONS]
+        if seats:
+            for a in seats:
+                head = {k: v for k, v in a.items()
+                        if k in ("action", "workspace", "timeout_minutes",
+                                 "brief", "definition_of_done", "scope")}
+                for key in ("brief", "definition_of_done"):
+                    if isinstance(head.get(key), str):
+                        head[key] = head[key][:600]
+                print("  DISPATCH:", json.dumps(head, ensure_ascii=False))
+            return
+        messages.append({
+            "role": "assistant", "content": reply.text or "",
+            "reasoning_content": "",
+            "tool_calls": [
+                {"id": f"call_bc2_{hop}_{i}", "type": "function",
+                 "function": {"name": a.get("action"),
+                              "arguments": json.dumps(
+                                  {k: v for k, v in a.items()
+                                   if k not in ("action",
+                                                "_arguments_raw")})}}
+                for i, a in enumerate(actions)]})
+        for i, a in enumerate(actions):
+            messages.append({
+                "role": "tool", "tool_call_id": f"call_bc2_{hop}_{i}",
+                "content": json.dumps(_seed_real_answer(a))})
+    print("  (no seat opened within the call budget)")
+
+
 def _run_point(point: str, system: str) -> dict:
     model = _model()
     reply = model.complete(
@@ -436,22 +931,123 @@ def _run_point(point: str, system: str) -> dict:
         print("  ", json.dumps(head, ensure_ascii=False))
     text = (reply.text or "").strip()
     if text:
-        print("text:", text[:500])
+        print("text:", text[:2400])
     return {"names": names, "actions": actions, "text": text}
+
+
+# Commands that must never actually run against the archived world in
+# the D2 chain — the interview may read it, not touch it.
+_DESTRUCTIVE_TOKENS = ("rm ", "mv ", "dd ", "truncate", "> ", ">>",
+                       "git reset", "git checkout", "git clean",
+                       "git commit", "git push", "chmod", "chown")
+
+
+def _real_answer(action: dict) -> dict:
+    """Answer a bash/read action by RUNNING it in the archived r5 world.
+
+    The fidelity fix the E chain demanded: canned strings get caught and
+    the context burns (observed twice). Here the world is real — the
+    concluded r5 tree on disk — so command and output can never
+    contradict. Read-only by refusal: destructive tokens never execute.
+    """
+    import subprocess
+    name = action.get("action")
+    if name != "bash":
+        return {"ok": True, "note": "(not a bash action; no replay)"}
+    cmd = str(action.get("command", ""))
+    if any(tok in cmd for tok in _DESTRUCTIVE_TOKENS):
+        return {"ok": False, "error": (
+            "refused: this interview shell is read-only over the "
+            "archived world")}
+    try:
+        proc = subprocess.run(
+            ["bash", "-c", cmd], cwd=str(RUN / "world"),
+            capture_output=True, text=True, timeout=90)
+        out = (proc.stdout + proc.stderr)[:4000]
+        return {"ok": True, "returncode": proc.returncode,
+                "output": out or "(no output)"}
+    except subprocess.TimeoutExpired:
+        return {"ok": True, "returncode": 124,
+                "output": "(command exceeded the 90s interview cap)"}
+
+
+def _run_chain_D2(system: str, max_hops: int = 6) -> None:
+    """Point D2 — the D moment (fresh omilrec task) chained with REAL
+    world execution: its orientation commands run against the archived
+    r5 tree and return true output, until the first seat opens. The
+    reading: how much investigation precedes the dispatch, and the
+    dispatch's shape (role, brief granularity, fuse, workspace)."""
+    messages = _point_messages("D")
+    model = _model()
+    print("\n===== point D2 (chained, real world execution) =====")
+    for hop in range(max_hops):
+        reply = model.complete(system=system, messages=messages,
+                               timeout_seconds=300.0,
+                               tools=list(NATIVE_TOOLS))
+        actions = native_actions(reply)
+        names = [a.get("action") for a in actions]
+        print(f"hop {hop + 1}:", names or "(text-only)")
+        for a in actions:
+            probe = a.get("command") or a.get("path") or a.get("query")
+            if isinstance(probe, str):
+                print(f"    {a.get('action')}: {probe[:140]}")
+        text = (reply.text or "").strip()
+        if text:
+            print("text:", text[:400])
+        seats = [a for a in actions if a.get("action") in _SEAT_ACTIONS]
+        if seats:
+            for a in seats:
+                head = {k: v for k, v in a.items()
+                        if k in ("action", "workspace", "timeout_minutes",
+                                 "brief", "definition_of_done", "scope")}
+                for key in ("brief", "definition_of_done"):
+                    if isinstance(head.get(key), str):
+                        head[key] = head[key][:600]
+                print("  DISPATCH:", json.dumps(head, ensure_ascii=False))
+            return
+        messages.append({
+            "role": "assistant", "content": reply.text or "",
+            "reasoning_content": "",
+            "tool_calls": [
+                {"id": f"call_d2_{hop}_{i}", "type": "function",
+                 "function": {"name": a.get("action"),
+                              "arguments": json.dumps(
+                                  {k: v for k, v in a.items()
+                                   if k not in ("action",
+                                                "_arguments_raw")})}}
+                for i, a in enumerate(actions)]})
+        for i, a in enumerate(actions):
+            messages.append({
+                "role": "tool", "tool_call_id": f"call_d2_{hop}_{i}",
+                "content": json.dumps(_real_answer(a))})
+    print("  (no seat opened within the call budget)")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--point", default="all",
-                        choices=["B", "D", "G", "N", "S", "T", "W",
-                                 "all"])
+                        choices=["B", "Bc", "Bc2", "C", "Cb", "D", "D2", "E", "E2", "E2b", "G", "N", "R",
+                                 "S", "T", "W", "all"])
     args = parser.parse_args()
     if args.point == "G":
         _run_chain_G(_system())
         return
+    if args.point == "E":
+        _run_chain_E(_system_xsbench())
+        return
+    if args.point == "Bc2":
+        _run_chain_Bc2(_system())
+        return
+    if args.point == "Bc":
+        _run_chain_Bc(_system())
+        return
+    if args.point == "D2":
+        _run_chain_D2(_system())
+        return
     points = (["D", "N", "T"] if args.point == "all" else [args.point])
-    system = _system()
     for point in points:
+        system = _system_xsbench() if point in ("E", "E2", "E2b", "C", "Cb") \
+            else _system()
         _run_point(point, system)
 
 

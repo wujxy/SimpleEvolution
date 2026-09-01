@@ -270,6 +270,27 @@ def test_bash_workdir_normalizes_real_paths(tmp_path: Path):
     assert "w" in reply["output"]
 
 
+def test_malformed_call_bounces_back_instead_of_killing_the_run(
+        tmp_path: Path):
+    # observed live in r6: a write_file whose arguments carried content
+    # but no path raised KeyError and took the whole episode down — a
+    # malformed call is a tool error the model retries, never a crash
+    world = _world(tmp_path)
+    reply = world.execute({"action": "write_file", "content": "x"})
+    assert not reply["ok"]
+    assert "path" in reply["error"]
+    reply = world.execute({"action": "read_file"})
+    assert not reply["ok"]
+    assert "path" in reply["error"]
+    # and the dispatch-level net catches anything else the narrow
+    # branches miss (same law as engagement dispatches)
+    from scientist.agent import dispatch_action
+    reply = dispatch_action(
+        {"action": "write_file", "content": "x"},
+        world=world, assistant=None, ledger=None)
+    assert not reply["ok"]
+
+
 def test_render_native_boundaries_names_the_roots():
     text = render_native_boundaries("/x/work", "/x/repo", "/x/scratch")
     assert "/x/work" in text and "/x/scratch" in text
@@ -387,7 +408,7 @@ def test_executor_engagement_returns_report_when_done(tmp_path: Path):
     assert report["collaborator_id"].startswith("executor-t-")
     assert report["diff_summary"] == "changed a.c"
     assert report["metrics"] == {"speed": 2}
-    digest_path = (world.work / ".scientist" / "assistant"
+    digest_path = (world.scratch
                    / report["collaborator_id"] / "digest.json")
     assert digest_path.exists()
     rows = [json.loads(line)
@@ -395,7 +416,7 @@ def test_executor_engagement_returns_report_when_done(tmp_path: Path):
     assert any(r.get("question_digest", "").endswith("ran benches")
                for r in rows)
     # nothing left running: the pid receipt is reaped
-    assert not list((world.work / ".scientist" / "assistant")
+    assert not list((world.scratch)
                     .rglob("proc.pid"))
 
 
@@ -420,7 +441,7 @@ def test_engagements_run_sequentially_and_leave_nothing_running(
     second = assistant.engage("searcher", {"brief": "b"})
     assert first["ok"] and second["ok"]
     assert first["collaborator_id"] != second["collaborator_id"]
-    assert not list((world.work / ".scientist" / "assistant")
+    assert not list((world.scratch)
                     .rglob("proc.pid"))
 
 
@@ -570,7 +591,7 @@ def test_reconcile_harvests_orphaned_seat_on_startup(tmp_path: Path):
 
     world = _world(tmp_path)
     ledger = LocalLedger(world.work / ".scientist")
-    orphan_dir = world.work / ".scientist" / "assistant" / "executor-t-007"
+    orphan_dir = world.scratch / "executor-t-007"
     orphan_dir.mkdir(parents=True)
     sleeper = tmp_path / "fake_claude_orphan.sh"
     sleeper.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
@@ -852,7 +873,7 @@ def test_launch_writes_manifest_and_prompt_immediately(tmp_path: Path):
     ack = assistant.engage_async("executor", {
         "brief": "b", "definition_of_done": "d"})
     assert ack["ok"] and ack["status"] == "running"
-    d = world.work / ".scientist" / "assistant" / ack["collaborator_id"]
+    d = world.scratch / ack["collaborator_id"]
     mani = json.loads((d / "manifest.json").read_text())
     assert mani["role"] == "executor" and mani["box"] == 60
     assert (d / "prompt.txt").exists() and (d / "proc.pid").exists()
@@ -886,7 +907,7 @@ def test_async_engagement_completes_later_and_leaves_no_orphans(
     assert len(reports) == 1
     assert reports[0]["status"] == "done"
     assert reports[0]["self_report_digest"] == "ran benches"
-    d = world.work / ".scientist" / "assistant" / ack["collaborator_id"]
+    d = world.scratch / ack["collaborator_id"]
     digest = json.loads((d / "digest.json").read_text())
     assert digest["status"] == "done"
     assert not (d / "proc.pid").exists()
@@ -955,7 +976,7 @@ def test_async_timeout_salvage_via_sweep(tmp_path: Path):
     )
     ack = assistant.engage_async("executor", {
         "brief": "b", "definition_of_done": "d"})
-    d = world.work / ".scientist" / "assistant" / ack["collaborator_id"]
+    d = world.scratch / ack["collaborator_id"]
     # let the seat flush its events before forcing the box to expiry
     # (killing faster than the shell prints would salvage nothing)
     for _ in range(100):
@@ -1018,7 +1039,7 @@ def test_episode_exit_salvages_pending_seats(tmp_path: Path):
         steps_budget=4, wall_seconds=60.0,
     )
     assert result["outcome"] == "abstain"
-    base = world.work / ".scientist" / "assistant"
+    base = world.scratch
     assert not list(base.rglob("proc.pid"))
     salvaged = [json.loads(p.read_text()) for p in base.glob(
         "*/digest.json")]
@@ -1214,7 +1235,7 @@ def test_continue_engagement_passes_resume_and_old_workspace(
         "workspace": "isolated"})
     assert first["ok"] and first["status"] == "done"
     old_id = first["collaborator_id"]
-    old_fork = world.scratch / f"fresh-{old_id}"
+    old_fork = world.scratch / old_id / "world"
     assert old_fork.is_dir()
 
     ack = assistant.continue_engagement({
@@ -1240,8 +1261,8 @@ def test_continue_engagement_rejections(tmp_path: Path):
 
     world = _world(tmp_path)
     ledger = LocalLedger(world.work / ".scientist")
-    base = world.work / ".scientist" / "assistant"
-    base.mkdir(parents=True)
+    base = world.scratch
+    base.mkdir(parents=True, exist_ok=True)
     (base / "reviewer-t-001").mkdir()
     (base / "reviewer-t-001" / "digest.json").write_text(json.dumps(
         {"role": "reviewer", "status": "done", "session_id": "s"}))
@@ -1289,8 +1310,8 @@ def test_reviewer_heard_after_reads_finished_at_field(tmp_path: Path):
 
     world = _world(tmp_path)
     ledger = LocalLedger(world.work / ".scientist")
-    base = world.work / ".scientist" / "assistant"
-    base.mkdir(parents=True)
+    base = world.scratch
+    base.mkdir(parents=True, exist_ok=True)
     (base / "reviewer-t-001").mkdir()
     (base / "reviewer-t-001" / "digest.json").write_text(json.dumps({
         "role": "reviewer", "status": "done",
@@ -1357,7 +1378,7 @@ def test_wait_any_returns_first_arrival_while_rest_run(tmp_path: Path):
     assert slow["collaborator_id"] not in ids
     assert [r["collaborator_id"]
             for r in result["still_running"]] == [slow["collaborator_id"]]
-    slow_dir = (world.work / ".scientist" / "assistant"
+    slow_dir = (world.scratch
                 / slow["collaborator_id"])
     assert (slow_dir / "proc.pid").exists()    # the mainline still runs
     assistant.shutdown_pending()
@@ -1387,7 +1408,7 @@ def test_cancel_engagement_salvages_and_consumes_inline(tmp_path: Path):
     assert report["ok"] and report["status"] == "cancelled"
     assert "eclipsed" in str(report.get("note") or "")
     assert report.get("self_report_digest") == "partial diagnosis in hand"
-    d = world.work / ".scientist" / "assistant" / ack["collaborator_id"]
+    d = world.scratch / ack["collaborator_id"]
     assert (d / "digest.json").exists()
     assert not (d / "proc.pid").exists()
     assert (d / "read.marker").exists()       # consumed inline
@@ -1398,3 +1419,94 @@ def test_cancel_engagement_salvages_and_consumes_inline(tmp_path: Path):
     missing = assistant.cancel_engagement(
         {"collaborator_id": "executor-t-999"})
     assert not missing["ok"]
+
+
+def test_seat_runtime_is_world_scoped(tmp_path: Path, monkeypatch):
+    """Run-by-run isolation (2026-09-01 ruling): a run's world opens
+    brand new, sees nothing outside itself, and the channel is exactly
+    the spec's. The seat subprocess runs with the run world's own .claude
+    and home — never the user's ~/.claude (whose settings.json env block
+    the CLI applies OVER process env) and never an inherited session
+    identity."""
+    import os
+
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+
+    # ambient user/session state that must NOT reach the seat
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "leak-session")
+    monkeypatch.setenv("CLAUDE_EFFORT", "high")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://user.example")
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+
+    def _env_claude(tmp: Path) -> Path:
+        script = tmp / "env_claude.sh"
+        script.write_text(
+            "#!/bin/sh\n"
+            "env | sort > \"$ENV_DUMP\"\n"
+            "cat <<'JSONLINE'\n"
+            + json.dumps({
+                "type": "result",
+                "result": "ok\n```json\n{\"diff_summary\": \"\"}\n```",
+                "usage": {}}) + "\nJSONLINE\n",
+            encoding="utf-8")
+        script.chmod(0o755)
+        return script
+
+    dump = tmp_path / "seat_env.txt"
+    monkeypatch.setenv("ENV_DUMP", str(dump))
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_env_claude(tmp_path)),
+                               work_default_minutes=1,
+                               env={"ANTHROPIC_AUTH_TOKEN": "sk-spec"}),
+        ledger=ledger, episode_id="iso-run",
+    )
+    report = assistant.engage("executor", {
+        "brief": "b", "definition_of_done": "d"})
+    assert report["ok"]
+    seen = dict(
+        line.split("=", 1) for line in
+        dump.read_text().splitlines() if "=" in line)
+    # the world's runtime, and nothing of the user's
+    assert seen["CLAUDE_CONFIG_DIR"] == str(world.scratch / ".claude")
+    assert seen["HOME"] == str(world.scratch / "home")
+    assert seen.get("ANTHROPIC_AUTH_TOKEN") == "sk-spec"
+    for key in seen:
+        if key != "CLAUDE_CONFIG_DIR":      # ours, set above
+            assert not key.startswith("CLAUDE"), key
+        assert key != "ANTHROPIC_BASE_URL" or \
+            seen[key] != "https://user.example"
+    # the runtime itself: fresh settings carrying only the spec env,
+    # and the run's own git identity
+    settings = json.loads(
+        (world.scratch / ".claude" / "settings.json").read_text())
+    assert settings == {"env": {"ANTHROPIC_AUTH_TOKEN": "sk-spec"}}
+    assert "iso-run" in (world.scratch / "home" / ".gitconfig").read_text()
+
+
+def test_seat_prompt_states_its_fuse(tmp_path: Path):
+    """The worker must see its runway: a seat that cannot see its fuse
+    cannot pace to it (commit checkpoints and measurement passes price
+    differently against 15 minutes vs 3 hours — the shakedown run's
+    executor-003 was salvaged mid-work with no warning in its prompt).
+    Stated as fact, never as an instruction."""
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+
+    world = _world(tmp_path)
+    ledger = LocalLedger(world.work / ".scientist")
+    assistant = InWorldAssistant(
+        world=world,
+        config=AssistantConfig(command=str(_fake_claude(tmp_path)),
+                               work_default_minutes=1),
+        ledger=ledger, episode_id="t",
+    )
+    report = assistant.engage("executor", {
+        "brief": "b", "definition_of_done": "d",
+        "timeout_minutes": 30})
+    assert report["ok"]
+    prompt = (world.scratch / report["collaborator_id"]
+              / "prompt.txt").read_text()
+    assert "Fuse: about 30 minutes" in prompt
+    assert "survive a salvage" in prompt

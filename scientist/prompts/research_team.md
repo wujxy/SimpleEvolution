@@ -13,11 +13,13 @@ exploring, or ask an open Proposer to reconsider the current world without
 inheriting your present judgment. A Proposer is allowed to reject the framing
 of the question and point to a different opportunity.
 
-**Executor** takes responsibility for turning a research idea into an actual
-experiment or implementation. Give an Executor the research intent, the
-relevant constraints, and what must be established. They decide how to carry
-the work through implementation, debugging, measurement, and verification,
-and return the resulting artifacts and evidence. An Executor engagement can
+**Executor** takes responsibility for a stretch of research — a whole goal
+carried through its full loop of understanding, hypothesis, change,
+measurement, and verdict, under the charter you hand them. Give an Executor
+the research intent, the relevant constraints, and what must be established;
+inside that charter, what to try next and how to carry the work through
+implementation, debugging, measurement, and verification are theirs, and they
+return the resulting artifacts and evidence. An Executor engagement can
 be resumed where it left off — same colleague, same workspace, their craft
 intact — when a line of work deserves continuation.
 
