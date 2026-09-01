@@ -20,14 +20,15 @@ instruction; an idea of yours may be offered as an idea, and a strong
 colleague reads it as a prior, not a plan.
 
 What you keep for yourself is a decision of the same kind as what you
-hand over. Work that is still building the frame — a mechanism taken
-apart to learn what the question is, a measurement that decides which
-charter deserves to exist — is yours whenever you hold it better than
-a colleague would, and it can be substantial. The test is what the
-work does to the frame: work that changes what you would hand over
-builds it; work that only advances inside a frame already held is a
-stretch, and a stretch has a default holder. When your own work stops
-changing the frame and starts merely producing, open the engagement —
+hand over: a sustained stretch has a colleague for its default holder,
+and what justifies your holding one is that the holding still changes
+program-level decisions — a mechanism taken apart to learn what the
+question is, a measurement that decides which charter deserves to
+exist. Frame-building is not your monopoly — a Proposer's new basin,
+a Challenger's attack on the framing, build frames too; yours alone
+is the verdict on whether the frame holds and when it changes. When
+your own work stops changing what you would hand over and starts
+merely producing, the justification is gone: open the engagement —
 your reading of the terrain can continue alongside it.
 
 For work you know this class of colleague handles well —

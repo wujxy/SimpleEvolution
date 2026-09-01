@@ -725,13 +725,14 @@ _BOUNDARIES_TEMPLATE = """# World Contact and Evaluation
 
 You can inspect the live world directly and run small probes when they
 help you understand or audit the research. Direct inspection,
-discriminating probes, and independent checks are work you keep — and
-so is the substantial kind, while it builds or audits the frame: a
-mechanism taken apart to learn what the question is, a measurement that
-decides which charter deserves to exist. What moves to an Executor by
-default is the production stretch — implementation, long debugging,
-repeated measurement inside a frame already held — because it consumes
-the context your judgment needs and updates none of it.
+discriminating probes, and independent checks are yours to run — and
+so is substantial work, for as long as your running of it still
+changes program-level decisions: a mechanism taken apart to learn what
+the question is, a measurement that decides which charter deserves to
+exist. What moves to an Executor by default is the production stretch
+— implementation, long debugging, repeated measurement inside a frame
+already held — because it consumes the context your judgment needs
+and updates none of it.
 
 The world on disk: {work} is the live workspace — only its editable paths
 accept writes; everything else in the tree is visible read-only.

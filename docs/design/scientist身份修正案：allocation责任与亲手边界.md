@@ -10,6 +10,24 @@ shakedown）、sew 侧写（见 memory v5-delegation-baseline-0901）、提案 a
 是定稿里的一句话级命题，三层结构本身（Program / Engagement / Cognitive）
 不动。
 
+**终审修正（同日更晚，提案 agent 终轮反馈，已并入，落地 v6.1）**：
+①frame-yield 不得读成新的劳动产权。原 §三"更新 frame 的工作是 scientist
+的"会把 frame/output 变成新的种类分界——但 Proposer 的新 basin、
+Challenger 的攻击、Searcher 的事实、Reviewer 的回望都在 build frame。
+修正语义：**frame-yield 是继续亲手持有的强理由（allocation evidence），
+不是对这类工作的专属权；不可转让的是对 frame 是否成立、何时改变的最终
+责任**。charter / boundaries / delegation 三处措辞已改为 holding 中心
+（"for as long as your holding of it still changes program-level
+decisions"），delegation.md 并加一句明示非垄断（"Frame-building is not
+your monopoly… yours alone is the verdict"）。②§四裁决 2 后半的可逆性
+算术补条件：只在 recall 便宜时成立——whole-goal isolated trajectory 的
+recall 可以很贵（compute / context / 对账）。不确定性大且 full release
+贵时，先降释放尺寸：短 fuse 的 ownability probe。cold-start 已落
+"size the opening to what a recall would cost"。一句话收束（提案 agent
+终稿）：**Scientist 唯一垄断的是 whole-program responsibility，不垄断任何
+一种 research work；它持续判断谁应该持有什么，并用这项工作是否仍在改变
+program-level decisions 来判断自己是否值得继续亲手持有。**
+
 ---
 
 ## 一、修正的一句话
@@ -60,9 +78,12 @@ problem 意味着什么、什么时候换问题。
 判定变量不是工作的形状（"有形状=同事的"是本轮被否决的提法），不是纯度，
 是**这段工作对 frame 做什么**：
 
-> 更新 frame 的工作（拆一个机制搞清问题是什么、做一个决定哪个 charter
-> 该存在的测量）是 scientist 的，只要它拿着比同事更值钱，**可以是大幅的**。
-> 只在已持有的 frame 内推进产出的工作，是 stretch——stretch 有默认持有者。
+> sustained stretch 有默认持有者（同事）；让 scientist 继续亲手持有的
+> 强理由是 yield——**它的持有仍在改变 program-level decisions**（拆一个
+> 机制搞清问题是什么、做一个决定哪个 charter 该存在的测量），可以是
+> 大幅的。只在已持有的 frame 内推进产出 = 理由消失，默认收回。
+> frame-building 不是 scientist 的专属权；不可转让的是**对 frame 是否
+> 成立、何时改变的最终责任**。
 
 - solo phase 有天然衰减梯度：开场是 frame 更新（PI 独占价值），衰减为
   产出推进（任何人可并行）。技能是**察觉衰减点**，不是记住禁令。
@@ -83,13 +104,16 @@ problem 意味着什么、什么时候换问题。
    + dense feedback）的问题，无论难易；XSBench 到 7.5M 不简单但闭合，
    geo-neutrino drift 再小的代码量也可能开放。"简单的 coding 任务"是
    错误类别名，会把难度当结构、误分类开放问题。
-2. **强先验 → 倾向释放；真不确定 → 朝可逆的一侧解。** 前半是 Bayesian
-   （delegation.md "For work you know this class of colleague handles
-   well" 已有）。后半是本轮新增的可逆性算术：错放的代价是一个被召回的
-   席位加几分钟 token；错留的代价是串行税，且**永不自知**——持有一个
-   stretch 教不会你"同事本可以拥有它"，释放一个 stretch 哪怕失败也教
-   会你实验室的能力边界。opening 本身就是"这个问题可被端到端拥有吗"的
-   最便宜判别实验。
+2. **强先验 → 倾向释放；真不确定且 recall 便宜 → 朝可逆的一侧解。** 前半
+   是 Bayesian（delegation.md "For work you know this class of colleague
+   handles well" 已有）。后半是本轮新增的可逆性算术：错放的代价是一个被
+   召回的席位加几分钟 token；错留的代价是串行税，且**永不自知**——持有
+   一个 stretch 教不会你"同事本可以拥有它"，释放一个 stretch 哪怕失败
+   也教会你实验室的能力边界。**终审条件（v6.1）**：算术只在 recall 便宜
+   时成立；whole-goal isolated trajectory 的 recall 可以很贵（compute /
+   context / world reconciliation）。不确定性大且 full release 贵时，
+   降尺寸不降方向——短 fuse 的 ownability probe 是"这个问题可被端到端
+   拥有吗"在各价位的判别实验。
 3. **持有与释放都不得沉默。** 开场判断无论走向哪边，必须在 wire 里以
    叙述过的行为存在（"整段托付"或"显式还不能，因为 X"）——r6 已定验收
    口径的"显式"从句即此条。沉默的持有是 drift 的藏身处。
@@ -116,6 +140,9 @@ xsbench 2.29×（胜 scientist 臂 1.73×）、omilrec 5h→250ms。"同事能�
   不进计分。credit = gate 数字 + handover 对继任者的效用。
 
 ## 六、v6 文本轮：改动面与逐句草案
+
+（v6.1 终审修正后，草案 1/2/3/7 的落地句以终审修正块所述为准——holding
+中心措辞 + 释放尺寸条件；草案 4/5/6 未动。）
 
 分层不变（Charter 定义我为何存在 → Research Team 每个人是谁 → Cold
 Start 开局形态 → Delegation 具体怎么做 → Boundaries/Tool descriptions

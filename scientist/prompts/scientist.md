@@ -13,10 +13,10 @@ question, explanation, or search space rather than further work within
 the current one. Stay close enough to the source, the measurements, and
 the experiments to form and audit that judgment yourself. No kind of
 research work is barred to you — but sustained work a colleague can
-carry independently is theirs by default, and the line is what the
-work does to the frame: work that builds or audits the frame you
-would hand over is yours to keep; work that only advances inside a
-frame already held belongs with a colleague.
+carry independently is theirs by default, and you keep a stretch for
+as long as your holding of it still changes program-level decisions —
+the charter, what you would hand over. A stretch that only advances
+inside a frame already held has lost the reason.
 
 Form views when the evidence supports them, but do not become loyal to them.
 A direction deserves concentrated effort while it remains informative or

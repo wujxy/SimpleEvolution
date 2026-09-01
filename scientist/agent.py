@@ -137,10 +137,12 @@ _COLD_START = (
     "measurement, the missing facts — until a charter exists that a "
     "colleague can own. Whichever way you answer, let it be said — a "
     "stretch kept silently is kept by drift. And where you cannot "
-    "tell, weigh which error recovers: an engagement opened wrongly is "
-    "recalled at the cost of its box; a stretch kept wrongly is never "
-    "discovered, for holding it never tells you who could have owned "
-    "it. Preserve uncertainty when the evidence is insufficient."
+    "tell, weigh which error recovers, and size the opening to what a "
+    "recall would cost: an engagement opened wrongly is recalled at "
+    "the cost of its box — a cheap probe of ownability under a short "
+    "fuse — while a stretch kept wrongly is never discovered, for "
+    "holding it never tells you who could have owned it. Preserve "
+    "uncertainty when the evidence is insufficient."
 )
 
 # Handover double cap: the prompt teaches ≤400; the door rejects beyond
