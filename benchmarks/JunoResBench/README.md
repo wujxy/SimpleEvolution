@@ -1,5 +1,15 @@
 # JunoResBench — JUNO-like energy/vertex resolution benchmark
 
+> **Active benchmark — isolated two-tier tasks.**
+> [`tasks/electron_single_site`](tasks/electron_single_site) reconstructs
+> single-electron energy and vertex; [`tasks/ibd_positron_multisite`](tasks/ibd_positron_multisite)
+> reconstructs IBD-like positron visible energy. Both use one hidden world,
+> but their generator, dataset and evaluator code are separate. Generate only
+> on the designated batch cluster through `world_generator/condor/`; see the
+> [two-tier design report](docs/JunoResBench_two_tier_design_report.md).
+> The former v1 and coupled v2 files below are archival evidence, not active
+> generation or evaluation entry points.
+
 Toy detector MC benchmark: given a real event `(x, y, z, E_true, t0)`,
 generate per-PMT waveforms through the full forward chain
 

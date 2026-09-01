@@ -1,5 +1,28 @@
 # JunoResBench — Stage 设计文档 v1
 
+> **耦合 v2 stage 增量（2026-09，归档）**。v2 在本文所述 v1 stage 划分
+> 上的增量；v1 各 stage 详设作为历史参考保留于下。
+>
+> - 新模块 `juno_res_bench/stopping_power.py`：ESTAR 形状合成 LAB 表
+>   （5 keV–20 MeV，log-log 插值）、`birks_visible_mev`、
+>   `charged_steps`（5% 分数细分、2 keV 截断）。
+> - `DepositionSteps` 扩展：`kinetic_mev` / `dedx_mev_cm` /
+>   `step_length_m` 与 `e_dep_mev` 对齐；`_Acc.deposit_charged_track`
+>   逐步推进位置（cm→m 换算）、β 推进时间、小角扩散，出射能量记入
+>   `e_escape_mev`。Compton 反冲/光电/次截断电子全部走同一 track 函数。
+> - Stage 2：`rng.poisson(e_vis·ly)` 逐步产光；Cherenkov 均值 =
+>   `step_length_m · cherenkov_photons_per_m · max(0, 1−cos²θ)`，
+>   β 取步中点动能。
+> - Stage 5 之后：`sparse_waveforms.encode_event`（阈值穿越 ROI 合并，
+>   int16 残差 `adc − baseline`）→ `write_sparse_split` 流式目录
+>   （metadata.json / index.npz / segment_samples.npy，memmap 读取）。
+> - 数据角色：calibration（`role=−1`，13 位置 × 5 源能，标签只含
+>   源能与部署位置）、probe（`role=0`，十点等数 Ek 网格）、control
+> （`role=1`，[0,11] MeV 64 层分层均匀，保证评分 bin ≥100 事件）；
+>   合并后洗牌隐藏顺序。
+> - 评分模块 `resolution.py`：±2.5σ 三迭代峰拟合（≥100 事件）、
+>   a/b/c 曲线拟合、64 bin 有效性闸门，`score_v2` 为唯一入口。
+
 本文档是逐 stage 实现的依据。效应编号沿用 `effects.md`（A1..E10）。
 原则：每 stage 物理边界单一、输入输出 schema 明确、独立可验证、
 独立 RNG 流（互不干扰、回归测试稳定）。

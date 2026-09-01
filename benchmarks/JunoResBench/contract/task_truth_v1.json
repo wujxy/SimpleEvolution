@@ -1,0 +1,29 @@
+{
+  "contract": "jrb_task_truth_v1",
+  "electron_single_site": {
+    "development_truth": [
+      "evt_sample_role",
+      "evt_e_true",
+      "evt_e_vis",
+      "evt_vertex_m"
+    ],
+    "final_scoring_truth": [
+      "evt_sample_role",
+      "evt_e_true",
+      "evt_e_vis",
+      "evt_vertex_m"
+    ]
+  },
+  "ibd_positron_multisite": {
+    "development_truth": [
+      "evt_sample_role",
+      "evt_e_true",
+      "evt_e_vis"
+    ],
+    "final_scoring_truth": [
+      "evt_sample_role",
+      "evt_e_true",
+      "evt_e_vis"
+    ]
+  }
+}

@@ -1,0 +1,3 @@
+# task seed n_pmt calibration_events_per_point probe_events_per_point controls output
+electron_single_site 2026090101 17612 20 1000 6400 /path/to/jrb/electron_single_site
+ibd_positron_multisite 2026090102 17612 20 10000 6400 /path/to/jrb/ibd_positron_multisite

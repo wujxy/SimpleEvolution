@@ -1,0 +1,13 @@
+universe = vanilla
+executable = run_generate.sh
+arguments = $(task) $(seed) $(n_pmt) $(calibration) $(probes) $(controls) $(output)
+getenv = True
+request_cpus = 1
+request_memory = 8 GB
+request_disk = 20 GB
+should_transfer_files = NO
+when_to_transfer_output = ON_EXIT
+output = logs/$(task).$(ClusterId).$(Process).out
+error = logs/$(task).$(ClusterId).$(Process).err
+log = logs/$(task).$(ClusterId).log
+queue task,seed,n_pmt,calibration,probes,controls,output from jobs.tsv

@@ -15,8 +15,8 @@ from benchmarks.JunoResBench.juno_res_bench.detector import DetectorSim
 from benchmarks.JunoResBench.juno_res_bench.geometry import PMTLayout
 from benchmarks.JunoResBench.juno_res_bench.resolution import PROBE_KINETIC_MEV
 from benchmarks.JunoResBench.juno_res_bench.sparse_waveforms import (
+    SparseSplitWriter,
     encode_event,
-    write_sparse_split,
 )
 from benchmarks.JunoResBench.juno_res_bench.truth import (
     PARTICLE_CODE_TYPE,
@@ -24,6 +24,15 @@ from benchmarks.JunoResBench.juno_res_bench.truth import (
 
 
 CALIBRATION_ENERGIES_MEV = np.array([0.511, 1.022, 2.223, 4.44, 8.0])
+
+
+def v2_detector_config():
+    """Return the authoritative v2 configuration: IBD-like two-gamma events."""
+    return DetectorConfig(
+        optics_mode="trace",
+        full_readout=True,
+        three_gamma_frac=0.0,
+    )
 
 
 def _calibration_positions():
@@ -118,24 +127,25 @@ def simulate_population(
     seed,
     layout=None,
     simulator=None,
+    observation_writer=None,
     fiducial_radius_m=16.0,
     threshold_adc=6,
     pre_samples=16,
     post_samples=48,
 ):
     """Run the authoritative trace/full-readout world for one population."""
-    cfg = DetectorConfig(optics_mode="trace", full_readout=True)
+    cfg = simulator.cfg if simulator is not None else v2_detector_config()
     detector_layout = layout or PMTLayout.uniform(
         17612, radius_m=cfg.detector_radius_m
     )
     simulator = simulator or DetectorSim(cfg, detector_layout, seed=seed)
     if simulator.layout is not detector_layout:
         raise ValueError("simulator and requested layout must be identical")
-    observations = []
+    observations = [] if observation_writer is None else None
     truth_rows = {
         "evt_e_vis": [],
-        "evt_e_dep": [],
-        "evt_e_escape": [],
+        "evt_e_dep_mev": [],
+        "evt_e_escape_mev": [],
         "evt_total_energy": [],
     }
     step_offsets = [0]
@@ -144,6 +154,8 @@ def simulate_population(
         "step_e_dep_mev": [],
         "step_e_vis_mev": [],
         "step_dedx_mev_cm": [],
+        "step_kinetic_mev": [],
+        "step_length_m": [],
         "step_kind": [],
     }
 
@@ -161,17 +173,21 @@ def simulate_population(
         adc = np.asarray(event.adc, dtype=np.uint16)
         if adc.size == 0:
             adc = np.empty((0, simulator.wave_cfg.n_samples), dtype=np.uint16)
-        observations.append(encode_event(
+        sparse_event = encode_event(
             adc,
             event.adc_ids,
             simulator.wave_cfg.baseline_adc,
             threshold_adc,
             pre_samples,
             post_samples,
-        ))
+        )
+        if observation_writer is None:
+            observations.append(sparse_event)
+        else:
+            observation_writer.append(sparse_event)
         truth_rows["evt_e_vis"].append(event.e_vis_mev)
-        truth_rows["evt_e_dep"].append(event.e_dep_mev)
-        truth_rows["evt_e_escape"].append(event.e_escape_mev)
+        truth_rows["evt_e_dep_mev"].append(event.e_dep_mev)
+        truth_rows["evt_e_escape_mev"].append(event.e_escape_mev)
         total = float(energy) + (
             1.021998 if int(population["evt_particle_type"][index]) == 2 else 0.0
         )
@@ -181,6 +197,8 @@ def simulate_population(
             ("step_e_dep_mev", event.step_e_dep_mev),
             ("step_e_vis_mev", event.step_e_vis_mev),
             ("step_dedx_mev_cm", event.step_dedx_mev_cm),
+            ("step_kinetic_mev", event.step_kinetic_mev),
+            ("step_length_m", event.step_length_m),
             ("step_kind", event.step_kind),
         ):
             step_rows[key].append(values)
@@ -235,18 +253,15 @@ def main():
         fiducial_radius_m=args.fiducial_radius_m,
     )
     layout = PMTLayout.uniform(args.n_pmt)
+    writer = SparseSplitWriter(args.out)
     bundle = simulate_population(
         population,
         seed=args.seed + 1,
         layout=layout,
         fiducial_radius_m=args.fiducial_radius_m,
+        observation_writer=writer,
     )
-    write_sparse_split(
-        args.out,
-        bundle["metadata"],
-        bundle["observations"],
-        truth=bundle["truth"],
-    )
+    writer.finalize(bundle["metadata"], truth=bundle["truth"])
     if args.mode == "calibration":
         np.savez_compressed(Path(args.out) / "labels.npz", **bundle["labels"])
     np.savez_compressed(

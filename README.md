@@ -27,6 +27,11 @@ them later.
 Design source of truth: [docs/simpleevolution_design.md](docs/simpleevolution_design.md).
 Implementation notes: [docs/simpleevolution_implementation.md](docs/simpleevolution_implementation.md).
 
+JunoResBench 的两档位题库设计见
+[设计报告](benchmarks/JunoResBench/docs/JunoResBench_two_tier_design_report.md)；隐藏产生子保留的
+物理效应、受控近似与 1 MeV 分辨率预算见
+[产生子物理与分辨率预算](benchmarks/JunoResBench/docs/generator_physics_and_resolution_budget.md)。
+
 ## Install
 
 ```bash

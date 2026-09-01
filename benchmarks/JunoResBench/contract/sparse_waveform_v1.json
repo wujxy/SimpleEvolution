@@ -1,0 +1,23 @@
+{
+  "contract": "jrb_sparse_waveform_v1",
+  "files": {
+    "metadata.json": {
+      "required_keys": [
+        "storage_format",
+        "n_events",
+        "baseline",
+        "n_samples",
+        "threshold_adc",
+        "pre_samples",
+        "post_samples"
+      ]
+    },
+    "index.npz": {
+      "event_segment_offsets": "int64[N+1]",
+      "segment_sample_offsets": "int64[S+1]",
+      "segment_pmt_ids": "int32[S]",
+      "segment_start_samples": "int16[S]"
+    },
+    "segment_samples.npy": "int16[M]"
+  }
+}

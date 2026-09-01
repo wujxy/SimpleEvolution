@@ -1,5 +1,22 @@
 # JunoResBench Toy MC 与 JUNO-SW full MC 的差别
 
+> **基准 v1 → v2 差异总表（2026-09，现行）**。下表是基准 v2 相对本文
+> 所述 v1 世界的增量；v2 之下的逐环节对照仍以本文为历史参考。
+>
+> | 环节 | v1 | v2 |
+> |---|---|---|
+> | 任务 | E/vertex/t0 三输出，npz 批量预测 | 单输出 E_rec，在线逐事件 Submission 合约 |
+> | 事件 | electron/mixed（单点沉积） | IBD 类正电子（多步输运 + 2×511 keV 湮灭 γ） |
+> | Stage 1 | 单点沉积 + 事件级 quench/nl | `charged_steps` 多步输运 + 局部 Birks，无 nl 钩子 |
+> | Stage 2 | 正态取整产光；Cherenkov 按 E_dep | 逐步 Poisson；Cherenkov 按步长 × (1−cos²θ) |
+> | Stage 3–5 | trace 光学 + SPE/电子学 | 不变（waverec 快照沿用） |
+> | 评分 | E 分辨率/线性 + 顶点 + 时间 | JUNO 曲线 R@1MeV ≤ 3.0% 唯一判据 + 连续控制样本有效性闸门 |
+> | 数据 | dense adc npz，train/val/test | 稀疏 ROI 流式容器；calibration（role=−1，带标签）/probe（0）/control（1）分层公私分离 |
+> | 产生子 | 白盒 track 随附源码 | 公开包不含产生子与参数 |
+>
+> 细节见 `stopping_power.py`、`sparse_waveforms.py`、`resolution.py`
+> 模块文档与 `scripts/make_v2_benchmark.py`。
+
 对照 `Simulation/DetSimV2`（探测器）、`Simulation/SimSvc/PMTSimParamSvc`
 （PMT 参数）、`Simulation/ElecSimV3`（电子学）逐环节说明：toy MC 做了什么、
 JUNO-SW 怎么做、差别的后果。取舍理由见 [`effects.md`](effects.md)。

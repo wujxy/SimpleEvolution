@@ -1,5 +1,17 @@
 # JunoResBench test data manifest
 
+## Active tasks — isolated two-tier packages
+
+`tasks/electron_single_site/` and `tasks/ibd_positron_multisite/` are the
+active benchmark definitions. Their private authoritative world is in
+`world_generator/`; generated waveform data are data-only public/private
+trees; each task evaluator is standalone and does not import the generator.
+The cross-boundary format is frozen in `contract/`. Generate release datasets
+only through `world_generator/condor/` on the designated HTCondor cluster,
+then retain its private release JSON next to the private truth tree.
+
+## Frozen v1 evidence (archival — do not regenerate or rescore)
+
 Small **intermediate-check** datasets only (not benchmark datasets). Both are
 bit-exact reproducible with the pinned seeds; SHA256 for tamper detection.
 
@@ -17,7 +29,7 @@ seeds (20261111 electron / 20261110 mixed) were replaced by the big-seed
 packages below once the white-box variant (which ships the generator source)
 made seed brute-forcing a relevant attack surface.
 
-## Benchmark packages (trigger architecture, per-photon trace optics)
+## Benchmark packages (v1 trigger architecture, per-photon trace optics — frozen)
 
 Global trigger on the PE rate (100-ns causal trailing window, 200-pe
 threshold, dark included), readout window = [t_trig − 300, +700) ns
@@ -175,4 +187,3 @@ c4a786815986eaa38d610579f62da87af6fbbc407b1b37015f951169fed91fa1  blind_task_ele
 c4a786815986eaa38d610579f62da87af6fbbc407b1b37015f951169fed91fa1  blind_task_electron_static/test/meta.json
 21d252c33dbaeaf50ee89751abff95b0897c8f99cc4d16e7ca2e6808ab45a5b9  blind_truth_electron_static/test_full.npz
 ```
-

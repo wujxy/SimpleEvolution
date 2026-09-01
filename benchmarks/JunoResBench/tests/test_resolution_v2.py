@@ -14,7 +14,6 @@ from benchmarks.JunoResBench.juno_res_bench.resolution import (
     score_v2,
     validate_response,
 )
-from benchmarks.JunoResBench.scripts.evaluate_v2 import load_inputs
 
 
 def test_peak_fit_rejects_sparse_and_ignores_far_outliers():
@@ -49,6 +48,8 @@ def test_invalid_outputs_are_rejected():
 
     assert validate_response(truth, np.full_like(truth, 3.0))
     assert validate_response(truth, np.round(truth * 2) / 2)
+    assert validate_response(truth, truth + 0.5)
+    assert validate_response(truth, 1.25 * truth)
     assert validate_response(truth, truth) == []
 
 
@@ -103,16 +104,19 @@ def test_invalid_response_does_not_reach_curve_fit():
     assert "R_1MeV" not in score
 
 
-def test_energy_only_prediction_contract_rejects_extra_keys(tmp_path):
-    truth_path = tmp_path / "truth.npz"
-    pred_path = tmp_path / "prediction.npz"
-    np.savez(
-        truth_path,
-        evt_sample_role=np.array([0, 1]),
-        evt_e_true=np.array([0.0, 1.0]),
-        evt_e_vis=np.array([1.0, 2.0]),
+def test_malformed_probe_outputs_are_invalid_not_exceptions():
+    kinetic = np.repeat(
+        np.array([0, 0.5, 1, 2, 3, 4, 5, 6, 8, 11.0]), 100
     )
-    np.savez(pred_path, E_rec=np.array([1.0, 2.0]), x_rec=np.zeros(2))
+    control = np.linspace(1.022, 12.022, 6400)
 
-    with pytest.raises(ValueError, match="exactly one array named E_rec"):
-        load_inputs(truth_path, pred_path)
+    nonfinite = kinetic + 1.022
+    nonfinite[0] = np.nan
+    score = score_v2(kinetic, nonfinite, control, control)
+    assert score["valid"] is False
+    assert "finite" in score["invalid_reasons"][0]
+
+    zero_width = kinetic + 1.022
+    score = score_v2(kinetic, zero_width, control, control)
+    assert score["valid"] is False
+    assert score["invalid_reasons"]

@@ -9,6 +9,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from benchmarks.JunoResBench.juno_res_bench.sparse_waveforms import (
+    SparseSplitWriter,
     SparseSplit,
     encode_event,
     write_sparse_split,
@@ -84,3 +85,29 @@ def test_sparse_split_round_trip_is_streamed_and_truth_is_separate(tmp_path):
     assert "evt_e_vis" not in split.metadata
     assert (path / "truth.npz").exists()
     assert isinstance(load_split(path), SparseSplit)
+
+
+def test_incremental_writer_does_not_require_an_event_collection(tmp_path):
+    adc, pmt_ids = _waveforms()
+    path = tmp_path / "incremental"
+    writer = SparseSplitWriter(path)
+
+    writer.append(encode_event(adc, pmt_ids, 16000, 6, 16, 48))
+    writer.append(encode_event(np.roll(adc, 3, axis=1), pmt_ids, 16000, 6, 16, 48))
+    writer.finalize({"purpose": "incremental"})
+
+    split = SparseSplit(path)
+    assert len(split) == 2
+    assert isinstance(split.samples, np.memmap)
+    assert split.metadata["purpose"] == "incremental"
+
+
+def test_rewriting_public_split_removes_stale_truth(tmp_path):
+    adc, pmt_ids = _waveforms()
+    event = encode_event(adc, pmt_ids, 16000, 6, 16, 48)
+    path = tmp_path / "public"
+    write_sparse_split(path, {}, [event], truth={"secret": np.array([1])})
+
+    write_sparse_split(path, {}, [event])
+
+    assert not (path / "truth.npz").exists()

@@ -2,6 +2,7 @@
 """Assemble the public and evaluator-private JunoResBench v2 package."""
 
 import argparse
+import gc
 from pathlib import Path
 import shutil
 import sys
@@ -10,14 +11,17 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from benchmarks.JunoResBench.juno_res_bench.config import DetectorConfig
 from benchmarks.JunoResBench.juno_res_bench.detector import DetectorSim
 from benchmarks.JunoResBench.juno_res_bench.geometry import PMTLayout
-from benchmarks.JunoResBench.juno_res_bench.sparse_waveforms import write_sparse_split
+from benchmarks.JunoResBench.juno_res_bench.sparse_waveforms import (
+    SparseSplitWriter,
+    write_sparse_split,
+)
 from benchmarks.JunoResBench.scripts.generate_v2_dataset import (
     combine_populations,
     make_population,
     simulate_population,
+    v2_detector_config,
 )
 
 
@@ -37,19 +41,41 @@ def _public_metadata(metadata):
     return {key: metadata[key] for key in PUBLIC_METADATA_KEYS if key in metadata}
 
 
+def _copy_unless_same(source, target):
+    if source.resolve() != Path(target).resolve():
+        shutil.copyfile(source, target)
+
+
 def _write_task_assets(task_directory):
-    task_source = BENCHMARK_ROOT / "task_v2" / "TASK.md"
-    if task_source.exists() and task_source.resolve() != (task_directory / "TASK.md").resolve():
-        shutil.copyfile(task_source, task_directory / "TASK.md")
-    elif not (task_directory / "TASK.md").exists():
-        (task_directory / "TASK.md").write_text(
-            "# JunoResBench v2\n\nThe public task contract is installed in Task 7.\n",
-            encoding="utf-8",
-        )
-    shutil.copyfile(
+    _copy_unless_same(
+        BENCHMARK_ROOT / "task_v2" / "TASK.md", task_directory / "TASK.md"
+    )
+    _copy_unless_same(
+        BENCHMARK_ROOT / "task_v2" / "submission_api.py",
+        task_directory / "submission_api.py",
+    )
+    _copy_unless_same(
+        BENCHMARK_ROOT / "task_v2" / "submission_worker.py",
+        task_directory / "submission_worker.py",
+    )
+    _copy_unless_same(
         BENCHMARK_ROOT / "scripts" / "evaluate_v2.py",
         task_directory / "evaluate.py",
     )
+    _copy_unless_same(
+        BENCHMARK_ROOT / "baselines" / "v2_charge.py",
+        task_directory / "baseline.py",
+    )
+    scoring = task_directory / "juno_res_bench"
+    scoring.mkdir(exist_ok=True)
+    (scoring / "__init__.py").write_text(
+        "# Standalone scoring modules shipped with the public task.\n",
+        encoding="utf-8",
+    )
+    for name in ("resolution.py", "sparse_waveforms.py"):
+        _copy_unless_same(
+            BENCHMARK_ROOT / "juno_res_bench" / name, scoring / name
+        )
 
 
 def assemble_v2_package(
@@ -61,6 +87,7 @@ def assemble_v2_package(
 ):
     """Write strict public/private boundaries from generated split bundles."""
     root = Path(output_root)
+    _require_fresh_output(root)
     task = root / "task_v2"
     private = root / "blind_truth_v2"
     task.mkdir(parents=True, exist_ok=True)
@@ -109,19 +136,46 @@ def _physics_population(seed_probe, seed_control, seed_shuffle, probe_count, con
     return combine_populations(probes, continuous, seed=seed_shuffle)
 
 
+def _require_fresh_output(root):
+    root = Path(root)
+    if root.exists() and any(root.iterdir()):
+        raise FileExistsError(f"refusing to reuse non-empty output directory: {root}")
+
+
+def _simulate_to_split(path, population, seed, layout, simulator, truth_keys=None):
+    """Simulate directly into one sparse split with bounded waveform memory."""
+    writer = SparseSplitWriter(path)
+    bundle = simulate_population(
+        population,
+        seed,
+        layout=layout,
+        simulator=simulator,
+        observation_writer=writer,
+    )
+    truth = bundle["truth"]
+    if truth_keys == ():
+        truth = None
+    elif truth_keys is not None:
+        truth = {key: truth[key] for key in truth_keys}
+    writer.finalize(_public_metadata(bundle["metadata"]), truth=truth)
+    return bundle
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", required=True, help="package parent directory")
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--n-pmt", type=int, default=17612)
     parser.add_argument("--calibration-events-per-point", type=int, default=20)
-    parser.add_argument("--dev-probe-events-per-point", type=int, default=200)
-    parser.add_argument("--dev-controls", type=int, default=12800)
-    parser.add_argument("--final-probe-events-per-point", type=int, default=2000)
-    parser.add_argument("--final-controls", type=int, default=12800)
+    parser.add_argument("--dev-probe-events-per-point", type=int, default=1000)
+    parser.add_argument("--dev-controls", type=int, default=6400)
+    parser.add_argument("--final-probe-events-per-point", type=int, default=10000)
+    parser.add_argument("--final-controls", type=int, default=6400)
     args = parser.parse_args()
+    root = Path(args.out)
+    _require_fresh_output(root)
 
-    streams = np.random.SeedSequence(args.seed).spawn(9)
+    streams = np.random.SeedSequence(args.seed).spawn(8)
     seeds = [int(stream.generate_state(1, dtype=np.uint64)[0]) for stream in streams]
     calibration_population = make_population(
         "calibration", seeds[0], events_per_point=args.calibration_events_per_point
@@ -133,15 +187,56 @@ def main():
         seeds[4], seeds[5], seeds[6], args.final_probe_events_per_point, args.final_controls
     )
 
-    config = DetectorConfig(optics_mode="trace", full_readout=True)
+    config = v2_detector_config()
     layout = PMTLayout.uniform(args.n_pmt, config.detector_radius_m)
     simulator = DetectorSim(config, layout, seed=seeds[7])
-    calibration = simulate_population(
-        calibration_population, seeds[7], layout=layout, simulator=simulator
+    task = root / "task_v2"
+    private = root / "blind_truth_v2"
+    task.mkdir(parents=True, exist_ok=True)
+    private.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        task / "detector_geometry.npz", pmt_positions_m=layout.positions_m
     )
-    dev = simulate_population(dev_population, seeds[7], layout=layout, simulator=simulator)
-    final = simulate_population(final_population, seeds[7], layout=layout, simulator=simulator)
-    assemble_v2_package(args.out, layout.positions_m, calibration, dev, final)
+
+    calibration = _simulate_to_split(
+        task / "calibration",
+        calibration_population,
+        seeds[7],
+        layout,
+        simulator,
+        truth_keys=(),
+    )
+    np.savez_compressed(
+        task / "calibration" / "labels.npz", **calibration["labels"]
+    )
+    del calibration
+    gc.collect()
+
+    dev = _simulate_to_split(
+        task / "dev",
+        dev_population,
+        seeds[7],
+        layout,
+        simulator,
+        truth_keys=DEV_TRUTH_KEYS,
+    )
+    del dev
+    gc.collect()
+
+    final = _simulate_to_split(
+        private / "final_observations",
+        final_population,
+        seeds[7],
+        layout,
+        simulator,
+        truth_keys=None,
+    )
+    (private / "final_observations" / "truth.npz").replace(
+        private / "truth.npz"
+    )
+    del final
+    gc.collect()
+    _write_task_assets(task)
 
 
 if __name__ == "__main__":
