@@ -177,7 +177,14 @@ def _fork_world(source: Path, dest: Path,
     for entry in sorted(source.iterdir()):
         if entry.name == ".scientist":
             if include_ledger:
-                shutil.copytree(entry, dest / ".scientist")
+                # The reviewer's side world lives INSIDE .scientist/scratch,
+                # so shipping scratch would copy the destination into itself
+                # (observed live: fresh-reviewer-N/.scientist/scratch/
+                # fresh-reviewer-N/... nesting to path exhaustion). Scratch
+                # is disposable by contract; the record a reviewer digs is
+                # wire, judgments, reports, and memory — none of it scratch.
+                shutil.copytree(entry, dest / ".scientist",
+                                ignore=shutil.ignore_patterns("scratch"))
             else:
                 memory = entry / "research_memory.jsonl"
                 if memory.is_file():
