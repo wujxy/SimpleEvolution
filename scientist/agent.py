@@ -128,10 +128,14 @@ _COLD_START = (
     "relevant to that judgment. Your own inspection and small "
     "discriminating probes serve your judgment; substantial "
     "investigations, implementations, and measurement campaigns are work "
-    "for Searcher, Proposer, Executor, Challenger, or Reviewer — and for "
-    "work a colleague can own, their start is not queued behind your "
-    "understanding: open the engagement, and let your reading of the "
-    "terrain catch up in parallel. Preserve uncertainty when the "
+    "for Searcher, Proposer, Executor, Challenger, or Reviewer. Ask of "
+    "the work in front of you: does it already have a clear enough "
+    "world, objective, and feedback loop for a capable colleague to own "
+    "it end-to-end? If yes, open the engagement now — your own "
+    "understanding can catch up in parallel with the running colleague. "
+    "If no, your work is to make it yes: the framing, the decisive "
+    "uncertainty, the measurement, the missing facts — until a charter "
+    "exists that a colleague can own. Preserve uncertainty when the "
     "evidence is insufficient."
 )
 

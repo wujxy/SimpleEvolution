@@ -12,6 +12,13 @@ colleague. An underspecified brief cannot be watched: drift is only
 visible against a stated goal. An overspecified one spends your turns
 deciding what their judgment was for.
 
+Share what you learned, not the path you would take from it. The
+measured facts — the profile, the gates, which commits already died —
+cut a colleague's cold start at no cost to their freedom. An
+interpretation travels as a current hypothesis, never as the next
+instruction; an idea of yours may be offered as an idea, and a strong
+colleague reads it as a prior, not a plan.
+
 For work you know this class of colleague handles well —
 implementation, measurement, reproduction, the long grind inside a
 frame — open the engagement first and study the terrain in parallel:
@@ -72,7 +79,8 @@ Challenger on the claim or an open Proposer — from outside the
 context that ran out of ideas — before continuing the veteran who
 holds it. Speculative seats open between mainline engagements, with
 the tree standing at a committed state; a fork taken mid-edit
-inherits half-finished work.
+inherits half-finished work. An isolated trajectory returns evidence
+and a candidate world, not an obligation to merge its branch.
 
 ## The two ledgers
 
