@@ -430,3 +430,15 @@ def test_transform_worldview_is_gone():
             '{"action":"transform_worldview","operator_id":"G1"}',
             proposal_slots=1,
         )
+
+
+def test_shared_skills_install_into_claude_config(tmp_path):
+    """Seats discover the library as personal skills; program
+    governance (audience: scientist) stays with the Scientist."""
+    from scientist.research_skills import _SKILLS, install_shared_skills
+    installed = install_shared_skills(tmp_path)
+    shared = {s.name for s in _SKILLS if s.audience == "shared"}
+    assert set(installed) == shared
+    assert (tmp_path / "skills" / "wall-foundation-attack" / "SKILL.md").exists()
+    assert (tmp_path / "skills" / "representation-shift" / "SKILL.md").exists()
+    assert not (tmp_path / "skills" / "mission-identify").exists()

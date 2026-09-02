@@ -44,6 +44,7 @@ from pathlib import Path
 
 from .collaboration import (ROLE_NAMES, build_collaboration_prompt,
                             build_continuation_prompt)
+from .research_skills import install_shared_skills
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
@@ -309,6 +310,12 @@ class InWorldAssistant:
                 f"\temail = {self.episode_id}@run.invalid\n",
                 encoding="utf-8",
             )
+        # The shared skill library rides the same tree: seats discover
+        # it as personal skills ($CLAUDE_CONFIG_DIR/skills), one library
+        # with the Scientist's use_research_skill, program-governance
+        # skills (audience: scientist) excluded. Body zone, not the
+        # research face — invisible to the world's git.
+        install_shared_skills(config)
         return config, home
 
     def _dir_of(self, call_id: str) -> Path:

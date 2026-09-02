@@ -133,3 +133,29 @@ def load_research_skill(skill_id: str) -> str:
     if skill is None:
         raise ValueError(f"unknown research skill: {skill_id}")
     return _body(skill)
+
+
+def install_shared_skills(target: Path) -> list[str]:
+    """Install the shared-audience skills into a claude config dir.
+
+    Seats are first-class researchers: research method belongs to
+    every researcher; program governance (audience: scientist) stays
+    with the Scientist. The claude CLI discovers personal skills at
+    $CLAUDE_CONFIG_DIR/skills/<name>/SKILL.md — the same files the
+    Scientist's use_research_skill serves, so PI and seats read one
+    library, and a brief that names a method ("your line this
+    engagement: representation-shift") points at a card the seat can
+    open natively. Resident cost is the index only (name +
+    description); bodies load on invocation.
+    """
+    import shutil
+    skills_dir = target / "skills"
+    installed = []
+    for skill in _SKILLS:
+        if skill.audience != "shared":
+            continue
+        shutil.copytree(_SKILL_ROOT / skill.directory,
+                        skills_dir / skill.directory,
+                        dirs_exist_ok=True)
+        installed.append(skill.name)
+    return installed
