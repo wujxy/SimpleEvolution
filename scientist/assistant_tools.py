@@ -42,8 +42,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from .collaboration import (ROLE_NAMES, build_collaboration_prompt,
-                            build_continuation_prompt)
+from .collaboration import (ROLE_NAMES, SEAT_HANDBOOK,
+                            build_collaboration_prompt,
+                            build_continuation_prompt,
+                            seat_standing_markdown)
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
@@ -219,6 +221,22 @@ class AssistantConfig:
         )
 
 
+def _seat_handbook_path(role: str, workspace: str,
+                        seat_home: Path, work_dir: Path) -> Path | None:
+    """Where this seat's office manual goes — inside the seat's own
+    directory chain, never the world tree (a manual in the world would
+    be every seat's manual, and the world belongs to the task).
+    Cognitive seats: their scratch. An isolated executor: beside its
+    forked world, not inside it. A current-world executor has no
+    writable per-seat layer above the world — its station rides the
+    mission message."""
+    if role == "executor":
+        if workspace == "isolated":
+            return seat_home / "CLAUDE.md"
+        return None
+    return work_dir / "CLAUDE.md"
+
+
 class InWorldAssistant:
     """Claude subprocess runtime behind the research roles. The seat's
     unit of existence is its directory (see module docstring); this class
@@ -295,6 +313,14 @@ class InWorldAssistant:
         home = self.world.scratch / "home"
         config.mkdir(parents=True, exist_ok=True)
         home.mkdir(parents=True, exist_ok=True)
+        # The shared office manual: every seat's harness loads it as
+        # user-level memory (CLAUDE_CONFIG_DIR/CLAUDE.md). Run-scoped,
+        # identical for all seats — team structure and source order,
+        # never role text (that lives per-seat, or a manual in a
+        # shared layer would be every seat's manual).
+        manual = config / "CLAUDE.md"
+        if not manual.exists():
+            manual.write_text(SEAT_HANDBOOK, encoding="utf-8")
         settings = config / "settings.json"
         payload = json.dumps({"env": self.config.env or {}}, indent=2)
         if not settings.exists() or \
@@ -661,6 +687,16 @@ class InWorldAssistant:
 
         # -- start the seat; the directory is born --------------------------
         started = time.time()
+        # the office manual, in the seat's own chain (never the world);
+        # derived from the id so both the fresh and continuation paths
+        # land in the same place
+        seat_home = self._dir_of(collaborator_id)
+        handbook = _seat_handbook_path(role, workspace,
+                                       seat_home, work_dir)
+        if handbook is not None:
+            handbook.parent.mkdir(parents=True, exist_ok=True)
+            handbook.write_text(
+                seat_standing_markdown(role), encoding="utf-8")
         raw_path = self._raw_dir(collaborator_id) / "raw.txt"
         handle = raw_path.open("wb")
         # run-by-run isolation at the single spawn chokepoint: the seat

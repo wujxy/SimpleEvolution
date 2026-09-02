@@ -90,6 +90,74 @@ def test_executor_receives_intent_constraints_and_definition_of_done():
     assert "minimize runtime" in text
 
 
+def test_every_seat_prompt_carries_station_and_source_order():
+    # the mission is an engagement, not an identity claim; the goal and
+    # gates are the authority; the brief is the Scientist's account
+    actions = {
+        "searcher": {"brief": "locate the dominant allocation path"},
+        "proposer": {"brief": "find the next direction", "scope": "open"},
+        "challenger": {"brief": "find the strongest failure mode"},
+        "reviewer": {"brief": "look back over the run"},
+        "executor": {
+            "brief": "implement a TOF-aware cache",
+            "definition_of_done": "correctness passes",
+            "workspace": "current",
+        },
+    }
+    for role, action in actions.items():
+        text = _prompt(role, action)
+        assert "You are engaged as the team's" in text, role
+        assert "what your work answers to" in text, role
+        assert "the Scientist's account and request" in text, role
+        # primary text precedes the account that characterizes it
+        assert text.index("Research goal:") < text.index(
+            "Engagement brief"), role
+
+
+def test_brief_characterization_arrives_as_reading_not_law():
+    # r6's failure as a unit test: a brief that retells a tolerance as
+    # "must remain bit-exact" still arrives verbatim, but framed as one
+    # colleague's reading of the text above — which the seat holds
+    text = _prompt("challenger", {
+        "brief": "HARD CONSTRAINT: the FCN must remain bit-exact, any "
+                 "approximation breaks it.",
+    })
+    assert "must remain bit-exact" in text
+    assert "one colleague's reading" in text
+    assert "yours to check" in text
+
+
+def test_seat_handbook_placement_never_touches_the_world(tmp_path):
+    from pathlib import Path
+    from scientist.assistant_tools import _seat_handbook_path
+    seat_home = tmp_path / "seats" / "challenger-x-001"
+    scratch = seat_home / "scratch"
+    assert _seat_handbook_path(
+        "challenger", "scratch", seat_home, scratch) == scratch / "CLAUDE.md"
+    fork = seat_home / "world"
+    assert _seat_handbook_path(
+        "executor", "isolated", seat_home, fork) == seat_home / "CLAUDE.md"
+    # a current-world executor works in the task tree: no manual there
+    assert _seat_handbook_path(
+        "executor", "current", seat_home, Path("/work")) is None
+
+
+def test_stations_are_per_role_and_absent_from_shared_handbook():
+    from scientist.collaboration import SEAT_HANDBOOK, seat_standing_markdown
+    # every station is distinct and names its seat
+    stations = {r: seat_standing_markdown(r) for r in
+                ("searcher", "proposer", "executor", "challenger",
+                 "reviewer")}
+    assert len(set(stations.values())) == 5
+    for role, text in stations.items():
+        assert role.title() in text
+    # and no role text leaks into the shared handbook — the shared
+    # layer is identical for all seats; anything else is cross-talk
+    for text in stations.values():
+        body = text.split("\n\n", 1)[1]
+        assert body not in SEAT_HANDBOOK
+
+
 def test_neutral_index_is_complete_thin_and_sorted(tmp_path):
     ledger = LocalLedger(tmp_path)
     rows = [
