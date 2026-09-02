@@ -1,0 +1,33 @@
+{
+  "goal": "Reconstruct E_rec, x_rec, y_rec, z_rec from the supplied sparse PMT waveforms for 1--10 MeV single-electron events. The sole success target is the frozen evaluator result: R_1MeV <= 3.0%, with the 1 MeV three-dimensional vertex RMS also at or below the numeric threshold in public/evaluation_config.json. Continue researching until this target is reached or you have a defensible scientific conclusion. Infer the detector response from the labeled calibration data, public development data and open literature; do not assume a particular reconstruction method.",
+  "gate_block": "Only modify src/. Run bash scripts/check_verify.sh for the output-contract gate and bash scripts/bench.sh for the public development score. The solver contract is python3 src/solve.py --data <split> --calibration <split> --out <pred.npz>, writing equally sized finite arrays E_rec, x_rec, y_rec, z_rec. The final evaluator replays the solver on a hidden split, so solutions tied to development truth do not solve the task.",
+  "editable_paths": ["src"],
+  "base_sha": "FILL_BEFORE_RUNNING",
+  "node_id": "jrb-electron-single-site-node",
+  "episode_id": "jrb-electron-single-site-001",
+  "model": {
+    "api": "openai",
+    "model": "deepseek-v4-flash",
+    "base_url": "https://api.deepseek.com",
+    "api_key": "FILL_BEFORE_RUNNING",
+    "reasoning_effort": "low"
+  },
+  "assistant": {
+    "command": "claude",
+    "env": {
+      "ANTHROPIC_AUTH_TOKEN": "FILL_BEFORE_RUNNING",
+      "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"
+    }
+  },
+  "budget": {
+    "steps": 3000,
+    "wall_seconds": 604800,
+    "command_timeout_seconds": 14400,
+    "command_output_cap_chars": 40000,
+    "consult_timeout_seconds": 3600,
+    "work_default_minutes": 120,
+    "distill_word_cap": 1200,
+    "cognitive_timeout_seconds": 10800,
+    "seat_timeout_max_minutes": 480
+  }
+}

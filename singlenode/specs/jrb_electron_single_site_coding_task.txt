@@ -1,0 +1,11 @@
+You are working on JunoResBench single-electron reconstruction. Modify only
+src/ and reconstruct E_rec, x_rec, y_rec, z_rec from the supplied sparse PMT
+waveforms. Run scripts/check_verify.sh and scripts/bench.sh as often as useful.
+The single success target is R_1MeV <= 3.0%, while also passing the frozen 1 MeV
+three-dimensional vertex RMS threshold. Continue serious analysis and
+experimentation rather than stopping after merely improving the baseline.
+
+The public package contains labeled calibration data, a development population,
+detector geometry and the scoring contract. The final judgement uses hidden
+events. Infer useful detector-response models from data and physics; do not
+depend on development truth being present at inference time.
