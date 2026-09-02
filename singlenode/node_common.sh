@@ -37,6 +37,9 @@ WORLD_RW=${WORLD_RW:-src .git}
 # Bind exactly what the eval reads — never a wider tree than necessary
 # (sibling experiment output must stay invisible to the agent).
 EXTRA_RO_BINDS=${EXTRA_RO_BINDS:-}
+# Narrow host-to-container read-only mappings. e.g.
+# /host/release/public:/data/jrb/electron_single_site_public.
+EXTRA_RO_MOUNTS=${EXTRA_RO_MOUNTS:-}
 
 # The one-container argv. Requires RUN_DIR set by the caller. The frozen
 # scientist package binds only when present (the coding mode has none —
@@ -47,7 +50,7 @@ EXTRA_RO_BINDS=${EXTRA_RO_BINDS:-}
 # arms at once on one machine, disjoint per-socket ranges keep one arm's
 # build bursts and benches out of the other's timing.
 node_container() {
-    local prefix=() extra=() p
+    local prefix=() extra=() p source destination
     if [ -n "${TASKSET_RANGE:-}" ]; then
         prefix+=(taskset -c "$TASKSET_RANGE")
     fi
@@ -56,6 +59,15 @@ node_container() {
     fi
     for p in $EXTRA_RO_BINDS; do
         extra+=(--bind "$p:$p:ro")
+    done
+    for p in $EXTRA_RO_MOUNTS; do
+        source=${p%%:*}
+        destination=${p#*:}
+        if [ -z "$source" ] || [ "$source" = "$p" ] || [ -z "$destination" ]; then
+            echo "EXTRA_RO_MOUNTS entries must be SOURCE:DESTINATION: $p" >&2
+            return 2
+        fi
+        extra+=(--bind "$source:$destination:ro")
     done
     local rw_binds=()
     for p in $WORLD_RW; do

@@ -103,6 +103,9 @@ case " $EXTRA_RO_BINDS " in
     *" /cvmfs "*) S9_FORBIDDEN='^(datafs|lustrefs)$' ;;
 esac
 check S9-isolation '[ ! -e /datafs ] && [ ! -e '"$REPO_ROOT"' ] && [ ! -e /root/runs ] && ! ls / | grep -qE "'"$S9_FORBIDDEN"'"'
+if [ -n "${S9_REQUIRED:-}" ]; then
+    check S9-required "$S9_REQUIRED"
+fi
 
 note DONE "smoke suite complete"
 echo "smoke: all green -> $LOG"
