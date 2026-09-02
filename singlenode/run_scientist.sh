@@ -70,6 +70,13 @@ env = spec.setdefault("assistant", {}).setdefault("env", {})
 for key in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"):
     if env.get(key) in (None, "", "FILL_BEFORE_RUNNING"):
         env[key] = ds[key]
+# worker model = the run's declared model unless the launcher overrides
+# (6f1f200 for every launch path — stamped into the frozen spec so the
+# run's own record shows the model its seats actually ran; the omilrec
+# path missed the original patch and seats silently ran the endpoint's
+# v4-pro mapping, r8 and r9)
+if spec["assistant"].get("model") in (None, "", "FILL_BEFORE_RUNNING"):
+    spec["assistant"]["model"] = spec.get("model", {}).get("model", "")
 open(sys.argv[2], "w").write(
     json.dumps(spec, indent=2, ensure_ascii=False))
 EOF

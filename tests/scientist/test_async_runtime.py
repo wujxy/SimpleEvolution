@@ -147,3 +147,25 @@ def test_evidence_workspace_points_at_the_real_fork(tmp_path):
     assert isolated["workspace"] == str(fork)
     current = seat._evidence_envelope("executor-x-002", None, 0.0)
     assert current["workspace"] == str(tmp_path / "work")
+
+
+def test_seat_model_inherits_the_pis_declared_model():
+    # one declared model for the whole run: an unspecified
+    # assistant.model must fall back to spec.model.model, never to the
+    # CLI default resolution (which the endpoint maps to v4-pro — the
+    # accident that ran omilrec seats on pro for two live runs)
+    from scientist.assistant_tools import AssistantConfig
+
+    inherited = AssistantConfig.from_spec({
+        "model": {"model": "deepseek-v4-flash"},
+        "assistant": {"command": "claude"}})
+    assert inherited.model == "deepseek-v4-flash"
+
+    override = AssistantConfig.from_spec({
+        "model": {"model": "deepseek-v4-flash"},
+        "assistant": {"command": "claude",
+                      "model": "deepseek-v4-pro"}})
+    assert override.model == "deepseek-v4-pro"
+
+    assert AssistantConfig.from_spec(
+        {"assistant": {"command": "claude"}}).model is None

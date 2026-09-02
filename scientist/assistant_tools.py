@@ -196,7 +196,14 @@ class AssistantConfig:
         node_world = assistant.get("node_world")
         return cls(
             command=str(assistant.get("command") or "claude"),
-            model=assistant.get("model") or None,
+            # the worker model is a declared experimental constant, never
+            # an env default's accident: an unspecified assistant.model
+            # inherits the PI's declared model — ONE variable for the
+            # whole run (user ruling 2026-09-01, 6f1f200; the omilrec
+            # launch path missed that patch and its seats silently ran
+            # the endpoint's v4-pro mapping for two live runs)
+            model=(assistant.get("model")
+                   or (spec.get("model") or {}).get("model")),
             effort=assistant.get("effort") or None,
             node_world=Path(node_world) if node_world else None,
             env=assistant.get("env") or None,
