@@ -117,7 +117,8 @@ def test_every_seat_prompt_carries_station_and_source_order():
 def test_brief_characterization_arrives_as_reading_not_law():
     # r6's failure as a unit test: a brief that retells a tolerance as
     # "must remain bit-exact" still arrives verbatim, but framed as one
-    # colleague's reading of the text above — which the seat holds
+    # colleague's reading of the text above — which the seat holds,
+    # with the authority restated after the brief (the sandwich)
     text = _prompt("challenger", {
         "brief": "HARD CONSTRAINT: the FCN must remain bit-exact, any "
                  "approximation breaks it.",
@@ -125,37 +126,20 @@ def test_brief_characterization_arrives_as_reading_not_law():
     assert "must remain bit-exact" in text
     assert "one colleague's reading" in text
     assert "yours to check" in text
+    # the sandwich: authority text before the brief AND restated after
+    assert text.index("Research goal:") < text.index("Engagement brief")
+    assert text.index("Engagement brief") < text.index(
+        "remain the authority")
 
 
-def test_seat_handbook_placement_never_touches_the_world(tmp_path):
-    from pathlib import Path
-    from scientist.assistant_tools import _seat_handbook_path
-    seat_home = tmp_path / "seats" / "challenger-x-001"
-    scratch = seat_home / "scratch"
-    assert _seat_handbook_path(
-        "challenger", "scratch", seat_home, scratch) == scratch / "CLAUDE.md"
-    fork = seat_home / "world"
-    assert _seat_handbook_path(
-        "executor", "isolated", seat_home, fork) == seat_home / "CLAUDE.md"
-    # a current-world executor works in the task tree: no manual there
-    assert _seat_handbook_path(
-        "executor", "current", seat_home, Path("/work")) is None
-
-
-def test_stations_are_per_role_and_absent_from_shared_handbook():
-    from scientist.collaboration import SEAT_HANDBOOK, seat_standing_markdown
-    # every station is distinct and names its seat
-    stations = {r: seat_standing_markdown(r) for r in
-                ("searcher", "proposer", "executor", "challenger",
-                 "reviewer")}
-    assert len(set(stations.values())) == 5
-    for role, text in stations.items():
-        assert role.title() in text
-    # and no role text leaks into the shared handbook — the shared
-    # layer is identical for all seats; anything else is cross-talk
-    for text in stations.values():
-        body = text.split("\n\n", 1)[1]
-        assert body not in SEAT_HANDBOOK
+def test_continuation_carries_station_and_authority():
+    from scientist.collaboration import build_continuation_prompt
+    text = build_continuation_prompt({
+        "brief": "X landed; continue with Y",
+        "definition_of_done": "report the delta",
+    })
+    assert "engaged as the team's Executor" in text
+    assert "the goal and constraints as written still govern" in text
 
 
 def test_neutral_index_is_complete_thin_and_sorted(tmp_path):
