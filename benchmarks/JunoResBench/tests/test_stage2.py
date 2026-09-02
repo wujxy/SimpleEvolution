@@ -10,16 +10,16 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from benchmarks.JunoResBench.juno_res_bench.config import DetectorConfig
-from benchmarks.JunoResBench.juno_res_bench.detector import DetectorSim
-from benchmarks.JunoResBench.juno_res_bench.geometry import PMTLayout
-from benchmarks.JunoResBench.juno_res_bench.stages.s1_response import run_s1
-from benchmarks.JunoResBench.juno_res_bench.stages.s2_photons import (
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.config import DetectorConfig
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.detector import DetectorSim
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import PMTLayout
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages.s1_response import run_s1
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages.s2_photons import (
     beta_from_kinetic,
     run_s2_cherenkov,
     run_s2_scint,
 )
-from benchmarks.JunoResBench.juno_res_bench.truth import EventInput
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import EventInput
 
 
 def test_beta():

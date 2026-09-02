@@ -12,14 +12,14 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from benchmarks.JunoResBench.juno_res_bench.config import DetectorConfig
-from benchmarks.JunoResBench.juno_res_bench.detector import DetectorSim
-from benchmarks.JunoResBench.juno_res_bench.geometry import (
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.config import DetectorConfig
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.detector import DetectorSim
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import (
     DirectionGrid,
     PMTLayout,
 )
-from benchmarks.JunoResBench.juno_res_bench.rng import STAGE_KEYS, make_rngs
-from benchmarks.JunoResBench.juno_res_bench.truth import (
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.rng import STAGE_KEYS, make_rngs
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import (
     EventInput,
     ParticleType,
     PhotonSoA,
@@ -40,7 +40,7 @@ def test_rng_streams():
 def test_stage_reproducibility():
     cfg = DetectorConfig()
     ev = EventInput(0, 0, 0, 1.0)
-    from benchmarks.JunoResBench.juno_res_bench.stages import s2_photons
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages import s2_photons
     p1 = s2_photons.run_s2_scint(
         type("S1", (), {"e_vis_mev": 1.0})(), ev, cfg, np.random.default_rng(5)
     )
@@ -76,7 +76,7 @@ def test_rng_isolation_across_stages():
     sim = DetectorSim(DetectorConfig(), PMTLayout.uniform(), seed=99)
     ev = sim.generate(0, 0, 0, 2.0, with_waveforms=False)
     # re-run stage 2 scint with its own stream: same seed -> same photons
-    from benchmarks.JunoResBench.juno_res_bench.stages import s1_response, s2_photons
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages import s1_response, s2_photons
     s1 = s1_response.run_s1(
         EventInput(0, 0, 0, 2.0), DetectorConfig()
     )
@@ -196,7 +196,7 @@ def test_particle_type_dispatch():
 
 def test_s1_stream_controls_track_shape_not_response_integral():
     """Angular diffusion uses s1 RNG without changing deposited response."""
-    from benchmarks.JunoResBench.juno_res_bench.stages.s1_response import run_s1
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages.s1_response import run_s1
 
     cfg = DetectorConfig()
     event = EventInput(0, 0, 0, 1.5)

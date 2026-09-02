@@ -10,9 +10,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from benchmarks.JunoResBench.juno_res_bench.config import DetectorConfig
-from benchmarks.JunoResBench.juno_res_bench.detector import DetectorSim
-from benchmarks.JunoResBench.juno_res_bench.geometry import PMTLayout
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.config import DetectorConfig
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.detector import DetectorSim
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import PMTLayout
 
 
 def _count_peaks(adc, threshold_sigma=5):
@@ -91,7 +91,7 @@ def _rand_vertex(rng, rmax=14.0):
 
 def test_trigger_causal_and_fires():
     """t_trigger sits after first light, within a bounded latency of t0."""
-    from benchmarks.JunoResBench.juno_res_bench.stages.s5_electronics import (
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages.s5_electronics import (
         _find_trigger,
     )
     cfg = DetectorConfig()

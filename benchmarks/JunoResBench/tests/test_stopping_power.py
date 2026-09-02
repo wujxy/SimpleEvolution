@@ -7,12 +7,12 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from benchmarks.JunoResBench.juno_res_bench.stopping_power import (
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stopping_power import (
     birks_visible_mev,
     charged_steps,
     electron_stopping_power_mev_cm,
 )
-from benchmarks.JunoResBench.juno_res_bench.config import DetectorConfig
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.config import DetectorConfig
 
 
 def test_low_energy_stopping_power_rises():

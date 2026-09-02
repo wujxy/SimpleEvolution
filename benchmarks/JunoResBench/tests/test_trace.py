@@ -10,10 +10,10 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from benchmarks.JunoResBench.juno_res_bench.config import DetectorConfig
-from benchmarks.JunoResBench.juno_res_bench.detector import DetectorSim
-from benchmarks.JunoResBench.juno_res_bench.geometry import PMTLayout
-from benchmarks.JunoResBench.juno_res_bench.optics_tables import (
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.config import DetectorConfig
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.detector import DetectorSim
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import PMTLayout
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.optics_tables import (
     sample_emission_lambda,
 )
 
@@ -34,11 +34,11 @@ def test_yield_consistency():
 
 def test_red_shift():
     """Arrived photons are red-shifted: UV photons absorbed + re-emitted."""
-    from benchmarks.JunoResBench.juno_res_bench.truth import (
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import (
         EventInput,
         ParticleType,
     )
-    from benchmarks.JunoResBench.juno_res_bench.stages import (
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages import (
         s1_response,
         s2_photons,
         s3_trace,
@@ -92,7 +92,7 @@ def test_cherenkov_cone_preserved():
     lay = PMTLayout.uniform()
     sim = DetectorSim(cfg, lay, seed=8)
     track = np.array([1.0, -1.0, 2.0]) / np.sqrt(6.0)
-    from benchmarks.JunoResBench.juno_res_bench.stages.s2_photons import (
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages.s2_photons import (
         beta_from_kinetic,
     )
     theta_c = np.degrees(np.arccos(1.0 / (cfg.ls_refractive_index

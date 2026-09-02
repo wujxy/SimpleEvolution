@@ -10,13 +10,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from benchmarks.JunoResBench.juno_res_bench.config import DetectorConfig
-from benchmarks.JunoResBench.juno_res_bench.detector import DetectorSim
-from benchmarks.JunoResBench.juno_res_bench.geometry import (
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.config import DetectorConfig
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.detector import DetectorSim
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import (
     coverage_fraction,
     PMTLayout,
 )
-from benchmarks.JunoResBench.juno_res_bench.stages.s2_photons import (
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages.s2_photons import (
     beta_from_kinetic,
 )
 

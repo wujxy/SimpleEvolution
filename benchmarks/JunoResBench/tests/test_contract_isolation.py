@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,3 +44,29 @@ def test_readme_names_two_tier_tasks_as_active_benchmarks():
 
     assert "tasks/electron_single_site" in readme
     assert "tasks/ibd_positron_multisite" in readme
+
+
+def test_legacy_junoresbench_assets_are_not_tracked():
+    project = ROOT.parents[1]
+    tracked = subprocess.check_output(
+        ["git", "ls-files"], cwd=project, text=True
+    ).splitlines()
+    legacy_prefixes = (
+        "benchmarks/JunoResBench/data/",
+        "benchmarks/JunoResBench/blind_task_",
+        "benchmarks/JunoResBench/blind_truth_",
+        "benchmarks/JunoResBench/whitebox_task_",
+        "benchmarks/JunoResBench/juno_res_bench/",
+        "benchmarks/JunoResBench/task_v2/",
+        "examples/junoresbench_full_opt/",
+        "examples/junoresbench_full_std_opt/",
+        "examples/junoresbench_static_opt/",
+        "examples/junoresbench_wb_opt/",
+        "singlenode/specs/jrb_full_",
+        "singlenode/specs/jrb_static_",
+        "singlenode/specs/jrb_wb_",
+        "scripts/replay_jrb_wb.py",
+        "scripts/fig_jrb_wb_final.py",
+    )
+    leaked = [path for path in tracked if path.startswith(legacy_prefixes)]
+    assert not leaked, "legacy JunoResBench assets remain tracked: " + str(leaked[:5])

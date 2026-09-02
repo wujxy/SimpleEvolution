@@ -10,18 +10,18 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from benchmarks.JunoResBench.juno_res_bench.config import DetectorConfig
-from benchmarks.JunoResBench.juno_res_bench.detector import DetectorSim
-from benchmarks.JunoResBench.juno_res_bench.geometry import PMTLayout
-from benchmarks.JunoResBench.juno_res_bench.stages.s1_response import (
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.config import DetectorConfig
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.detector import DetectorSim
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import PMTLayout
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages.s1_response import (
     run_s1,
 )
-from benchmarks.JunoResBench.juno_res_bench.truth import (
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import (
     DEPOSITION_KINDS,
     EventInput,
     ParticleType,
 )
-from benchmarks.JunoResBench.juno_res_bench.stopping_power import birks_visible_mev
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stopping_power import birks_visible_mev
 
 
 def test_positron_primary_is_a_local_track():
@@ -131,7 +131,7 @@ def test_gamma_chain():
     print(f"ok  gamma escape vs radius; mean steps @1 MeV = {np.mean(steps):.1f}")
 
     # mean free path: with the PE branch off, lambda = 1/(n_e * sigma_KN)
-    from benchmarks.JunoResBench.juno_res_bench.stages.s1_particles import (
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages.s1_particles import (
         gamma_mfp_m,
         sigma_kn_total,
     )

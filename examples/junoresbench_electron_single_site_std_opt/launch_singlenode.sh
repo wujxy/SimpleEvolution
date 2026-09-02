@@ -2,13 +2,13 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
-WB="$REPO_ROOT/examples/junoresbench_wb_opt"
+PY_RUNTIME="$REPO_ROOT/examples/junoresbench_python_runtime"
 
 ARM=${1:?usage: launch_singlenode.sh scientist|coding RUN_DIR}
 RUN_DIR=${2:?usage: launch_singlenode.sh scientist|coding RUN_DIR}
 
 mkdir -p "$RUN_DIR/home/.local/lib/python3.9"
-cp -a "$WB/pyuser/lib/python3.9/site-packages" \
+cp -a "$PY_RUNTIME/pyuser/lib/python3.9/site-packages" \
     "$RUN_DIR/home/.local/lib/python3.9/"
 
 DEFAULT_JRB_MOUNT="/home/wujxy/mnt/lustrefs_juno26/users/lidian/jrb_v2/production/electron_single_site/release/public:/data/jrb/electron_single_site_public"

@@ -8,13 +8,13 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from benchmarks.JunoResBench.juno_res_bench.sparse_waveforms import (
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.sparse_waveforms import (
     SparseSplitWriter,
     SparseSplit,
     encode_event,
     write_sparse_split,
 )
-from benchmarks.JunoResBench.juno_res_bench.split_io import load_split
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.split_io import load_split
 
 
 def _waveforms():

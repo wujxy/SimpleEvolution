@@ -11,18 +11,18 @@ run/
 *.log
 *.sif
 SimpleLoop/
-# jrb full-readout packages: multi-GB npz stay on disk only — regenerable
-# from the MANIFEST seed (sha256 recorded there for tamper detection)
-benchmarks/JunoResBench/data/jrb_electron_static/
+# Legacy local JunoResBench products may remain on disk, but must never upload.
+benchmarks/JunoResBench/data/
 benchmarks/JunoResBench/blind_task_electron_static/
 benchmarks/JunoResBench/blind_truth_electron_static/
 benchmarks/JunoResBench/whitebox_task_electron_static/
-
-# jrb full-readout (electron_full) variants: same policy as _static
-benchmarks/JunoResBench/data/jrb_electron_full/
 benchmarks/JunoResBench/blind_task_electron_full/
 benchmarks/JunoResBench/blind_truth_electron_full/
 benchmarks/JunoResBench/whitebox_task_electron_full/
+examples/junoresbench_full_opt/
+examples/junoresbench_full_std_opt/
+examples/junoresbench_static_opt/
+examples/junoresbench_wb_opt/
 
 # Mounted JunoResBench release views: small package plus external-data symlinks.
 benchmarks/JunoResBench/runtime/
