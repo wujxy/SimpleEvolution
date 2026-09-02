@@ -41,6 +41,11 @@ _SEARCH_MAX_RESULTS = 200
 _SEARCH_MATCHES_PER_FILE = 50
 _SEARCH_FILE_BYTE_CAP = 2_000_000
 
+# Concurrent background bash jobs: the PI's own audits run detached
+# while it keeps thinking; the cap keeps a forgotten job from piling
+# up behind the attention that must eventually read them.
+_BACKGROUND_JOBS_MAX = 4
+
 
 class LocalWorld:
     """bash / read_file / write_file over the lived-in filesystem."""
@@ -83,6 +88,9 @@ class LocalWorld:
         self.timeout_ceiling = int(
             timeout_ceiling or _BASH_TIMEOUT_CEILING)
         self.search_budget_seconds = float(search_budget_seconds)
+        # background bash registry: job_id -> {proc, log, command, ...}
+        self._jobs: dict[str, dict] = {}
+        self._job_counter = 0
         self.cap_chars = cap_chars
         self.last_workdir = str(self.work)
         self.git_env = self._git_env()
@@ -213,8 +221,9 @@ class LocalWorld:
             self.last_workdir = str(host)
         timeout = action.get("timeout_seconds") or self.timeout_seconds
         timeout = max(1, min(int(timeout), self.timeout_ceiling))
-        env = dict(os.environ)
-        env.update(self.git_env)
+        if action.get("background"):
+            return self._bash_background(command, timeout)
+        env = self._bash_env()
         try:
             proc = subprocess.Popen(
                 ["bash", "-c", command],
@@ -251,18 +260,7 @@ class LocalWorld:
             )
         truncated = len(output) > self.cap_chars
         if truncated:
-            # head and tail both survive: the verdict of a build, gate
-            # suite, or eval lives at the END (EVAL_RESULT=ok, the
-            # compile error, the pytest summary) — head-only truncation
-            # kept the preamble and dropped exactly what is acted on
-            head = self.cap_chars // 2
-            dropped = len(output) - self.cap_chars
-            output = (
-                output[:head]
-                + f"\n[... {dropped} chars dropped — head and tail "
-                  "kept ...]\n"
-                + output[-(self.cap_chars - head):]
-            )
+            output = self._fit_cap(output)
         return {
             "ok": not timed_out and returncode == 0,
             "returncode": returncode,
@@ -272,6 +270,117 @@ class LocalWorld:
             # again would cut off exactly the tail it just preserved
             "output": output,
         }
+
+    def _fit_cap(self, output: str) -> str:
+        """Head and tail both survive: the verdict of a build, gate
+        suite, or eval lives at the END (EVAL_RESULT=ok, the compile
+        error, the pytest summary) — head-only truncation kept the
+        preamble and dropped exactly what is acted on."""
+        head = self.cap_chars // 2
+        dropped = len(output) - self.cap_chars
+        return (
+            output[:head]
+            + f"\n[... {dropped} chars dropped — head and tail "
+              "kept ...]\n"
+            + output[-(self.cap_chars - head):]
+        )
+
+    def _bash_env(self) -> dict:
+        env = dict(os.environ)
+        env.update(self.git_env)
+        return env
+
+    # -- background bash ------------------------------------------------
+    # A long PI-run audit (the full eval, a from-zero build) no longer
+    # freezes cognition: spawn, hand back a handle, keep thinking. The
+    # finished result arrives as its own observation at the next turn
+    # boundary — the same mailbox seat completions ride.
+
+    def _bash_background(self, command: str, timeout: int) -> dict:
+        if len(self._jobs) >= _BACKGROUND_JOBS_MAX:
+            running = ", ".join(sorted(self._jobs))
+            return {
+                "ok": False,
+                "error": f"{_BACKGROUND_JOBS_MAX} background jobs are "
+                         f"already running ({running}); let one finish "
+                         "first",
+            }
+        self._job_counter += 1
+        job_id = f"bashjob-{self._job_counter:03d}"
+        log = self.scratch / "jobs" / f"{job_id}.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with log.open("wb") as sink:
+                proc = subprocess.Popen(
+                    ["bash", "-c", command],
+                    cwd=self.last_workdir,
+                    env=self._bash_env(),
+                    stdout=sink,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+        except OSError as exc:
+            return {"ok": False, "error": f"failed to start: {exc}"}
+        self._jobs[job_id] = {
+            "proc": proc, "log": log, "command": command,
+            "timeout": timeout,
+            "deadline": time.monotonic() + timeout,
+        }
+        return {
+            "ok": True, "background": True, "job_id": job_id,
+            "timeout_seconds": timeout,
+            "note": "running detached — the finished result (output "
+                    "head+tail, exit code) arrives as its own "
+                    "observation at your next turn boundary",
+        }
+
+    def poll_bash_jobs(self) -> list[dict]:
+        """Finished background jobs, exactly once each; a job past its
+        budget is killed and reported timed out."""
+        results: list[dict] = []
+        for job_id, job in list(self._jobs.items()):
+            proc = job["proc"]
+            rc = proc.poll()
+            timed_out = False
+            if rc is None:
+                if time.monotonic() < job["deadline"]:
+                    continue
+                timed_out = True
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
+                rc = proc.returncode
+            try:
+                output = job["log"].read_text(
+                    encoding="utf-8", errors="replace")
+            except OSError:
+                output = ""
+            truncated = len(output) > self.cap_chars
+            if truncated:
+                output = self._fit_cap(output)
+            if timed_out:
+                output += (
+                    f"\n[timeout] the background command was killed at "
+                    f"its {job['timeout']}s budget; declare "
+                    "timeout_seconds if it genuinely needs longer "
+                    f"(ceiling {self.timeout_ceiling}s)"
+                )
+            results.append({
+                "ok": (not timed_out) and rc == 0,
+                "job_id": job_id,
+                "returncode": rc,
+                "timed_out": timed_out,
+                "truncated": truncated,
+                "command": job["command"][:200],
+                "output": output,
+            })
+            del self._jobs[job_id]
+        return results
 
     # -- bounded searchers ---------------------------------------------
     # The economics are the tool, not the caller's discipline: a scan

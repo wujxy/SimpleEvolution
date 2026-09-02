@@ -126,6 +126,11 @@ class StdlibChatModel(_RetryChatModel):
             # Native tool calling replaces the json_object guard entirely.
             body["tools"] = tools
             body["tool_choice"] = "auto"
+            # independent calls belong in one reply; the runtime executes
+            # the batch and returns all results as one continuation
+            # (live-checked: the endpoint honors the flag and emits
+            # multiple distinct calls in a single reply)
+            body["parallel_tool_calls"] = True
         elif json_object:
             body["response_format"] = {"type": "json_object"}
         if self.reasoning_effort:

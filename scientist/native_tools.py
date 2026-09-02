@@ -72,6 +72,18 @@ BASH_TOOL = _fn(
                            "hard ceiling, for genuinely heavyweight runs: "
                            "full builds, gate suites, benchmark campaigns.",
         },
+        "background": {
+            "type": "boolean",
+            "description": "true = start the command and get a handle "
+                           "back at once; keep thinking. The finished "
+                           "result (output head+tail, exit code) arrives "
+                           "as its own observation at your next turn "
+                           "boundary. For long audits you would otherwise "
+                           "sit through — a full eval, a from-zero build. "
+                           "The job shares the workspace: hold off on a "
+                           "second build into the same tree while it "
+                           "runs.",
+        },
     },
     ["command"],
 )

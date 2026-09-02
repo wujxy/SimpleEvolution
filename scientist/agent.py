@@ -16,9 +16,16 @@ carry over verbatim — one behavioral lineage, a new owner.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor  # noqa: F401
+from concurrent.futures import ThreadPoolExecutor
+
+# One tree, one writer at a time: bash and write_file share the world's
+# filesystem (two builds into one build dir are one corrupted build).
+# The record appends are serialized on their own, cheaper lock.
+_WORLD_TREE_LOCK = threading.Lock()
+_RECORD_LOCK = threading.Lock()
 
 
 from .native_tools import (
@@ -556,35 +563,66 @@ def _run_actions(actions: list[dict], *, world, assistant,
                  ledger) -> dict[int, dict]:
     """Execute one turn's tool actions; returns ``id(action) -> observation``.
 
-    Sequential: seat launches return acknowledgments immediately (the
-    engagements run on their own), a reviewer call blocks by design, and
-    everything else is in-world I/O. There is no standing state to keep
-    — the engagements live in their directories."""
+    Independent calls run concurrently — one slow read must not wait
+    behind its siblings, and the model said they were independent when
+    it batched them. Two rules keep that safe: bash and write_file
+    share one tree and serialize on a lock (two builds in one dir are
+    one build, corrupted); the record appends serialize on another.
+    Seat launches return acknowledgments immediately (the engagements
+    run on their own), a reviewer call blocks by design."""
     seat_names = set(ROLE_NAMES) | {"continue_engagement"}
-    results: dict[int, dict] = {}
-    for action in actions:
+
+    def _one(action: dict) -> dict:
         name = action.get("action")
         if name in NATIVE_TERMINAL_ACTIONS:
-            results[id(action)] = {
+            return {
                 "ok": False,
                 "error": "terminal actions are sent ALONE, never "
                          "alongside other calls; re-send it as your "
                          "only call",
             }
-        elif "_arguments_raw" in action:
-            results[id(action)] = {
+        if "_arguments_raw" in action:
+            return {
                 "ok": False,
                 "error": "tool arguments were not valid JSON: "
                          f"{action['_arguments_raw'][:200]}",
             }
-        else:
-            results[id(action)] = dispatch_action(
-                action, world=world, assistant=assistant, ledger=ledger)
+        if name in ("bash", "write_file"):
+            with _WORLD_TREE_LOCK:
+                return dispatch_action(
+                    action, world=world, assistant=assistant,
+                    ledger=ledger)
+        if name in ("note", "remember", "revise_research_state"):
+            with _RECORD_LOCK:
+                return dispatch_action(
+                    action, world=world, assistant=assistant,
+                    ledger=ledger)
+        return dispatch_action(
+            action, world=world, assistant=assistant, ledger=ledger)
+
+    if len(actions) == 1:
+        outcomes = [_one(actions[0])]
+    else:
+        with ThreadPoolExecutor(
+                max_workers=min(len(actions), 8)) as pool:
+            outcomes = list(pool.map(_one, actions))
+    results = {id(a): outcome for a, outcome in zip(actions, outcomes)}
     return {
         id(a): (_seat_observation(results[id(a)])
                 if a.get("action") in seat_names else results[id(a)])
         for a in actions}
 
+
+
+def _background_job_message(job: dict) -> str:
+    """One finished background bash, as its own observation."""
+    verdict = "TIMED OUT" if job.get("timed_out") else (
+        "ok" if job.get("ok") else f"exit {job.get('returncode')}")
+    return (
+        f"[background bash | {job.get('job_id')} | {verdict}]\n"
+        f"command: {job.get('command', '')}\n"
+        f"{job.get('output', '')}"
+    )
 
 
 def _collaborator_report_message(result: dict) -> str:
@@ -737,6 +775,11 @@ def run_episode(
                          f"{report.get('status')})")
                     _emit({"role": "user",
                            "content": _collaborator_report_message(report)})
+            for job in world.poll_bash_jobs():
+                _log(f"step {step}: background bash finished "
+                     f"({job.get('job_id')}, rc={job.get('returncode')})")
+                _emit({"role": "user",
+                       "content": _background_job_message(job)})
 
             _log(f"step {step}/{steps_budget}: thinking")
             reply = model.complete(
