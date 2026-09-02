@@ -102,11 +102,14 @@ world_generator/condor/run_generate.sh
 ```
 
 在共享文件系统上设置 `JRB_REPO_ROOT`，确认每个 `jobs.tsv` 输出目录为空后，
-执行 `condor_submit generate.submit`。默认 release 起始统计量为：
+执行 `condor_submit generate.submit`。设计时的默认 release 起始统计量为：
 
 - 单电子：每个 probe 能点 1000，continuous controls 6400；
 - 正电子：每个 probe 能点 10000，continuous controls 6400；
 - 两者 calibration 均为每能量/部署点 20 事例。
+
+本次电子 release 因共享盘容量约束，将单电子 probe 调整为每能点 200 事例；
+该变化只降低统计精度，不改变任务定义、能量网格或 3.0% 验收目标。
 
 生成结束后必须在同一集群运行私有 `validate_release.py`，以 public baseline、
 私有 reviewed reference 和独立 evaluator 产生 release JSON。该 JSON 连同
@@ -128,3 +131,56 @@ baseline/reference 得分和 bootstrap 误差必须由 HTCondor release JSON 补
 
 产生子的物理效应、受控近似和 1 MeV 分辨率预算另见
 [产生子物理与分辨率预算](generator_physics_and_resolution_budget.md)。
+
+## 9. 2026-09-02 单电子 release 实况
+
+当前冻结 release 位于外部共享文件系统，不进入 Git。公开开发集共 9680 个事例：
+
+- 1--10 MeV 十个 probe 点各 200 个，共 2000 个；
+- 连续能量 control 7680 个；
+- 顶点质量门槛为 `0.54 m`；
+- 输出为 `E_rec,x_rec,y_rec,z_rec`，本 release 不评价 t0。
+
+private truth 的发布前诊断得到：
+
+| 检查 | 本次结果 | 结论 |
+|---|---:|---|
+| 事例数 / 输运步数 | 9680 / 1,060,415 | 每事例为多步沉积 |
+| 最大能量闭合误差 | `8.88e-15 MeV` | 远低于 `1e-8 MeV` 门槛 |
+| `<50 keV` 局域可见比例均值 | `0.88299` | 明显低能下压 |
+| `0.5--2 MeV` 局域可见比例均值 | `0.98224` | 与低能区有清晰分离 |
+| 1 MeV 平均 `E_vis/E_true` | `0.97518` | 与局域 Birks 预算一致 |
+
+这些量只验证隐藏世界的粒子输运、quenching 和人口构成，不等价于重建性能。
+完整 baseline 或最终验收仍需读取大体积波形；本次开发设备没有执行该步骤。
+
+## 10. Research world 与发行边界
+
+Coding agent 与 Scientist 使用同一个版本化模板：
+
+```text
+examples/junoresbench_electron_single_site_std_opt/
+```
+
+两者看到完全相同的 `/work` 和 public-only 数据。只有 `src/` 可写；任务说明、
+evaluator、bench 脚本和数据均只读。宿主只把 `release/public` 映射到
+`/data/jrb/electron_single_site_public:ro`，release 根、private truth 和
+产生子均不进入 agent 容器。
+
+初始 baseline 顺序读取稀疏 ROI，积分负脉冲电荷，通过公开 calibration 求能量
+比例，并用部署点拟合 charge-centroid 的仿射顶点修正。它只用于提供可运行起点，
+不代表达到 3.0%。同一源码版本的 verify/bench 通过源码哈希共享 `/scratch` 中的
+预测，避免无意义地连续读取两遍约 100 GB 的开发波形。
+
+本次 release 专属图保存在 `figures/electron_single_site_v2/`。其中总路径长度与
+初始能量的相关系数为 `0.99914`，输运步数相关系数为 `0.88152`。这说明逐步
+沉积和低能 quenching 已真实存在，但电子连续慢化仍接近确定性 CSDA 曲线；它是
+当前基础档的显式简化，也提示未来若要继续提高任务机制复杂度，应优先加入可验证
+的径迹/次级产生涨落，而不是人为增加接口或隐藏规则。
+
+## 11. 当前未完成项
+
+- 正电子多点档尚未在集群生成 release；
+- 单电子完整 public baseline、private reviewed reference 和 bootstrap 边界尚未跑；
+- 当前 Codex 所在 user namespace 无法再次嵌套 Apptainer，因此实际 mount smoke
+  需从普通外层 shell 执行；静态挂载参数、权限契约和小型端到端 solver 已测试。

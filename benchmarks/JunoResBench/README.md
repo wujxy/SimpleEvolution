@@ -1,211 +1,57 @@
-# JunoResBench — JUNO-like energy/vertex resolution benchmark
+# JunoResBench
 
-> **Active benchmark — isolated two-tier tasks.**
-> [`tasks/electron_single_site`](tasks/electron_single_site) reconstructs
-> single-electron energy and vertex; [`tasks/ibd_positron_multisite`](tasks/ibd_positron_multisite)
-> reconstructs IBD-like positron visible energy. Both use one hidden world,
-> but their generator, dataset and evaluator code are separate. Generate only
-> on the designated batch cluster through `world_generator/condor/`; see the
-> [two-tier design report](docs/JunoResBench_two_tier_design_report.md).
-> The former v1 and coupled v2 files below are archival evidence, not active
-> generation or evaluation entry points.
+JunoResBench 是一个 JUNO-like 稀疏 PMT 波形重建 benchmark。当前版本只认
+`world_generator/`、`tasks/` 和外部 release 数据三类彼此独立的组成部分。
 
-Toy detector MC benchmark: given a real event `(x, y, z, E_true, t0)`,
-generate per-PMT waveforms through the full forward chain
+## 当前任务
 
-```
-E_true → photon production → N_pe → PMT response → waveform
-```
+| 任务 | 输入 | 输出 | 验收 |
+|---|---|---|---|
+| [`tasks/electron_single_site`](tasks/electron_single_site) | 1--10 MeV 单电子稀疏波形 | `E_rec,x_rec,y_rec,z_rec` | `R_1MeV <= 3.0%` 且 1 MeV 顶点 RMS 不超过冻结门槛 |
+| [`tasks/ibd_positron_multisite`](tasks/ibd_positron_multisite) | 正电子径迹与两条 511 keV gamma 的多点波形 | `E_rec` | `R_1MeV <= 3.0%` |
 
-The agent's task is the inverse chain:
+当前只生成了单电子 release。由于磁盘约束，十个 probe 能点各有 200 个事例，
+另有 7680 个连续 control。该 release 不评价 t0。
 
-```
-waveform → hit reconstruction → Npe estimation → energy / vertex / t0 reconstruction
+## 三方隔离
+
+```text
+world_generator/       私有、可执行的权威产生子
+tasks/*/dataset/       纯数据格式入口，不引用代码
+tasks/*/evaluator/     独立 reader、评分和在线隔离执行
 ```
 
-The readout window follows a **global trigger** on the summed PE rate
-(100-ns causal sliding window, 200-pe threshold; dark noise participates),
-so waveforms are referenced to the trigger time — the event time t0 is
-scored window-relative (see `docs/effects.md` E10).
+产生子与 evaluator 不互相 import。公开 release 不包含 seed、生成参数、逐步 truth
+或产生子。Agent world 只读挂载 `release/public`，不会挂载 release 根或 private。
 
-Scored on energy resolution & linearity, vertex resolution, and timing
-resolution. This is **not** a full JUNO simulation and does not reproduce
-JUNO-SW; it is a fast, physics-motivated detector world whose dominant
-resolution-limiting effects are documented (with rationale) in
-[`docs/effects.md`](docs/effects.md).
+## 本次单电子 release
 
-## Relationship to `waverec`
-
-`../waverec` covers the bottom of the chain (`N_pe → SPE charge → waveform`):
-SPE spectrum, pulse shaping, FADC digitization, noise. JunoResBench wraps it
-and adds everything above it: photon production statistics, position-dependent
-light collection, scintillation timing, TOF, TTS, dark noise.
-
-```
-juno_res_bench/
-  __init__.py        public API (waverec snapshot re-exports)
-  config.py          DetectorConfig: LY, mu_pe(r), scint timing, TTS, dark rate
-  rng.py             per-stage RNG streams (SeedSequence.spawn)
-  truth.py           EventInput / PhotonSoA / DetectorCalibration / EventTruth
-  geometry.py        PMT layouts (Fibonacci uniform | JUNO CSV), TOF, direction grid
-  detector.py        stage pipeline orchestrator
-  stages/            s1_response .. s5_electronics (one module per stage)
-  _vendor/           frozen waverec wavegen snapshot (see PROVENANCE.md)
-scripts/
-  check_detector.py  anchor validation + throughput + determinism self-checks
-  generate_dataset.py  events -> frozen npz dataset (ragged truth layout)
-  make_figures.py    intermediate-quantity distribution plots from a dataset
-tests/
-  test_stage0.py     schema / RNG isolation / stage reproducibility smoke tests
-docs/
-  effects.md          first/second-order effects list + rationale ← read first
-  differences.md      toy MC vs JUNO-SW full MC, per stage ← read second
-  stage_design.md     per-stage design: schema, sampling, anchors, RNG
-```
-
-## Quick start
+本机运行时视图由以下命令建立；大波形不复制：
 
 ```bash
-cd benchmarks/JunoResBench
-python3 scripts/check_detector.py --layout uniform   # anchors + throughput
-python3 scripts/generate_dataset.py --events 100 --emin 1 --emax 8 \
-    --seed 20261101 --max-wf-per-event 256 --particle-type mixed \
-    --direction isotropic --out data/test.npz
-python3 scripts/make_figures.py --data data/test.npz
+python benchmarks/JunoResBench/scripts/prepare_electron_single_site_release.py \
+  --release /home/wujxy/mnt/lustrefs_juno26/users/lidian/jrb_v2/production/electron_single_site/release \
+  --output benchmarks/JunoResBench/runtime/electron_single_site
 ```
 
-`--particle-type {electron,gamma,positron,mixed}` selects the event mix
-(v1: gamma Compton chains + positron annihilation are implemented;
-`--mix 1,1,1` weights the mixed draw).
+Coding agent 和 Scientist 的共同 research world 位于：
 
-Measured performance (uniform layout, E ~ U(1,8) MeV): truth-only
-~1.4 ms/event; with waveform synthesis ~60 ms/event (~1000/min/core);
-γ/e⁺ events add a ~ms-level Compton chain in stage 1.
-Datasets store the complete truth chain — per-event
-`(E_true, E_dep, E_vis, e_escaped, e_scored, particle_type, n_steps, ...)`,
-per-deposition-step `(pos, e_dep, e_vis, t, dir, kind)` ragged arrays,
-per-PMT `(pmt_id, n_pe)` and per-PE `(t_emit, t_tof, t_rel, q_pe, pe_step)`
-ragged arrays, plus digitized `adc` rows (`uint16`) with their channel ids.
-See `docs/differences.md` §7 for the key-by-key layout.
+```text
+examples/junoresbench_electron_single_site_std_opt/
+```
 
-## Validated anchors (uniform layout, full stage-5 physics)
+初始化和启动方法见该目录的 README。两种 agent 使用同一数据、baseline、评价器、
+目标和只读边界，只有研究编排方式不同。
 
-| check | result | target |
-|---|---|---|
-| center pe @1 MeV | ~1480 | 1453 (1500 × quench 0.976 × nl 0.993) + Cherenkov |
-| E_vis/E_true @1 MeV | 0.9693 | 0.9765 × nl(1 MeV) |
-| Cherenkov fraction @1 MeV | 2.5% | ~2.5% (ly_cherenkov=500) |
-| geometric coverage | 0.757 | ~0.75 |
-| radial nonuniformity vs model | ratio 1.00 center → 0.94 @16 m | ε(r) × CE(θ) |
-| post-TOF/emission time residual | 4.03 ns | TTS 4 ⊕ scatter |
-| γ chain energy conservation | ≤1e-6 MeV | Σstep_e_dep + e_escape = E_true |
-| γ mean free path @1 MeV | 16.9 cm | ~17 cm (NIST μ/ρ × ρ) |
-| γ escape fraction @2 MeV | 0 (r≤16 m), 5.2% (r=17.5 m) | wall-proximity only |
-| e⁺/e⁻ visible scale @1 MeV | 0.995 | ~0.99 (annihilation e⁻ quench) |
-| o-Ps delayed fraction | matches 54.5%×Exp(3.08 ns) | effects.md A4 |
-| trigger latency (t_trig − t0) | ~50 ± 14 ns | causal, after first light |
-| pure-dark spurious trigger | 0/50 | >20σ below threshold |
-| window-referenced t0 spread | ~29 ns (q84−q16) | t0 task dynamic range |
-| electron bit-compat (v4 architecture) | golden digests 12/12 | lock vs drift |
-| reproducibility (same seed) | bit-exact | bit-exact |
+## 物理与发布证据
 
-## Intermediate quantities & figures
+- [双档位设计报告](docs/JunoResBench_two_tier_design_report.md)
+- [产生子物理与 1 MeV 分辨率预算](docs/generator_physics_and_resolution_budget.md)
+- [能量守恒图](figures/electron_single_site_v2/energy_deposition_closure.png)
+- [局域 quenching 图](figures/electron_single_site_v2/local_quenching.png)
+- [可见能响应图](figures/electron_single_site_v2/energy_response.png)
+- [电子径迹拓扑图](figures/electron_single_site_v2/track_topology.png)
+- [probe/control 人口图](figures/electron_single_site_v2/probe_population.png)
 
-Every dataset saves the full truth chain — per event
-`(E_true, E_dep, E_vis, n_gamma, n_pe_total)`, per PMT
-`(n_pe, hit times, spe charges)`, and per PE `(t_emit, t_hit, q)` — so all
-intermediate distributions can be inspected directly from the npz (see
-`docs/differences.md` §7).
-
-Two figure families:
-
-Dataset-based (`scripts/make_figures.py --data <npz>`):
-`chain_distributions.png` (E_true→…→N_pe), `stages.png` (staged chain),
-`timing.png`, `nonuniformity.png`.
-
-Per-stage effect views (`scripts/make_stage_figures.py`, generated directly
-from the detector, one figure per forward-model stage):
-- `stage1.png` — E_vis/E_true: Birks + low-E nonlinearity curve; v1
-  per-particle quenching response (e⁻/γ/e⁺ ⟨E_vis⟩/E_ref vs E)
-- `stage2.png` — N_γ fluctuation vs √N, 4-component emission time, Cherenkov fraction vs E
-- `stage3.png` — A_proj/d² weight pattern, Cherenkov cone in arrivals, scatter timing spread
-- `stage4.png` — CE(θ) suppression vs incidence angle, per-PMT PDE recovery (corr 0.96), yield anchor
-- `stage5.png` — clean vs dark+afterpulse waveforms, per-PMT time-offset residuals
-
-Per-link chain figures (`scripts/make_chain_figures.py`, one PNG per chain
-link E_true→N_γ→N_pe→Q_PMT→waveform, plus trace comparisons from
-`scripts/make_trace_figures.py` and `scripts/make_hit_time_figure.py`):
-- `chain_s1_etru.png` — E_dep/E_vis ratio curves (deterministic e branch)
-- `chain_s2_pull.png` — N_γ Poisson pull check + Cherenkov fraction
-- `chain_s4_pe_map.png` — single-event PE sky map (Mollweide, trace)
-- `chain_s4_npe_vs_e.png` — N_pe linearity + σ/μ vs thinning prediction
-- `chain_s4_pmt_hist.png` — per-PMT PE counts vs Poisson reference
-- `chain_s4_efficiency.png` — realized N_pe/N_γ vs radius, fast vs trace
-- `chain_s5_spe.png` — SPE charge spectrum, 1/2/3 pe sums
-- `chain_s5_q_vs_npe.png` — channel charge vs true PE count + σ_Q/Q
-- `chain_s5_gain.png` — gain-spread broadening of channel charge
-- `chain_s5_waveforms.png` — example waveforms with true PE times
-- `chain_s5_timing.png` — leading-edge vs true hit-time fidelity
-- `chain_s5_dark_ap.png` — afterpulse charge tail + dark-only channels
-- `chain_s5_window.png` — PE time distribution vs 1 µs window + truncation
-- `chain_anatomy.png` — one-event anatomy: sky map, hit times, occupancy, waveform
-- `trace_tail.png`, `trace_spectrum.png`, `hit_time_by_type.png` — trace-optics views
-
-## Design constraints
-
-- No Geant4 optical tracking: optical transport is folded into an analytic
-  collection-efficiency function `ε(r, cosθ)`.
-- Single PMT type (NNVT MCP parameters).
-- Fast batch generation (≫1 kHz/core) for agent evaluation.
-
-## Status
-
-**All stages (0-6) complete**; the **v1 particle upgrade** adds gamma
-(Compton chain, multi-point deposition, escape) and positron
-(annihilation + o-Ps) branches — the electron path is bit-identical to
-v0 (golden-digest locked in `tests/test_stage0.py`).
-
-Dual-fidelity optics mode: `optics_mode="fast"` (analytic weights, scans)
-and `optics_mode="trace"` (per-photon transport: wavelength-dependent
-absorption + re-emission red shift + Rayleigh scattering + ESR recycling,
-~19 ms/event; see `docs/trace_design.md`). The trace mode reveals the fast
-mode's folded scatter-timing approximation under-represents the propagation
-tail (mean TOF 141.6 ns vs 96.2 ns straight-line) — frozen benchmark
-datasets use trace mode.
-
-Frozen benchmark packages (trigger architecture, `optics_mode="trace"`;
-`scripts/make_benchmark.py --name <pkg>` writes `data/jrb_<pkg>.npz` +
-`blind_task_<pkg>/` (train/val truth-visible, test adc-only) against
-private `blind_truth_<pkg>/`):
-
-- **`electron`** — electron-only, the base task: waveforms → E, vertex, t0.
-- **`mixed`** — electron/gamma/positron equal thirds; train/val carry
-  particle-type labels (type-conditional calibration is the task).
-
-600 events each, split 240/120/240, isotropic directions, per-event
-t0 ~ U(0, 1000) ns. Seeds are 60-bit random values (see MANIFEST). Prediction
-contract: npz with
-`E_rec, x_rec, y_rec, z_rec, t0_rec` (t0 measured from window start);
-score via `scripts/evaluate.py`.
-
-**White-box variant** (`scripts/make_whitebox.py --name <pkg>`, built for
-`electron`): byte-identical data files, scorer and metrics as the blind
-package, plus the complete numpy-only forward model inside the package
-(`juno_res_bench/` + a package-local `generate_dataset.py`) — the agent may
-read, run and modify the generator (unlimited self-generated labeled data,
-forward fits). Blind vs white-box scores sit on the same test events, so the
-difference isolates the value of understanding the forward model.
-
-Scoring conventions: energy resolution = (q84−q16)/2 of E_rec/E_ref
-(quantile width; γ escape tails count), E_ref = e_true + 1.022 MeV for
-positrons (JUNO convention), bias = median−1, vertex = 68% quantile of
-|r_rec − r_true|, timing = (q84−q16)/2 of t0_rec − t0_ref with
-t0_ref = evt_t0 − (evt_t_trigger − 300 ns). On mixed packages metrics are
-reported overall AND per particle type. The blind-package meta strips the
-generation seed.
-
-Baseline to beat: `baselines/charge_centroid.py` (charge-sum energy with
-train-calibrated scale, charge-centroid vertex, leading-edge-minus-TOF t0).
-Reference numbers live in each `blind_truth_<pkg>/baseline_test_score.json`.
-Trace-mode comparison figures: `figures/trace_tail.png`,
-`figures/trace_spectrum.png` (`scripts/make_trace_figures.py`).
+图由 `scripts/plot_electron_single_site_release.py` 从冻结 truth 生成，不打开稀疏
+波形样本文件，也不属于 agent 可见的任务包。
