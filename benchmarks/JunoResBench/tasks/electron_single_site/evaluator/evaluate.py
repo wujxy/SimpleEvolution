@@ -102,6 +102,27 @@ def run_online(submission, private_root, public_root):
         stderr.close()
 
 
+def score_predictions(truth, prediction, config):
+    """Route frozen probe and continuous-control populations to scoring."""
+    role = np.asarray(truth["evt_sample_role"])
+    prediction = np.asarray(prediction, dtype=float)
+    if prediction.shape != (len(role), 4):
+        raise ValueError("prediction must have shape [event,4]")
+    probe = role == 0
+    control = role == 1
+    if not probe.any() or not control.any() or np.any(~(probe | control)):
+        raise ValueError("evt_sample_role must contain only probe=0 and control=1")
+    return score_electron(
+        np.asarray(truth["evt_e_true"])[probe],
+        prediction[probe, 0],
+        np.asarray(truth["evt_vertex_m"])[probe],
+        prediction[probe, 1:],
+        np.asarray(truth["evt_e_vis"])[control],
+        prediction[control, 0],
+        config["vertex_threshold_m"],
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--private", required=True)
@@ -111,7 +132,7 @@ def main():
     prediction = run_online(args.submission, args.private, args.public)
     with np.load(Path(args.private) / "truth.npz") as truth:
         config = json.loads((Path(args.public) / "evaluation_config.json").read_text())
-        result = score_electron(truth["evt_e_true"], prediction[:, 0], truth["evt_vertex_m"], prediction[:, 1:], truth["evt_e_vis"], prediction[:, 0], config["vertex_threshold_m"])
+        result = score_predictions(truth, prediction, config)
     print(json.dumps(result, indent=2))
 
 

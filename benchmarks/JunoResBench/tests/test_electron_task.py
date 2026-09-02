@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tasks" / "electron_single_site" / "evaluator"))
 
 from scoring import parse_prediction, score_electron  # noqa: E402
+from evaluate import score_predictions  # noqa: E402
 from benchmarks.JunoResBench.world_generator.oracle_vertex import freeze_threshold
 from benchmarks.JunoResBench.world_generator.oracle_vertex import charge_pattern_vertex_rms
 from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.config import DetectorConfig
@@ -66,3 +67,28 @@ def test_charge_pattern_oracle_has_a_finite_positive_vertex_limit():
 
     assert np.isfinite(rms)
     assert rms > 0.0
+
+
+def test_online_evaluator_splits_probe_and_control_roles():
+    probe, reconstructed, controls = _energy_fixture()
+    rng = np.random.default_rng(11)
+    control_rec = controls + rng.normal(0.0, 0.01, len(controls))
+    role = np.concatenate(
+        (np.zeros(len(probe), dtype=np.int8), np.ones(len(controls), dtype=np.int8))
+    )
+    truth = {
+        "evt_sample_role": role,
+        "evt_e_true": np.concatenate((probe, controls)),
+        "evt_e_vis": np.concatenate((probe, controls)),
+        "evt_vertex_m": np.zeros((len(role), 3)),
+    }
+    prediction = np.column_stack(
+        (
+            np.concatenate((reconstructed, control_rec)),
+            np.zeros((len(role), 3)),
+        )
+    )
+
+    score = score_predictions(truth, prediction, {"vertex_threshold_m": 0.54})
+
+    assert score["valid"] is True
