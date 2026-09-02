@@ -775,11 +775,13 @@ def run_episode(
                          f"{report.get('status')})")
                     _emit({"role": "user",
                            "content": _collaborator_report_message(report)})
-            for job in world.poll_bash_jobs():
-                _log(f"step {step}: background bash finished "
-                     f"({job.get('job_id')}, rc={job.get('returncode')})")
-                _emit({"role": "user",
-                       "content": _background_job_message(job)})
+            if world is not None:
+                for job in world.poll_bash_jobs():
+                    _log(f"step {step}: background bash finished "
+                         f"({job.get('job_id')}, "
+                         f"rc={job.get('returncode')})")
+                    _emit({"role": "user",
+                           "content": _background_job_message(job)})
 
             _log(f"step {step}/{steps_budget}: thinking")
             reply = model.complete(
