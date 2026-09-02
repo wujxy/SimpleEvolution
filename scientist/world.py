@@ -178,7 +178,15 @@ class LocalWorld:
         if host.is_dir():
             return {"ok": False, "error": f"path is a directory: {path}"}
         host.parent.mkdir(parents=True, exist_ok=True)
-        host.write_text(content, encoding="utf-8")
+        # atomic replace: a write that dies mid-way must leave either
+        # the old file or none — never a half-written source in a tree
+        # whose git record IS the lab notebook
+        tmp = host.with_name(f".{host.name}.partial-write")
+        try:
+            tmp.write_text(content, encoding="utf-8")
+            os.replace(tmp, host)
+        finally:
+            tmp.unlink(missing_ok=True)
         return {"ok": True, "path": path, "chars": len(content)}
 
     def _bash(self, action: dict) -> dict:
@@ -242,12 +250,27 @@ class LocalWorld:
                 f"{self.timeout_ceiling}s)"
             )
         truncated = len(output) > self.cap_chars
+        if truncated:
+            # head and tail both survive: the verdict of a build, gate
+            # suite, or eval lives at the END (EVAL_RESULT=ok, the
+            # compile error, the pytest summary) — head-only truncation
+            # kept the preamble and dropped exactly what is acted on
+            head = self.cap_chars // 2
+            dropped = len(output) - self.cap_chars
+            output = (
+                output[:head]
+                + f"\n[... {dropped} chars dropped — head and tail "
+                  "kept ...]\n"
+                + output[-(self.cap_chars - head):]
+            )
         return {
             "ok": not timed_out and returncode == 0,
             "returncode": returncode,
             "timed_out": timed_out,
             "truncated": truncated,
-            "output": output[:self.cap_chars],
+            # head+tail rebuild above already fits the cap; slicing here
+            # again would cut off exactly the tail it just preserved
+            "output": output,
         }
 
     # -- bounded searchers ---------------------------------------------
@@ -264,9 +287,13 @@ class LocalWorld:
         if not isinstance(root, str) or not root.startswith("/"):
             raise ValueError(f"root must be absolute: {root!r}")
         try:
-            return self.boundary.resolve(root), True
+            resolved = self.boundary.resolve(root)
         except ValueError:
             pass  # outside work/repo/scratch — a mounted tree
+        else:
+            if not resolved.is_dir():
+                raise ValueError(f"root is not a directory: {root!r}")
+            return resolved, True
         candidate = Path(root)
         if not candidate.is_dir():
             raise ValueError(f"root does not exist: {root!r}")
