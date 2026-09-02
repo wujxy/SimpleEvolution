@@ -12,7 +12,7 @@ Implement `Submission.prepare(calibration_path, geometry_path)` once, then
 Energy is scored by a JUNO-style fitted curve and passes at
 `R_1MeV <= 3.0%`. Vertex quality is the 1-MeV
 `sqrt(mean(||r_rec-r_true||^2))` and passes at the numeric threshold in
-`evaluator/task_config.json`. Both conditions are required.
+`public/evaluation_config.json`. Both conditions are required.
 
 The evaluator sends hidden events one at a time into a mount-isolated worker;
 the private data directory and generator are not mounted.

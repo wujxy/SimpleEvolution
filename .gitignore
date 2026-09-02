@@ -23,3 +23,6 @@ benchmarks/JunoResBench/data/jrb_electron_full/
 benchmarks/JunoResBench/blind_task_electron_full/
 benchmarks/JunoResBench/blind_truth_electron_full/
 benchmarks/JunoResBench/whitebox_task_electron_full/
+
+# Mounted JunoResBench release views: small package plus external-data symlinks.
+benchmarks/JunoResBench/runtime/
