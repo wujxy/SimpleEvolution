@@ -23,6 +23,11 @@ from benchmarks.JunoResBench.world_generator.oracle_vertex import charge_pattern
 PUBLIC_METADATA = {"layout", "n_pmt", "radius_m", "sample_interval_ns", "adc_bits", "window_ns"}
 
 
+def roi_threshold_adc(wave_cfg, sigma=5.0):
+    """Return a noise-scaled integer threshold for sparse waveform storage."""
+    return int(np.ceil(float(sigma) * wave_cfg.noise_sigma_mv * 1e-3 / wave_cfg.lsb_v))
+
+
 def _metadata(config, layout, simulator):
     return {
         "seed": None,
@@ -51,7 +56,14 @@ def _simulate(population, simulator, layout, destination, public_truth):
         adc = np.asarray(event.adc, dtype=np.uint16)
         if adc.size == 0:
             adc = np.empty((0, simulator.wave_cfg.n_samples), dtype=np.uint16)
-        writer.append(encode_event(adc, event.adc_ids, simulator.wave_cfg.baseline_adc, 6, 16, 48))
+        writer.append(encode_event(
+            adc,
+            event.adc_ids,
+            simulator.wave_cfg.baseline_adc,
+            roi_threshold_adc(simulator.wave_cfg),
+            16,
+            48,
+        ))
         truth_rows["evt_e_vis"].append(event.e_vis_mev)
         truth_rows["evt_e_dep_mev"].append(event.e_dep_mev)
         truth_rows["evt_e_escape_mev"].append(event.e_escape_mev)

@@ -15,6 +15,7 @@ from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.sparse
     write_sparse_split,
 )
 from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.split_io import load_split
+from benchmarks.JunoResBench.world_generator.build_task import roi_threshold_adc
 
 
 def _waveforms():
@@ -111,3 +112,12 @@ def test_rewriting_public_split_removes_stale_truth(tmp_path):
     write_sparse_split(path, {}, [event])
 
     assert not (path / "truth.npz").exists()
+
+
+def test_roi_threshold_is_derived_from_five_sigma_electronics_noise():
+    class WaveConfig:
+        noise_sigma_mv = 0.35
+        lsb_v = 1.0 / (1 << 14)
+
+    assert roi_threshold_adc(WaveConfig()) == 29
+    assert roi_threshold_adc(WaveConfig(), sigma=4.0) == 23

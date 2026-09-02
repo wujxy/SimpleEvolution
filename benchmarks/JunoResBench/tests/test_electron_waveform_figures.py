@@ -30,7 +30,7 @@ EXPECTED = {
 }
 
 
-def _synthetic_release(root: Path):
+def _synthetic_release(root: Path, bad_roi=False, public_vertices=True):
     split = root / "public/dev"
     split.mkdir(parents=True)
     (root / "private").mkdir()
@@ -44,30 +44,46 @@ def _synthetic_release(root: Path):
     np.savez(root / "public/detector_geometry.npz", pmt_positions_m=positions)
     energies = np.tile(np.arange(1.0, 7.0), 2)
     vertices = np.column_stack((np.linspace(0, 14, n_event), np.zeros((n_event, 2))))
-    np.savez(
-        split / "truth.npz",
+    public_truth = dict(
         evt_e_true=energies,
         evt_e_vis=energies * 0.975,
-        evt_vertex_m=vertices,
         evt_sample_role=np.zeros(n_event, dtype=np.int8),
     )
+    if public_vertices:
+        public_truth["evt_vertex_m"] = vertices
+    np.savez(split / "truth.npz", **public_truth)
+    step_offsets = np.arange(0, 2 * n_event + 1, 2, dtype=np.int64)
+    step_dep = np.column_stack((np.full(n_event, 0.05), energies - 0.05)).ravel()
     np.savez(
         root / "private/truth.npz",
         evt_e_true=energies,
         evt_vertex_m=vertices,
         evt_t0_ns=np.linspace(-10, 10, n_event),
+        evt_e_escape_mev=np.zeros(n_event),
+        evt_total_energy=energies,
+        step_offsets=step_offsets,
+        step_e_dep_mev=step_dep,
+        step_e_vis_mev=step_dep * np.tile([0.80, 0.98], n_event),
+        step_kinetic_mev=np.tile([0.02, 1.0], n_event),
     )
 
     event_offsets = [0]
     sample_offsets = [0]
     pmt_ids, starts, blocks = [], [], []
     for event in range(n_event):
-        for pmt in range(4 + event % 5):
-            width = 14 + pmt % 3
+        for pmt in range(3 + int(energies[event])):
+            width = n_sample if bad_roi else 14 + pmt % 3
             pulse = np.r_[np.zeros(3), -10 * np.arange(1, 7), -10 * np.arange(5, 0, -1)]
-            block = np.pad(pulse, (0, width - len(pulse))).astype(np.int16)
-            pmt_ids.append((pmt + event) % n_pmt)
-            starts.append(25 + event + pmt)
+            if bad_roi:
+                block = np.zeros(width, dtype=np.int16)
+                block[50:50 + len(pulse)] = pulse
+            else:
+                block = np.pad(pulse, (0, width - len(pulse))).astype(np.int16)
+            pmt_id = (pmt + event) % n_pmt
+            pmt_ids.append(pmt_id)
+            starts.append(0 if bad_roi else int(
+                10 + np.linalg.norm(positions[pmt_id] - vertices[event])
+            ))
             blocks.append(block)
             sample_offsets.append(sample_offsets[-1] + width)
         event_offsets.append(len(pmt_ids))
@@ -108,6 +124,9 @@ def test_builds_bounded_waveform_audit(tmp_path):
     assert summary["waveform_samples_read"] < reader.samples.size
     assert 0 <= summary["raw_roi_start_zero_fraction"] <= 1
     assert 0 <= summary["raw_roi_near_full_window_fraction"] <= 1
+    assert np.isfinite(summary["sparse_to_stored_dense_ratio"])
+    assert np.isfinite(summary["charge_energy_correlation"])
+    assert np.isfinite(summary["time_distance_slope_ns_per_m"])
 
 
 def test_plotter_is_independent_of_generator_and_copying():
@@ -117,6 +136,16 @@ def test_plotter_is_independent_of_generator_and_copying():
     assert "world_generator" not in source
     assert "shutil" not in source
     assert "copyfile" not in source
+
+
+def test_owner_side_plotter_accepts_private_only_vertices(tmp_path):
+    release = tmp_path / "release"
+    output = tmp_path / "figures"
+    _synthetic_release(release, public_vertices=False)
+
+    paths = build_waveform_figures(release, output, sample_limit=8)
+
+    assert set(paths) == EXPECTED
 
 
 def test_rejects_invalid_sparse_offsets(tmp_path):

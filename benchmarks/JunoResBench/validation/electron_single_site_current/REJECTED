@@ -1,0 +1,1 @@
+{"task": "electron_single_site", "failures": ["roi_start_zero_fraction", "roi_near_full_window_fraction", "sparse_to_stored_dense_ratio"]}

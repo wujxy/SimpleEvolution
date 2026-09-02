@@ -245,7 +245,9 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
     geometry = _load_npz(release_root / "public/detector_geometry.npz")
     positions = np.asarray(geometry["pmt_positions_m"], float)
     energy = np.asarray(public["evt_e_true"], float)
-    vertices = np.asarray(public["evt_vertex_m"], float)
+    vertices = np.asarray(
+        public.get("evt_vertex_m", private["evt_vertex_m"]), float
+    )
     radius = np.linalg.norm(vertices, axis=1)
     if len(reader) != len(energy) or len(private["evt_t0_ns"]) != len(energy):
         raise ValueError("waveform and truth event counts differ")
@@ -366,6 +368,16 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
     all_distance = np.concatenate(distance_blocks)
     all_time = np.concatenate(time_blocks)
     all_residual = np.concatenate(residual_blocks)
+    centered_distance = np.concatenate([
+        values - values.mean() for values in distance_blocks if len(values)
+    ])
+    centered_time = np.concatenate([
+        values - values.mean() for values in time_blocks if len(values)
+    ])
+    time_distance_slope = float(
+        np.dot(centered_distance, centered_time)
+        / np.dot(centered_distance, centered_distance)
+    )
     thin = np.linspace(0, len(all_time) - 1, min(50000, len(all_time)), dtype=int)
     fig, ax = plt.subplots(figsize=(7, 4.5))
     ax.scatter(all_distance[thin], all_time[thin], s=2, alpha=0.15)
@@ -443,6 +455,12 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
         "edge_event": edge.index,
         "waveform_samples_total": int(len(reader.samples)),
         "waveform_samples_read": int(sum(item.event.samples.size for item in metrics)),
+        "sparse_to_stored_dense_ratio": float(
+            sum(item.event.samples.size for item in metrics)
+            / sum(len(item.pmt_ids) * item.event.n_samples for item in metrics)
+        ),
+        "charge_energy_correlation": float(np.corrcoef(sample_energy, total_charge)[0, 1]),
+        "time_distance_slope_ns_per_m": time_distance_slope,
         "mean_hit_pmts": float(hit_count.mean()),
         "mean_stored_pmts": float(np.mean([len(item.pmt_ids) for item in metrics])),
         "mean_integral_per_mev": float(np.mean(total_charge / sample_energy)),

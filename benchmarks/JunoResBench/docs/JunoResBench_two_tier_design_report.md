@@ -111,17 +111,18 @@ world_generator/condor/run_generate.sh
 本次电子 release 因共享盘容量约束，将单电子 probe 调整为每能点 200 事例；
 该变化只降低统计精度，不改变任务定义、能量网格或 3.0% 验收目标。
 
-生成结束后必须在同一集群运行私有 `validate_release.py`，以 public baseline、
-私有 reviewed reference 和独立 evaluator 产生 release JSON。该 JSON 连同
-私有 truth 保存，不发布到 agent 可见的公开包。
+生成结束后必须在同一集群运行私有 `validate_release.py`。它只读序列化后的
+public/private 文件，生成数值门禁、16 张人工验收图和 ACCEPTED/REJECTED 标记；
+不重新调用产生子，也不依赖尚不存在的专家重建算法。完整 validation 目录与私有
+truth 一起保存，不发布到 agent 可见的公开包。
 
 ## 8. 发布验收清单
 
 1. 私有 truth 能量守恒、低能局部 quenching、正电子两 γ 湮灭能量均通过；
 2. public/private 递归 allowlist 无可执行文件或 truth 泄漏；
 3. 固定 seed 可重生同一 truth 与 waveform hash；
-4. public baseline 未达到目标，私有 reviewed reference 达到目标；
-5. probe bootstrap 给出的 3% 边界稳定；
+4. 解析光电子统计预算支持 3% 目标；实际算法可达性明确标为 deferred；
+5. waveform charge、hit pattern 和 timing 在最终序列化数据中保留物理相关；
 6. 单电子 oracle 阈值已由实际 release 统计量生成并写入公开 config；
 7. 在发布 bundle 中运行 evaluator 时不依赖 `world_generator/` 路径。
 
@@ -181,7 +182,8 @@ evaluator、bench 脚本和数据均只读。宿主只把 `release/public` 映�
 ## 11. 当前未完成项
 
 - 正电子多点档尚未在集群生成 release；
-- 单电子完整 public baseline、private reviewed reference 和 bootstrap 边界尚未跑；
+- 单电子 baseline、专家 reference 和 score bootstrap 属于长跑后的 deferred 证据，
+  当前不作为 release 通过条件；
 - 当前 Codex 所在 user namespace 无法再次嵌套 Apptainer，因此实际 mount smoke
   需从普通外层 shell 执行；静态挂载参数、权限契约和小型端到端 solver 已测试。
 

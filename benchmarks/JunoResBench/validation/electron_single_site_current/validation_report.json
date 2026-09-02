@@ -1,0 +1,132 @@
+{
+  "deferred": [
+    "baseline_above_target",
+    "expert_reference_reaches_target",
+    "score_bootstrap_stability"
+  ],
+  "failures": [
+    "roi_start_zero_fraction",
+    "roi_near_full_window_fraction",
+    "sparse_to_stored_dense_ratio"
+  ],
+  "hygiene": {
+    "pass": true,
+    "unexpected_executables": []
+  },
+  "missing_figures": [],
+  "physics": {
+    "energy_conservation_max_error_mev": 8.881784197001252e-15,
+    "energy_conservation_pass": true,
+    "low_energy_visible_fraction": 0.8829888315952632,
+    "mid_energy_visible_fraction": 0.9822390008287234,
+    "quenching_pass": true
+  },
+  "release_ready": false,
+  "structures": {
+    "private_final": {
+      "events": 9680,
+      "pass": true,
+      "samples": 49789438677,
+      "segments": 49866113
+    },
+    "public_dev": {
+      "events": 9680,
+      "pass": true,
+      "samples": 49817589448,
+      "segments": 49893849
+    }
+  },
+  "task": "electron_single_site",
+  "waveform_gates": {
+    "charge_energy_correlation": {
+      "limit": 0.0,
+      "operator": ">",
+      "pass": true,
+      "rationale": "waveform charge must retain positive energy information",
+      "value": 0.9987355687743686
+    },
+    "roi_near_full_window_fraction": {
+      "limit": 0.05,
+      "operator": "<",
+      "pass": false,
+      "rationale": "ROI padding must not merge most channels into full windows",
+      "value": 0.997604577039574
+    },
+    "roi_start_zero_fraction": {
+      "limit": 0.2,
+      "operator": "<",
+      "pass": false,
+      "rationale": "window-start ROIs must not be noise-dominated",
+      "value": 0.950989514250457
+    },
+    "sparse_to_stored_dense_ratio": {
+      "limit": 0.35,
+      "operator": "<",
+      "pass": false,
+      "rationale": "sparse storage must materially reduce stored-channel samples",
+      "value": 0.9996983732639119
+    },
+    "time_distance_slope_ns_per_m": {
+      "limit": 0.0,
+      "operator": ">",
+      "pass": true,
+      "rationale": "within-event first-light time must increase with PMT distance",
+      "value": 7.26046215940136
+    }
+  },
+  "waveform_summary": {
+    "center_event": 55,
+    "charge_energy_correlation": 0.9987355687743686,
+    "edge_event": 2150,
+    "events_scanned": 32,
+    "events_total": 9680,
+    "mean_hit_pmts": 4702.15625,
+    "mean_integral_per_mev": 3079817.2839469025,
+    "mean_stored_pmts": 4729.5625,
+    "median_first_sample_ns": 377.5,
+    "note": "Waveforms are trigger-relative; t0 cannot be recovered from release truth without stored trigger time.",
+    "pulse_selection_threshold_adc": 30.0,
+    "raw_roi_near_full_window_fraction": 0.997604577039574,
+    "raw_roi_start_zero_fraction": 0.950989514250457,
+    "raw_roi_threshold_adc": 6.0,
+    "selected_event_indices": [
+      55,
+      2150,
+      0,
+      312,
+      624,
+      936,
+      1248,
+      1561,
+      1873,
+      2185,
+      2497,
+      2810,
+      3122,
+      3434,
+      3746,
+      4058,
+      4371,
+      4683,
+      4995,
+      5307,
+      5620,
+      5932,
+      6244,
+      6556,
+      6868,
+      7181,
+      7493,
+      7805,
+      8117,
+      8430,
+      8742,
+      9054
+    ],
+    "sparse_to_stored_dense_ratio": 0.9996983732639119,
+    "time_distance_slope_ns_per_m": 7.26046215940136,
+    "tof_residual_core_sigma_ns": 16.241777387986975,
+    "waveform_samples_read": 151300350,
+    "waveform_samples_total": 49817589448
+  }
+}

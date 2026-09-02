@@ -77,3 +77,18 @@ python benchmarks/JunoResBench/scripts/plot_electron_single_site_waveforms.py \
 本次图检发现当前 release 的 `6 ADC` ROI 阈值约等于电子学噪声的 `1.05 sigma`，
 导致绝大多数 ROI 合并成接近完整的 1000-sample 波形。物理脉冲仍清晰可见，但这
 个 release 不应作为最终稀疏题库发布；定量证据和逐图说明见设计报告第 12 节。
+
+每个新 candidate 必须运行独立验收门禁：
+
+```bash
+python benchmarks/JunoResBench/world_generator/validate_release.py \
+  --task electron_single_site \
+  --release /path/to/candidate
+```
+
+门禁从已序列化的 public/private 文件生成 `validation_report.json`、带 16 张图的
+`validation/README.md`，以及唯一的 `ACCEPTED` 或 `REJECTED` 标记。当前错误
+release 的完整拒绝报告见
+[`validation/electron_single_site_current`](validation/electron_single_site_current)。
+本阶段明确不要求 baseline 或专家算法达到 3%；这些是未来长跑后的经验性证据，
+不是当前产生子物理验收的伪前置条件。
