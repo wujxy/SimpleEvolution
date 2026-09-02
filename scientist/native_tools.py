@@ -63,9 +63,14 @@ BASH_TOOL = _fn(
         "timeout_seconds": {
             "type": "integer",
             "minimum": 1,
-            "description": "per-call override in seconds; when omitted the "
-                           "world default applies, and an explicit value "
-                           "may exceed it up to a hard 3600s ceiling",
+            "description": "per-call wall-clock budget in seconds; a "
+                           "command that outgrows it is killed and "
+                           "reported. Ordinary commands ask for none — "
+                           "they run on a short default clock, the guard "
+                           "against a cheap-looking scan that would run "
+                           "for hours. Declare a larger budget, up to the "
+                           "hard ceiling, for genuinely heavyweight runs: "
+                           "full builds, gate suites, benchmark campaigns.",
         },
     },
     ["command"],

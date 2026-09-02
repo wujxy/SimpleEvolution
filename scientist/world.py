@@ -18,11 +18,14 @@ from pathlib import Path
 
 from .research_files import PathBoundary, ResearchFiles, _WRITE_MAX_CHARS
 
-# Hard ceiling for any single bash call. The world default
-# (command_timeout_seconds) bounds only calls that do not ask for more;
-# an explicit per-call timeout may run longer — long builds, benchmark
-# campaigns — up to this cap.
-_BASH_TIMEOUT_CEILING = 3600
+# Hard ceiling for any single bash call. Undeclared commands run on a
+# short default clock (command_default_timeout_seconds) — a cheap-
+# looking scan of a mounted tree must not quietly eat the hour (live
+# twice: find /cvmfs, r4 and r8). An explicit per-call timeout may run
+# longer — long builds, benchmark campaigns — up to this cap
+# (command_timeout_seconds).
+_BASH_TIMEOUT_CEILING = 1800
+_BASH_TIMEOUT_DEFAULT = 300
 
 
 class LocalWorld:
@@ -34,8 +37,9 @@ class LocalWorld:
         work: Path,
         repo: Path,
         scratch: Path,
-        timeout_seconds: int,
-        cap_chars: int,
+        timeout_seconds: int = _BASH_TIMEOUT_DEFAULT,
+        cap_chars: int = 40000,
+        timeout_ceiling: int | None = None,
         state: Path | None = None,
     ):
         self.work = Path(work)
@@ -58,7 +62,11 @@ class LocalWorld:
             work=self.work, repo=self.repo, scratch=self.scratch,
             cap_chars=cap_chars,
         )
+        # timeout_seconds: the undeclared clock every bash call gets;
+        # timeout_ceiling: the most a declared budget may buy.
         self.timeout_seconds = timeout_seconds
+        self.timeout_ceiling = int(
+            timeout_ceiling or _BASH_TIMEOUT_CEILING)
         self.cap_chars = cap_chars
         self.last_workdir = str(self.work)
         self.git_env = self._git_env()
@@ -176,7 +184,7 @@ class LocalWorld:
                 }
             self.last_workdir = str(host)
         timeout = action.get("timeout_seconds") or self.timeout_seconds
-        timeout = max(1, min(int(timeout), _BASH_TIMEOUT_CEILING))
+        timeout = max(1, min(int(timeout), self.timeout_ceiling))
         env = dict(os.environ)
         env.update(self.git_env)
         try:
@@ -206,6 +214,13 @@ class LocalWorld:
         output = stdout or ""
         if stderr:
             output += "\n[stderr]\n" + stderr
+        if timed_out:
+            output += (
+                f"\n[timeout] the command was killed at its {timeout}s "
+                "budget; declare timeout_seconds on the bash call if it "
+                "genuinely needs longer (ceiling "
+                f"{self.timeout_ceiling}s)"
+            )
         truncated = len(output) > self.cap_chars
         return {
             "ok": not timed_out and returncode == 0,

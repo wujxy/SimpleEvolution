@@ -21,6 +21,7 @@ Spec shape (see docs/design; all keys optional unless marked):
     model{api?|model, base_url, api_key, reasoning_effort},
     assistant{command, model, effort, node_world, env{}},
     budget{steps, wall_seconds, command_timeout_seconds,
+           command_default_timeout_seconds,
            command_output_cap_chars, consult_timeout_seconds,
            work_default_minutes, distill_word_cap,
            compact_keep_messages, compact_max_chars},
@@ -122,8 +123,11 @@ def _run_probe(spec: dict, args) -> int:
     budget = dict(spec.get("budget") or {})
     world = LocalWorld(
         work=roots["work"], repo=roots["repo"], scratch=roots["scratch"],
-        timeout_seconds=int(budget.get("command_timeout_seconds", 1800)),
+        timeout_seconds=int(
+            budget.get("command_default_timeout_seconds", 300)),
         cap_chars=int(budget.get("command_output_cap_chars", 40000)),
+        timeout_ceiling=int(
+            budget.get("command_timeout_seconds", 1800)),
         state=roots["state"],
     )
     ledger = LocalLedger(world.state_dir)
@@ -192,8 +196,11 @@ def main(argv: list[str] | None = None) -> int:
 
     world = LocalWorld(
         work=roots["work"], repo=roots["repo"], scratch=roots["scratch"],
-        timeout_seconds=int(budget.get("command_timeout_seconds", 1800)),
+        timeout_seconds=int(
+            budget.get("command_default_timeout_seconds", 300)),
         cap_chars=int(budget.get("command_output_cap_chars", 40000)),
+        timeout_ceiling=int(
+            budget.get("command_timeout_seconds", 1800)),
         state=roots["state"],
     )
     ledger_root = world.state_dir
