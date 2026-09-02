@@ -115,6 +115,24 @@ node_prepare_run_dir() {
     mkdir -p "$RUN_DIR"/{scratch,snapshots,pkg,home} \
         "$RUN_DIR/scratch/claude-config"
     cp -a "$NODE_TEMPLATE" "$RUN_DIR/world"
+    # Relay hygiene (NODE_TEMPLATE = a prior run's delivered world): the
+    # copy ships the prior run's conclusion and session wire. Both must
+    # move aside — the snapshot loop reads a delivered conclusion.json
+    # as this run's exit signal (it would stop at t=0), and the CLI
+    # resumes the prior conversation whenever a wire exists with no
+    # conclusion (relay semantics is a FRESH PI inheriting the world:
+    # git history, notes, research memory — not the prior PI's
+    # continuation). Preserved, never deleted: the records ride along.
+    if [ -f "$RUN_DIR/world/.scientist/conclusion.json" ]; then
+        mv "$RUN_DIR/world/.scientist/conclusion.json" \
+           "$RUN_DIR/world/.scientist/conclusion.$(date +%m%d-%H%M%S).relay-prior.json"
+        echo "relay: prior conclusion moved aside (*.relay-prior.json)"
+    fi
+    if [ -d "$RUN_DIR/world/.scientist/session" ]; then
+        mv "$RUN_DIR/world/.scientist/session" \
+           "$RUN_DIR/world/.scientist/session.$(date +%m%d-%H%M%S).prior"
+        echo "relay: prior session moved aside (*.prior) — fresh PI, inherited records"
+    fi
     # The harness body (.scientist) lives in the world but is invisible
     # to git workflows — hygiene line written at prepare time so `git
     # status` stays clean and `stash -u` never sweeps it. Hygiene, not
