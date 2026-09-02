@@ -128,3 +128,22 @@ def test_background_message_carries_verdict_and_output(tmp_path):
     assert msg.startswith("[background bash | bashjob-001 | ok]")
     assert "command: echo hi" in msg
     assert msg.rstrip().endswith("hi")
+
+
+def test_evidence_workspace_points_at_the_real_fork(tmp_path):
+    # the ack and digest must name the fork path that actually exists;
+    # the fossil fresh- prefix sent the PI to a phantom twice in one
+    # live run — it found the real workspace only by listing scratch
+    from types import SimpleNamespace
+
+    from scientist.assistant_tools import InWorldAssistant
+
+    seat = InWorldAssistant.__new__(InWorldAssistant)
+    seat.world = SimpleNamespace(scratch=tmp_path / "scratch",
+                                 work=tmp_path / "work")
+    fork = tmp_path / "scratch" / "executor-x-001" / "world"
+    isolated = seat._evidence_envelope(
+        "executor-x-001", fork, 0.0)
+    assert isolated["workspace"] == str(fork)
+    current = seat._evidence_envelope("executor-x-002", None, 0.0)
+    assert current["workspace"] == str(tmp_path / "work")

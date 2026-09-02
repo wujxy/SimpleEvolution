@@ -760,9 +760,13 @@ class InWorldAssistant:
             "digest": (
                 f"{self.world.work}/.scientist/assistant/{call_id}/"
                 "digest.json"),
-            "workspace": (
-                f"{self.world.scratch}/fresh-{call_id}"
-                if side_dir is not None else str(self.world.work)),
+            # the real fork path (the seat's writable world, where its
+            # commits live) — a fossil `fresh-` prefix from the
+            # pre-redesign fork scheme once pointed here at a path that
+            # never existed, and the PI had to find the workspace by
+            # listing scratch (live, r9 twice)
+            "workspace": (str(side_dir) if side_dir is not None
+                          else str(self.world.work)),
             "ran_for_seconds": round(time.time() - started),
         }
 
