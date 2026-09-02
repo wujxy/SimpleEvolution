@@ -1,3 +1,13 @@
+---
+name: knowledge-gap-search
+description: >-
+  Judgment is blocked on what you don't know, or one query keeps
+  returning one kind of answer: decompose the unknown into distinct
+  questions and search them in parallel.
+tier: research
+audience: shared
+---
+
 # knowledge_gap_search — decomposing the unknown
 
 Load this when judgment is blocked on what you don't know, or when

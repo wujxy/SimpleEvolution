@@ -1,3 +1,14 @@
+---
+name: program-optimization
+description: >-
+  A closed speed/efficiency objective over a code world with an
+  executable evaluator and frozen correctness gates: how this kind of
+  research runs — the whole goal to a strong Executor early, your own
+  verification in parallel.
+tier: task
+audience: shared
+---
+
 # program_optimization — how optimization research runs
 
 Load this when the task is a closed optimization: an objective
@@ -35,7 +46,7 @@ ideas — a strong colleague reads them as priors, never as plans.
 
 - Baseline and instrument first: repeats on a fixed state, the noise
   floor that defines ties, the probe/authoritative tiering
-  (measurement_discipline).
+  (measurement-discipline).
 - Profile before guessing — and read the profile structurally:
   per-call cost, call count, and architecture are different diseases
   with different cures. Beyond the hotspots, look at invariant work
@@ -43,16 +54,16 @@ ideas — a strong colleague reads them as priors, never as plans.
   structure itself.
 - The gates stay frozen; speed comes from the algorithm, never from
   parallelism smuggled past a single-threaded pin.
-- A surprising speedup is a claim, not a result (critical_validation)
+- A surprising speedup is a claim, not a result (critical-validation)
   — check the timed region, the denominator, the units, before it
   enters the record.
 - Two performance explanations coexist: one cheap observation they
   predict differently, not two deep investigations
-  (cheapest_discriminating_experiment).
+  (cheapest-discriminating-experiment).
 - Local improvements flatten: the framing is the suspect — open
-  genuinely different directions (research_expansion), and before any
+  genuinely different directions (research-expansion), and before any
   floor is claimed, attack the reading of the constraint, not the
-  number (wall_foundation_attack).
+  number (wall-foundation-attack).
 
 ## The arc
 

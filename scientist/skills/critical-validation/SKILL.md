@@ -1,3 +1,13 @@
+---
+name: critical-validation
+description: >-
+  A result is about to become a conclusion — especially one
+  surprisingly good, bad, or out of pattern: validate in proportion
+  to the surprise.
+tier: research
+audience: shared
+---
+
 # critical_validation — the standard a surprising result must meet
 
 Load this when a result is about to become a conclusion — especially
@@ -17,7 +27,7 @@ audit.
    selection (is this the best of N runs reported as the result of
    one?).
 3. Check the controls — what should not have moved, didn't (see
-   controls_and_confounders).
+   controls-and-confounders).
 4. Check the alternative explanations: artifact, leakage, contamination
    — the boring explanations, in order of how often they are the
    answer.

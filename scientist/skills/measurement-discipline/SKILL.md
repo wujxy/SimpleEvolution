@@ -1,3 +1,13 @@
+---
+name: measurement-discipline
+description: >-
+  A number is about to be compared, banked, or acted on: make the
+  instrument's noise floor explicit and the measurement tier
+  appropriate.
+tier: research
+audience: shared
+---
+
 # measurement_discipline — numbers that can carry a decision
 
 Load this whenever a number is about to be compared, banked, or acted
@@ -29,12 +39,12 @@ replaced.
 One variable per change. A delta measured across two simultaneous
 changes is attributable to neither; attribution is the whole value of
 a measurement, and confounded measurements are expensive noise (see
-controls_and_confounders for the design side).
+controls-and-confounders for the design side).
 
 Report numbers as triples: value, spread, conditions. A bare number
 is not comparable — to your own past measurements or anyone's.
 
-A number that surprises belongs to critical_validation before it
+A number that surprises belongs to critical-validation before it
 belongs anywhere else.
 
 Provenance: the OMILREC campaigns — the ±1.5% baseline spread rule,

@@ -1,3 +1,13 @@
+---
+name: consensus-independence-audit
+description: >-
+  Every reading agrees — especially when it agrees too smoothly, or a
+  conclusion arrives already endorsed: count independent channels,
+  not signatures.
+tier: research
+audience: shared
+---
+
 # consensus_independence_audit — counting evidence, not signatures
 
 Load this when every reading agrees — especially when it agrees too

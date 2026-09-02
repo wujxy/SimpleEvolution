@@ -1,3 +1,12 @@
+---
+name: assumption-audit
+description: >-
+  A plan is formed and about to consume resources: list its
+  load-bearing assumptions and check the dangerous-cheap ones first.
+tier: research
+audience: shared
+---
+
 # assumption_audit — finding the load-bearing defaults
 
 Load this when a plan is formed and about to consume resources, or

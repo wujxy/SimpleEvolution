@@ -1,3 +1,13 @@
+---
+name: cheapest-discriminating-experiment
+description: >-
+  Two explanations both fit the evidence and the choice is live: find
+  the cheapest observation they predict differently, and freeze
+  predictions before looking.
+tier: research
+audience: shared
+---
+
 # cheapest_discriminating_experiment — separating explanations for the cost of one look
 
 Load this when two (or more) explanations both fit the evidence and

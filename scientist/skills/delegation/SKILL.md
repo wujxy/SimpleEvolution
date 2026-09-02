@@ -1,3 +1,13 @@
+---
+name: delegation
+description: >-
+  Work is passing to a colleague, or one drifts or stalls: the craft
+  of goal briefs, watching, re-chartering, and the two ledgers —
+  experiments and colleagues.
+tier: research
+audience: shared
+---
+
 # delegation — the craft of working through colleagues
 
 Load this when framing work for a colleague, when one seems adrift or
@@ -43,8 +53,8 @@ the goal — not a leg of it you have already decomposed — runs the
 full loop themselves: understanding, hypothesis, change, measurement,
 verdict, again. Within the charter you handed them, every local
 direction is theirs — what to try next, which of their own
-hypotheses to abandon, when to report rather than grind. Changing
-the charter itself — which basin the program works, whether the
+hypotheses to abandon, when to report rather than grind. Changing the
+charter itself — which basin the program works, whether the
 framing is tired, what counts as a conclusion — is reserved to you,
 and is exercised at junctions, not along the stretch.
 

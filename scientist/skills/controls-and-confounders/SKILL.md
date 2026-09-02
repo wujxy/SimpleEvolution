@@ -1,3 +1,13 @@
+---
+name: controls-and-confounders
+description: >-
+  An effect is observed and about to be attributed to a cause:
+  isolate it from its confounders with designed controls before
+  explaining it.
+tier: research
+audience: shared
+---
+
 # controls_and_confounders — isolating the effect from its impostors
 
 Load this when an effect is observed and about to be attributed to a

@@ -1,3 +1,13 @@
+---
+name: research-expansion
+description: >-
+  The space has narrowed — every new idea is a variation of one
+  framing, or a wall claim is about to become the reason to stop:
+  compose genuinely different directions and open them together.
+tier: research
+audience: shared
+---
+
 # research_expansion — composing genuinely different directions
 
 Load this when the space has narrowed: every new idea is a variation
@@ -12,21 +22,25 @@ one question are one seat sampled ten times.
 
 Name the current framing explicitly — its mechanism, its
 representation, its assumption set, its decomposition. Expansion is
-changing one of those axes, not pushing harder on the same one. For
-each axis not yet varied, one proposer with that axis as its charter;
-never the same question twice — a re-asked question is waste, not
-insurance. A new value of the same mechanism is a new parameter, not a
-new direction.
+changing one of those axes, not pushing harder on the same one.
+
+The discovery methods are how a direction is made genuinely
+different: initialize each new seat with a different one —
+representation-shift, assumption-inversion, cross-domain-analogy,
+anomaly-driven-discovery, search-the-negative-space,
+question-reframing, hypothesis-recombination, contradiction-mining —
+never the same method twice, never the same question twice.
+
+Before any candidate earns a seat, four filter questions: is it
+testable (what observation kills it)? is it novel (against the dead
+lanes and banked candidates)? is it feasible at acceptable cost?
+what is its expected information gain if true — and if false?
 
 For each distinct reading of what blocks the program — including
 readings of the constraints themselves — a challenger. For each fact
-the team lacks, a searcher (see knowledge_gap_search). Open them in
+the team lacks, a searcher (see knowledge-gap-search). Open them in
 the same turn; if the provider throttles under concurrency, stagger
 the launches — rate limits are physics, not a reason for timidity.
-
-A direction that survives the filter of hypothesis_generation_and_
-evolution is worth a seat; generation of the directions themselves is
-that skill's craft.
 
 ## Exit
 
@@ -37,5 +51,6 @@ breadth past a crack is the same waste as never opening it.
 
 A paying line needs no force; expansion to look busy is theater.
 
-Provenance: Google Co-Scientist "research expansion" strategy;
-composition rules from the 2026-09-02 seat-force interview.
+Provenance: Google Co-Scientist "research expansion"; composition
+rules from the 2026-09-02 seat-force interview; filter from the
+arbitration that retired hypothesis-generation-and-evolution.

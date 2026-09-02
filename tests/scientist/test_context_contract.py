@@ -88,8 +88,8 @@ def test_every_reachable_surface_obeys_the_same_object_model():
         _COLD_START,
         _KILL_KNOCK,
         render_startup_skills(),
-        load_research_skill("claude_use"),
-        load_research_skill("reframe_inherited_problem"),
+        load_research_skill("delegation"),
+        load_research_skill("question-reframing"),
     ]).lower()
     forbidden = (
         "your assistant",

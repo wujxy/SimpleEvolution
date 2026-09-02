@@ -88,11 +88,11 @@ def test_parser_accepts_research_state_actions():
 
 def test_research_skill_is_discoverable_and_loaded_on_demand(tmp_path):
     catalog = render_research_skill_catalog()
-    assert "reframe_inherited_problem" in catalog
+    assert "research-expansion" in catalog
 
     action = parse_response(
         '{"action":"use_research_skill",'
-        '"skill_id":"reframe_inherited_problem"}',
+        '"skill_id":"wall-foundation-attack"}',
         proposal_slots=3,
     )
     result = _tools(tmp_path).execute(
@@ -102,8 +102,8 @@ def test_research_skill_is_discoverable_and_loaded_on_demand(tmp_path):
     )
 
     assert result["ok"] is True
-    assert result["skill_id"] == "reframe_inherited_problem"
-    assert "The predecessor material is a memo" in result["content"]
+    assert result["skill_id"] == "wall-foundation-attack"
+    assert "mis-remembered constraint" in result["content"]
 
 
 def test_update_research_state_assigns_head_identity(tmp_path):

@@ -1,3 +1,13 @@
+---
+name: mission-identify
+description: >-
+  A task has arrived: name the kind of research it is — the kind decides
+  the method — and load the main method pack before orienting.
+tier: program
+audience: scientist
+always-load: true
+---
+
 # mission_identify — what kind of research is this?
 
 A task has arrived. Before the first move, name the kind of research

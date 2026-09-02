@@ -1,3 +1,12 @@
+---
+name: wall-foundation-attack
+description: >-
+  You are about to claim a floor, ceiling, or impossibility: attack
+  the reading of the constraint before the number under it.
+tier: research
+audience: shared
+---
+
 # wall_foundation_attack — attacking the reading before the number
 
 Load this when about to claim a floor, a ceiling, or an

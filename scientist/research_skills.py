@@ -1,154 +1,130 @@
-"""Proposer-owned research-method library."""
+"""Skill library, Agent-Skills standard layout.
+
+Each skill is a directory scientist/skills/<name>/SKILL.md with YAML
+frontmatter (name, description, tier, audience, and optionally
+always-load); the body is plain markdown. The format is the common
+Claude Code / Codex skill spec, so a skill file is reusable by any
+tool that speaks it — our loader is one consumer, not the owner.
+
+Tiers: program (Scientist-only governance), task (how a kind of
+research runs), research (craft of the work), discovery (how to make
+genuinely new ground when the repertoire has no answer). Audience
+records the sharing rule — research method belongs to every
+researcher; program governance belongs to the Scientist — which the
+seat-side channel will read.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
 
+_SKILL_ROOT = Path(__file__).with_name("skills")
+
 
 @dataclass(frozen=True)
 class ResearchSkill:
-    skill_id: str
+    name: str
     description: str
-    filename: str
-    # A method may be loaded into standing context when its semantics are
-    # stable enough to belong there. Collaboration identity is defined by the
-    # team constitution, not by an optional method.
+    tier: str = "research"
+    audience: str = "shared"
     always_load: bool = False
+    directory: str = ""
 
 
-_SKILLS = (
-    ResearchSkill(
-        "mission_identify",
-        "A task has arrived: name the kind of research it is — the "
-        "kind decides the method — and load the main method pack "
-        "before orienting.",
-        "mission_identify.md",
-        always_load=True,
-    ),
-    ResearchSkill(
-        "program_optimization",
-        "A closed speed/efficiency objective over a code world with an "
-        "executable evaluator and frozen correctness gates: how this "
-        "kind of research runs — the whole goal to a strong Executor "
-        "early, your own verification in parallel.",
-        "program_optimization.md",
-    ),
-    ResearchSkill(
-        "delegation",
-        "Work is passing to a colleague, or one drifts or stalls: the "
-        "craft of goal briefs, watching, re-chartering, and the two "
-        "ledgers — experiments and colleagues.",
-        "delegation.md",
-    ),
-    ResearchSkill(
-        "reframe_inherited_problem",
-        "The question arrived pre-answered by a predecessor's memo or "
-        "framing: rebuild it from current facts instead of continuing "
-        "the answer.",
-        "reframe_inherited_problem.md",
-    ),
-    ResearchSkill(
-        "analogical_transfer",
-        "This mechanism has been seen somewhere else: map the distant "
-        "structure back and change the question rather than refine the "
-        "answer.",
-        "analogical_transfer.md",
-    ),
-    ResearchSkill(
-        "claude_use",
-        "You are working through a colleague's interface: framing "
-        "engagements, comparing reports, retaining scientific judgment.",
-        "claude_use.md",
-    ),
-    ResearchSkill(
-        "research_expansion",
-        "The space has narrowed — every new idea is a variation of one "
-        "framing, or a wall claim is about to become the reason to stop: "
-        "compose genuinely different directions and open them together.",
-        "research_expansion.md",
-    ),
-    ResearchSkill(
-        "knowledge_gap_search",
-        "Judgment is blocked on what you don't know, or one query keeps "
-        "returning one kind of answer: decompose the unknown into "
-        "distinct questions and search them in parallel.",
-        "knowledge_gap_search.md",
-    ),
-    ResearchSkill(
-        "consensus_independence_audit",
-        "Every reading agrees — especially when it agrees too smoothly, "
-        "or a conclusion arrives already endorsed: count independent "
-        "channels, not signatures.",
-        "consensus_independence_audit.md",
-    ),
-    ResearchSkill(
-        "wall_foundation_attack",
-        "You are about to claim a floor, ceiling, or impossibility: "
-        "attack the reading of the constraint before the number under "
-        "it.",
-        "wall_foundation_attack.md",
-    ),
-    ResearchSkill(
-        "cheapest_discriminating_experiment",
-        "Two explanations both fit the evidence and the choice is live: "
-        "find the cheapest observation they predict differently, and "
-        "freeze predictions before looking.",
-        "cheapest_discriminating_experiment.md",
-    ),
-    ResearchSkill(
-        "assumption_audit",
-        "A plan is formed and about to consume resources: list its "
-        "load-bearing assumptions and check the dangerous-cheap ones "
-        "first.",
-        "assumption_audit.md",
-    ),
-    ResearchSkill(
-        "measurement_discipline",
-        "A number is about to be compared, banked, or acted on: make "
-        "the instrument's noise floor explicit and the measurement tier "
-        "appropriate.",
-        "measurement_discipline.md",
-    ),
-    ResearchSkill(
-        "critical_validation",
-        "A result is about to become a conclusion — especially one "
-        "surprisingly good, bad, or out of pattern: validate in "
-        "proportion to the surprise.",
-        "critical_validation.md",
-    ),
-    ResearchSkill(
-        "hypothesis_generation_and_evolution",
-        "Fresh ideas have stopped coming but candidates are on the "
-        "table: evolve what you hold — recombine, simplify, invert, "
-        "shift abstraction — instead of re-sampling.",
-        "hypothesis_generation_and_evolution.md",
-    ),
-    ResearchSkill(
-        "controls_and_confounders",
-        "An effect is observed and about to be attributed to a cause: "
-        "isolate it from its confounders with designed controls before "
-        "explaining it.",
-        "controls_and_confounders.md",
-    ),
-)
-_BY_ID = {skill.skill_id: skill for skill in _SKILLS}
-_SKILL_DIR = Path(__file__).with_name("research_skills")
+def _parse_frontmatter(text: str) -> dict:
+    """Flat YAML subset: `key: value` lines, folded `>` scalars."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    try:
+        end = lines.index("---", 1)
+    except ValueError:
+        return {}
+    meta: dict[str, str] = {}
+    key: str | None = None
+    buf: list[str] = []
+
+    def flush() -> None:
+        if key is not None:
+            meta[key] = " ".join(part for part in buf if part).strip()
+
+    for line in lines[1:end]:
+        if line[:1] not in (" ", "\t") and ":" in line:
+            flush()
+            head, _, rest = line.partition(":")
+            key = head.strip()
+            rest = rest.strip()
+            buf = [rest] if rest and rest not in (">", ">-", ">+",
+                                                  "|", "|-", "|+") else []
+        elif key is not None and line.strip():
+            buf.append(line.strip())
+    flush()
+    return meta
+
+
+def _load_all() -> tuple[ResearchSkill, ...]:
+    skills: list[ResearchSkill] = []
+    for skill_md in sorted(_SKILL_ROOT.glob("*/SKILL.md")):
+        meta = _parse_frontmatter(
+            skill_md.read_text(encoding="utf-8"))
+        if not meta.get("name") or not meta.get("description"):
+            raise ValueError(f"skill missing name/description: {skill_md}")
+        skills.append(ResearchSkill(
+            name=meta["name"],
+            description=meta["description"],
+            tier=meta.get("tier", "research"),
+            audience=meta.get("audience", "shared"),
+            always_load=meta.get("always-load", "").lower() == "true",
+            directory=skill_md.parent.name,
+        ))
+    return tuple(skills)
+
+
+_SKILLS = _load_all()
+_BY_ID = {skill.name: skill for skill in _SKILLS}
+
+_TIER_ORDER = {"task": 0, "research": 1, "discovery": 2}
+_TIER_HEADER = {
+    "task": "How a kind of research runs:",
+    "research": "The craft of the work:",
+    "discovery": "When the repertoire has no answer — how to make "
+                 "genuinely new ground:",
+}
 
 
 def render_research_skill_catalog() -> str:
-    """Return the complete compact catalog; the Scientist chooses what to read."""
-    return "\n".join(
-        f"- {skill.skill_id}: {skill.description}" for skill in _SKILLS
-    )
+    """The resident index: tier-grouped, each skill with its moment."""
+    lines: list[str] = []
+    by_tier: dict[str, list[ResearchSkill]] = {}
+    for skill in _SKILLS:
+        if skill.always_load:
+            continue  # resident already, via the wake-up block
+        by_tier.setdefault(skill.tier, []).append(skill)
+    for tier in sorted(by_tier, key=lambda t: _TIER_ORDER.get(t, 99)):
+        lines.append(_TIER_HEADER.get(tier, f"{tier}:"))
+        for skill in sorted(by_tier[tier], key=lambda s: s.name):
+            lines.append(f"- {skill.name}: {skill.description}")
+    return "\n".join(lines)
+
+
+def _body(skill: ResearchSkill) -> str:
+    """The skill's markdown body, frontmatter stripped."""
+    text = (_SKILL_ROOT / skill.directory / "SKILL.md") \
+        .read_text(encoding="utf-8").strip()
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":
+        try:
+            end = lines.index("---", 1)
+        except ValueError:
+            return text
+        return "\n".join(lines[end + 1:]).strip()
+    return text
 
 
 def render_startup_skills() -> str:
     """Full text of every always-load skill (the wake-up block)."""
-    parts = [
-        load_research_skill(skill.skill_id)
-        for skill in _SKILLS if skill.always_load
-    ]
-    return "\n\n".join(parts)
+    return "\n\n".join(
+        _body(skill) for skill in _SKILLS if skill.always_load)
 
 
 def load_research_skill(skill_id: str) -> str:
@@ -156,4 +132,4 @@ def load_research_skill(skill_id: str) -> str:
     skill = _BY_ID.get(skill_id)
     if skill is None:
         raise ValueError(f"unknown research skill: {skill_id}")
-    return (_SKILL_DIR / skill.filename).read_text(encoding="utf-8").strip()
+    return _body(skill)
