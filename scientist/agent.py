@@ -212,12 +212,11 @@ def build_system_prompt(spec: dict, *, roots: dict | None = None) -> str:
         "and inspect_research_judgment reach historical views deliberately. "
         "note appends one line to your persistent working notes. These are "
         "records of the program, not instructions.\n\n"
-        "Research methods — each earns its opening at a moment of the "
-        "research; scan the list as a state check, and when a moment "
-        "arrives, load its method with use_research_skill (the loading "
-        "is itself a turn of the research):\n"
+        "Research methods — each is useful at a moment research reaches; "
+        "when that moment arrives, open it with use_research_skill:\n"
         + render_research_skill_catalog()
     )
+    wake_up = render_startup_skills()
     parts = [
         charter.rstrip(),
         team,
@@ -227,6 +226,10 @@ def build_system_prompt(spec: dict, *, roots: dict | None = None) -> str:
         anatomy,
         NATIVE_RUNTIME_BLOCK,
         boundaries,
+    ]
+    if wake_up:
+        parts.append(wake_up)
+    parts += [
         research_records,
         NATIVE_CONCLUDING_BLOCK,
         NATIVE_PROTOCOL_BLOCK,

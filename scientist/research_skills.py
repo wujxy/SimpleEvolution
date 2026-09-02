@@ -18,6 +18,22 @@ class ResearchSkill:
 
 _SKILLS = (
     ResearchSkill(
+        "mission_identify",
+        "A task has arrived: name the kind of research it is — the "
+        "kind decides the method — and load the main method pack "
+        "before orienting.",
+        "mission_identify.md",
+        always_load=True,
+    ),
+    ResearchSkill(
+        "program_optimization",
+        "A closed speed/efficiency objective over a code world with an "
+        "executable evaluator and frozen correctness gates: how this "
+        "kind of research runs — the whole goal to a strong Executor "
+        "early, your own verification in parallel.",
+        "program_optimization.md",
+    ),
+    ResearchSkill(
         "delegation",
         "Work is passing to a colleague, or one drifts or stalls: the "
         "craft of goal briefs, watching, re-chartering, and the two "
