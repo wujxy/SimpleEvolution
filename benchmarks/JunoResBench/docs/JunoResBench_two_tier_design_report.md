@@ -184,3 +184,55 @@ evaluator、bench 脚本和数据均只读。宿主只把 `release/public` 映�
 - 单电子完整 public baseline、private reviewed reference 和 bootstrap 边界尚未跑；
 - 当前 Codex 所在 user namespace 无法再次嵌套 Apptainer，因此实际 mount smoke
   需从普通外层 shell 执行；静态挂载参数、权限契约和小型端到端 solver 已测试。
+
+## 12. v2 实际波形人工验收
+
+波形图不是重新调用产生子得到的，而是直接从冻结 `public/dev` 的 index 与
+`segment_samples.npy` mmap 抽取 32 个确定性事例。总计读取 151,300,350 个采样，
+占完整 49,817,589,448 个采样的 `0.304%`。中心与边缘 hit-pattern 选用同为 5 MeV
+的 probe 事例，避免用能量差伪造位置差。
+
+图位于 `figures/electron_single_site_v2/waveform_audit/`：
+
+| 图 | 验收问题 | 本次观察 |
+|---|---|---|
+| `vertex_distribution` | 顶点是否填满球形体积 | 三个投影均为圆盘，密度向中心增加，符合体积均匀抽样投影 |
+| `energy_radius_coverage` | 能量与位置是否覆盖完整 | 十个离散 probe 能点和连续 control 均覆盖至 16 m |
+| `radial_light_yield` | 光收集是否有位置效应 | 中心较高、边缘有明显方向/半径涨落，必须做位置校正 |
+| `hit_pattern_comparison` | hit 空间形状能否编码位置 | 5 MeV 中心事例近各向同性，16 m 事例明显向近端 PMT 聚集 |
+| `charge_pattern_comparison` | 电荷纹理是否保留位置梯度 | 边缘事例出现强烈局域亮斑，中心事例无单侧集中 |
+| `hit_multiplicity_vs_energy` | 占用数是否随能量增长 | 主趋势近似单调，中心/边缘几何造成可见散布 |
+| `charge_vs_energy` | 波形积分是否保存能量信息 | 有符号基线扣除后近似线性；未校正位置造成离群和带宽 |
+| `event_anatomy` | 单事件各观测是否互相一致 | 边缘亮斑、首光分布、积分-峰值和高电荷波形相互一致 |
+| `first_hit_time` | 是否有 prompt 与晚光 | 约 300 ns 起出现 prompt 峰，并有散射、再发射和暗噪声晚尾 |
+| `time_vs_distance` | TOF 距离依赖是否存在 | prompt 下沿随 PMT 距离增加而上升，晚光形成上方长尾 |
+| `tof_corrected_residual` | TOF 校正后是否保留物理尾 | per-event 居中后 prompt core 清楚，正向长尾明显；50 ns core 内 RMS 为 `16.24 ns` |
+| `timing_vs_radius` | trigger-relative 时间是否随位置变化 | 中位首光时间随半径和能量发生系统变化，可用于联合位置拟合 |
+| `waveform_examples` | 单 PE 到多 PE 波形是否合理 | 均有约 10--20 ns 成形宽度；高电荷道可见脉冲叠加 |
+| `waveform_overlays` | 模板形状是否稳定 | 对齐后主峰形状一致，噪声、晚光与 pile-up 产生合理展宽 |
+| `pulse_integral_vs_peak` | 积分与峰高是否自洽 | 低占用形成线性核，高占用因脉冲重叠向大积分方向展开 |
+| `roi_structure` | 稀疏化是否真的稀疏 | **未通过：ROI 几乎全部扩展并合并为完整窗口** |
+
+### 12.1 必须修正的 ROI 问题
+
+当前 `threshold_adc=6`；电子学白噪声为 0.35 mV，而 1 V/14-bit ADC 的一个
+count 为 0.0610 mV，因此噪声 RMS 约 `5.73 ADC`，阈值仅 `1.05 sigma`。在每道
+1000 个采样点上越阈几乎必然发生，16 个 pre-samples 与 48 个 post-samples 又把
+相邻区间连成整窗。32 个抽样事例中：
+
+- `95.10%` 的 ROI 从 sample 0 开始；
+- `99.76%` 的 ROI 长度至少为完整窗口的 90%；
+- 所谓 sparse waveform 因此实质接近所存通道的 dense waveform，解释了约
+  100 GB 的 `dev/segment_samples.npy`。
+
+这不是光学或电子学波形本身错误：采用 30 ADC（约 5 sigma）做 owner-side
+脉冲选择后，位置亮斑、能量线性、TOF 下沿和脉冲成形都能看到。但它是当前题库
+发行格式的实质缺陷，会增加 I/O 成本，并使未经二次阈值选择的“最早 ROI 时间”
+完全由噪声决定。建议在产生子中把 sparse ROI 阈值冻结到约 30 ADC 后重新生成；
+旧 release 可保留作诊断证据，但不应作为最终 benchmark release。
+
+另一个可观测性限制是：波形时间以 trigger window 为参考，而 private truth 只保存
+了 `t0`、没有保存 `t_trigger`。因此 owner 不能把两者做绝对时钟对齐；本图册使用
+逐事例居中的 TOF residual，避免画出物理上无意义的 `sample_time-t0`。当前任务不
+评价 t0，所以这不影响 agent 输出合同；若未来要验证绝对 timing，应在 private
+truth 增加 `t_trigger`，但不能向 agent 公开。

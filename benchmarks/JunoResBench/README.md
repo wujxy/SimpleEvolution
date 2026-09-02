@@ -55,3 +55,25 @@ examples/junoresbench_electron_single_site_std_opt/
 
 图由 `scripts/plot_electron_single_site_release.py` 从冻结 truth 生成，不打开稀疏
 波形样本文件，也不属于 agent 可见的任务包。
+
+## v2 波形人工验收图
+
+实际发行波形的 16 张位置、hit-pattern、时间和电子学检查图位于：
+
+```text
+figures/electron_single_site_v2/waveform_audit/
+```
+
+它们直接 mmap 挂载 release，只确定性抽取少量事件，不重新调用产生子，也不复制
+波形。重画命令为：
+
+```bash
+python benchmarks/JunoResBench/scripts/plot_electron_single_site_waveforms.py \
+  --release /home/wujxy/mnt/lustrefs_juno26/users/lidian/jrb_v2/production/electron_single_site/release \
+  --output benchmarks/JunoResBench/figures/electron_single_site_v2/waveform_audit \
+  --sample-limit 32
+```
+
+本次图检发现当前 release 的 `6 ADC` ROI 阈值约等于电子学噪声的 `1.05 sigma`，
+导致绝大多数 ROI 合并成接近完整的 1000-sample 波形。物理脉冲仍清晰可见，但这
+个 release 不应作为最终稀疏题库发布；定量证据和逐图说明见设计报告第 12 节。

@@ -32,7 +32,10 @@ The audit contains these sixteen PNGs, grouped into four questions:
 2. **Hit pattern:** `hit_pattern_comparison`, `charge_pattern_comparison`,
    `hit_multiplicity_vs_energy`, `charge_vs_energy`, and `event_anatomy`.
 3. **Timing:** `first_hit_time`, `time_vs_distance`,
-   `tof_corrected_residual`, and `timing_vs_radius`.
+   `tof_corrected_residual`, and `timing_vs_radius`.  Because stored samples
+   are trigger-relative, the audit must explicitly report if the release lacks
+   the trigger time needed to combine private `t0` with the waveform clock;
+   it must not plot a physically invalid subtraction.
 4. **Waveform/electronics:** `waveform_examples`, `waveform_overlays`,
    `pulse_integral_vs_peak`, and `roi_structure`.
 
