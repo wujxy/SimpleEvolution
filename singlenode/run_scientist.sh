@@ -44,11 +44,11 @@ if [ -e "$RUN_DIR/run.log" ] || [ -d "$RUN_DIR/world" ]; then
     fi
 fi
 
-# ds runtime env for the assistant claude subprocesses (credentials —
-# never echoed; baked into the spec below).
-set -a
-eval "$($PY -c 'import json,os;d=json.load(open(os.path.expanduser("~/.claude/settings_ds.json.backup")))["env"];[print(f"export {k}=\x27{v}\x27") for k,v in d.items()]')"
-set +a
+# No environment exports for the run: credentials ride the spec (read
+# from the file below, never echoed, never ambient), and model routing
+# is a declared spec value — an exported ANTHROPIC_* block once parked
+# three dead MODEL vars in the process env while the seat model fell to
+# the CLI's own resolution (the v4-pro accident, r8/r9).
 
 if [ "$RESUMING" = 0 ]; then
     node_prepare_run_dir
@@ -56,30 +56,10 @@ fi
 BASE_SHA=$(git -C "$RUN_DIR/world" rev-parse HEAD)
 
 if [ "$RESUMING" = 0 ]; then
-    # spec with live credentials (default recipe; SPEC_TEMPLATE overridable)
-    $PY - "$SPEC_TEMPLATE" "$RUN_DIR/spec.json" "$BASE_SHA" <<'EOF'
-import json, os, sys
-spec = json.load(open(sys.argv[1]))
-tide = json.load(open("runs/tide-demo-1/spec.json"))
-ds = json.load(open(os.path.expanduser(
-    "~/.claude/settings_ds.json.backup")))["env"]
-spec["base_sha"] = sys.argv[3]
-if spec.get("model", {}).get("api_key") in (None, "", "FILL_BEFORE_RUNNING"):
-    spec["model"]["api_key"] = tide["model"]["api_key"]
-env = spec.setdefault("assistant", {}).setdefault("env", {})
-for key in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"):
-    if env.get(key) in (None, "", "FILL_BEFORE_RUNNING"):
-        env[key] = ds[key]
-# worker model = the run's declared model unless the launcher overrides
-# (6f1f200 for every launch path — stamped into the frozen spec so the
-# run's own record shows the model its seats actually ran; the omilrec
-# path missed the original patch and seats silently ran the endpoint's
-# v4-pro mapping, r8 and r9)
-if spec["assistant"].get("model") in (None, "", "FILL_BEFORE_RUNNING"):
-    spec["assistant"]["model"] = spec.get("model", {}).get("model", "")
-open(sys.argv[2], "w").write(
-    json.dumps(spec, indent=2, ensure_ascii=False))
-EOF
+    # spec assembly is world-layer knowledge (credential layout lives
+    # here, beside node_common.sh); this script only launches
+    $PY singlenode/specfill.py \
+        "$SPEC_TEMPLATE" "$RUN_DIR/spec.json" "$BASE_SHA"
     chmod 600 "$RUN_DIR/spec.json"
 
     # freeze the scientist package for this run (upgrade = re-copy)

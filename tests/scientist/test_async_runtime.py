@@ -149,23 +149,72 @@ def test_evidence_workspace_points_at_the_real_fork(tmp_path):
     assert current["workspace"] == str(tmp_path / "work")
 
 
-def test_seat_model_inherits_the_pis_declared_model():
-    # one declared model for the whole run: an unspecified
-    # assistant.model must fall back to spec.model.model, never to the
-    # CLI default resolution (which the endpoint maps to v4-pro — the
-    # accident that ran omilrec seats on pro for two live runs)
-    from scientist.assistant_tools import AssistantConfig
+def test_seat_model_has_no_default(tmp_path, monkeypatch):
+    # zero defaults at config level: an undeclared assistant.model is
+    # None from from_spec and REFUSED at launch — never the CLI's own
+    # resolution (which the endpoint aliases opus->v4-pro, twice live)
+    from types import SimpleNamespace
 
-    inherited = AssistantConfig.from_spec({
+    from scientist.assistant_tools import AssistantConfig, InWorldAssistant
+
+    undeclared = AssistantConfig.from_spec({
         "model": {"model": "deepseek-v4-flash"},
         "assistant": {"command": "claude"}})
-    assert inherited.model == "deepseek-v4-flash"
+    assert undeclared.model is None and undeclared.effort is None
 
-    override = AssistantConfig.from_spec({
+    declared = AssistantConfig.from_spec({
         "model": {"model": "deepseek-v4-flash"},
         "assistant": {"command": "claude",
-                      "model": "deepseek-v4-pro"}})
-    assert override.model == "deepseek-v4-pro"
+                      "model": "deepseek-v4-flash",
+                      "effort": "medium"}})
+    assert declared.model == "deepseek-v4-flash"
+    assert declared.effort == "medium"
 
-    assert AssistantConfig.from_spec(
-        {"assistant": {"command": "claude"}}).model is None
+    seat = InWorldAssistant.__new__(InWorldAssistant)
+    seat.config = undeclared
+    refusal = seat.launch("executor", {"brief": "b"})
+    assert refusal["ok"] is False
+    assert "assistant.model" in refusal["error"]
+    assert "assistant.effort" in refusal["error"]
+
+
+
+
+def test_validate_spec_lists_every_missing_declaration():
+    import pytest
+
+    from scientist.cli import _validate_spec
+
+    with pytest.raises(SystemExit) as boom:
+        _validate_spec({"assistant": {}})
+    text = str(boom.value)
+    for key in ("model.model", "model.reasoning_effort",
+                "model.max_output_tokens", "assistant.model",
+                "assistant.effort", "network.proxy"):
+        assert key in text, text
+
+
+def test_network_policy_strips_ambient_proxy(monkeypatch):
+    from scientist.cli import _apply_network_policy
+
+    for var in ("http_proxy", "https_proxy", "HTTP_PROXY",
+                "all_proxy"):
+        monkeypatch.setenv(var, "http://127.0.0.1:7890")
+    _apply_network_policy({"network": {"proxy": ""}})
+    import os
+    for var in ("http_proxy", "https_proxy", "HTTP_PROXY",
+                "all_proxy"):
+        assert var not in os.environ
+
+    _apply_network_policy({"network": {"proxy": "http://p:1"}})
+    assert os.environ["http_proxy"] == "http://p:1"
+    assert os.environ["https_proxy"] == "http://p:1"
+
+
+def test_served_model_extractor_and_mismatch_gate():
+    from scientist.assistant_tools import _served_model_from_raw
+
+    raw = ('{"model":"claude-opus-4-8[1m]"} {"model":"deepseek-v4-pro"} '
+           '{"model":"deepseek-v4-pro"} {"model":"<synthetic>"}')
+    assert _served_model_from_raw(raw) == "deepseek-v4-pro"
+    assert _served_model_from_raw("") is None

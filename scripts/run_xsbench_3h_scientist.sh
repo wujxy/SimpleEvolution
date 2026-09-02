@@ -45,13 +45,10 @@ if goal_file:
 spec["budget"]["wall_seconds"] = int(os.environ.get("WALL", "10800"))
 spec["episode_id"] = os.environ.get("EPISODE", spec["episode_id"])
 spec["assistant"]["env"]["ANTHROPIC_AUTH_TOKEN"] = ds["ANTHROPIC_AUTH_TOKEN"]
-# worker model = the PI's declared model — ONE variable for the whole
-# run (user ruling 2026-09-01: seats and PI unified at deepseek-v4-flash;
-# the worker model is a declared experimental constant, never an env
-# default's accident). With the run world's own .claude the CLI's
-# default-model resolution is never consulted anyway (see
-# assistant_tools._world_runtime).
-spec["assistant"]["model"] = spec["model"]["model"]
+# worker model/effort: no bash-side copy — the spec's declared
+# model.model / reasoning_effort govern both PI and seats
+# (AssistantConfig.from_spec inherits; an explicit assistant.model is
+# the one legal override, declared in the config itself)
 spec["assistant"]["env"]["ANTHROPIC_BASE_URL"] = ds["ANTHROPIC_BASE_URL"]
 open(sys.argv[1], "w").write(
     json.dumps(spec, indent=2, ensure_ascii=False))

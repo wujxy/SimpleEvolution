@@ -68,7 +68,7 @@ class StdlibChatModel(_RetryChatModel):
         max_retries: int = 8,
         retry_base_delay: float = 2.0,
         reasoning_effort: str | None = None,
-        max_output_tokens: int | None = None,
+        max_output_tokens: int = 8192,
     ):
         super().__init__(
             max_retries=max_retries, retry_base_delay=retry_base_delay,
@@ -78,38 +78,38 @@ class StdlibChatModel(_RetryChatModel):
         self.url = f"{self.base_url}/chat/completions"
         self.api_key = api_key
         self.reasoning_effort = reasoning_effort
-        self.max_output_tokens = max_output_tokens or 8192
+        self.max_output_tokens = int(max_output_tokens)
         # Dropped permanently if the provider rejects stream_options.
         self._stream_usage = True
 
     @classmethod
     def from_config(cls, config: dict) -> "StdlibChatModel":
-        base_url = str(
-            config.get("base_url")
-            or os.environ.get("OPENAI_BASE_URL") or ""
-        ).strip()
+        # The run spec is the ONLY config manager: model-level values
+        # carry no defaults and no env fallbacks — an undeclared value
+        # is a startup error, never an ambient accident (the seat-model
+        # lesson, applied to the PI's own client).
+        base_url = str(config.get("base_url") or "").strip()
         if not base_url:
             raise ModelError(
-                "model.base_url is required (or export OPENAI_BASE_URL)"
-            )
-        key = str(
-            config.get("api_key")
-            or os.environ.get("OPENAI_API_KEY") or ""
-        ).strip()
+                "model.base_url is required in the spec")
+        key = str(config.get("api_key") or "").strip()
         if not key:
             raise ModelError(
-                "no API key for the model: set model.api_key in the spec "
-                "or export OPENAI_API_KEY"
-            )
+                "model.api_key is required in the spec")
         model_name = str(config.get("model") or "").strip()
         if not model_name:
             raise ModelError("model.model is required")
+        max_tokens = int(config.get("max_output_tokens") or 0)
+        if max_tokens <= 0:
+            raise ModelError(
+                "model.max_output_tokens is required in the spec — "
+                "config-level values carry no defaults")
         return cls(
             model=model_name,
             base_url=base_url,
             api_key=key,
             reasoning_effort=_validated_effort(config),
-            max_output_tokens=config.get("max_output_tokens"),
+            max_output_tokens=max_tokens,
         )
 
     def _request_body(

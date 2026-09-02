@@ -396,7 +396,7 @@ def test_executor_engagement_returns_report_when_done(tmp_path: Path):
     ledger = LocalLedger(world.work / ".scientist")
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_fake_claude(tmp_path)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_fake_claude(tmp_path)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -431,7 +431,7 @@ def test_engagements_run_sequentially_and_leave_nothing_running(
     ledger = LocalLedger(world.work / ".scientist")
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_fake_claude(tmp_path)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_fake_claude(tmp_path)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -460,7 +460,7 @@ def test_seat_report_is_its_own_tool_result(tmp_path: Path):
     ledger = LocalLedger(world.work / ".scientist")
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_fake_claude(tmp_path)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_fake_claude(tmp_path)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -525,7 +525,7 @@ def test_wire_log_keeps_forwarded_calls_with_narration(
     script.chmod(0o755)
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(script),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(script),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -612,7 +612,7 @@ def test_reconcile_harvests_orphaned_seat_on_startup(tmp_path: Path):
 
     InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(sleeper)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(sleeper)),
         ledger=ledger, episode_id="t",
     )
     proc.wait(timeout=10)   # killed by the reconcile pass
@@ -623,7 +623,7 @@ def test_reconcile_harvests_orphaned_seat_on_startup(tmp_path: Path):
     # its still-growing raw.txt
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_fake_claude(tmp_path)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_fake_claude(tmp_path)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -710,7 +710,8 @@ def _tool_fragment_chunks():
 
 def test_stdlib_model_assembles_stream(tmp_path: Path, monkeypatch):
     model = StdlibChatModel(
-        model="m", base_url="https://example.invalid", api_key="k")
+        model="m", base_url="https://example.invalid", api_key="k",
+        max_output_tokens=8192)
     captured = {}
 
     def fake_urlopen(request, timeout=None):
@@ -741,7 +742,8 @@ def test_stdlib_model_assembles_stream(tmp_path: Path, monkeypatch):
 
 def test_stdlib_model_text_track_omits_tools(tmp_path: Path, monkeypatch):
     model = StdlibChatModel(
-        model="m", base_url="https://example.invalid", api_key="k")
+        model="m", base_url="https://example.invalid", api_key="k",
+        max_output_tokens=8192)
     captured = {}
 
     def fake_urlopen(request, timeout=None):
@@ -763,7 +765,8 @@ def test_stdlib_model_text_track_omits_tools(tmp_path: Path, monkeypatch):
 
 def test_stdlib_model_http_error_carries_status(monkeypatch):
     model = StdlibChatModel(
-        model="m", base_url="https://example.invalid", api_key="k")
+        model="m", base_url="https://example.invalid", api_key="k",
+        max_output_tokens=8192)
 
     def fake_urlopen(request, timeout=None):
         raise urllib.error.HTTPError(
@@ -866,7 +869,7 @@ def test_launch_writes_manifest_and_prompt_immediately(tmp_path: Path):
     ledger = LocalLedger(world.work / ".scientist")
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_sleeper_claude(tmp_path)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_sleeper_claude(tmp_path)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -894,7 +897,7 @@ def test_async_engagement_completes_later_and_leaves_no_orphans(
     ledger = LocalLedger(world.work / ".scientist")
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_slow_claude(tmp_path, 0.4)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_slow_claude(tmp_path, 0.4)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -925,7 +928,7 @@ def test_two_concurrent_async_seats_and_wait_returns_both(tmp_path: Path):
     ledger = LocalLedger(world.work / ".scientist")
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_slow_claude(tmp_path, 0.4)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_slow_claude(tmp_path, 0.4)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -949,7 +952,7 @@ def test_wait_with_nothing_pending_returns_immediately(tmp_path: Path):
     ledger = LocalLedger(world.work / ".scientist")
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_fake_claude(tmp_path)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_fake_claude(tmp_path)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -970,7 +973,7 @@ def test_async_timeout_salvage_via_sweep(tmp_path: Path):
     ledger = LocalLedger(world.work / ".scientist")
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_sleeper_claude(tmp_path)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_sleeper_claude(tmp_path)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -1009,7 +1012,7 @@ def test_episode_exit_salvages_pending_seats(tmp_path: Path):
     ledger = LocalLedger(world.work / ".scientist")
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_sleeper_claude(tmp_path)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_sleeper_claude(tmp_path)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -1058,7 +1061,7 @@ def test_turn_top_drain_emits_user_role_report(tmp_path: Path):
     ledger = LocalLedger(world.work / ".scientist")
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_slow_claude(tmp_path, 0.3)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_slow_claude(tmp_path, 0.3)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -1113,7 +1116,7 @@ def test_wait_returns_reports_exactly_once(tmp_path: Path):
     ledger = LocalLedger(world.work / ".scientist")
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_slow_claude(tmp_path, 0.4)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_slow_claude(tmp_path, 0.4)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -1170,7 +1173,7 @@ def test_same_turn_batch_returns_adjacent_acks(tmp_path: Path):
     ledger = LocalLedger(world.work / ".scientist")
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_slow_claude(tmp_path, 0.4)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_slow_claude(tmp_path, 0.4)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -1225,7 +1228,7 @@ def test_continue_engagement_passes_resume_and_old_workspace(
     seat_out.mkdir()
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_session_claude(tmp_path)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_session_claude(tmp_path)),
                                env={"SEAT_OUT": str(seat_out)},
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
@@ -1280,7 +1283,7 @@ def test_continue_engagement_rejections(tmp_path: Path):
          "mode": "isolated"}))
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_fake_claude(tmp_path)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_fake_claude(tmp_path)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -1319,7 +1322,7 @@ def test_reviewer_heard_after_reads_finished_at_field(tmp_path: Path):
     }))
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_fake_claude(tmp_path)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_fake_claude(tmp_path)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -1363,7 +1366,7 @@ def test_wait_any_returns_first_arrival_while_rest_run(tmp_path: Path):
     ledger = LocalLedger(world.work / ".scientist")
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_speed_by_brief_claude(tmp_path)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_speed_by_brief_claude(tmp_path)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -1395,7 +1398,7 @@ def test_cancel_engagement_salvages_and_consumes_inline(tmp_path: Path):
     ledger = LocalLedger(world.work / ".scientist")
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_sleeper_claude(tmp_path)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_sleeper_claude(tmp_path)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )
@@ -1458,7 +1461,7 @@ def test_seat_runtime_is_world_scoped(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("ENV_DUMP", str(dump))
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_env_claude(tmp_path)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_env_claude(tmp_path)),
                                work_default_minutes=1,
                                env={"ANTHROPIC_AUTH_TOKEN": "sk-spec"}),
         ledger=ledger, episode_id="iso-run",
@@ -1498,7 +1501,7 @@ def test_seat_prompt_states_its_fuse(tmp_path: Path):
     ledger = LocalLedger(world.work / ".scientist")
     assistant = InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_fake_claude(tmp_path)),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_fake_claude(tmp_path)),
                                work_default_minutes=1),
         ledger=ledger, episode_id="t",
     )

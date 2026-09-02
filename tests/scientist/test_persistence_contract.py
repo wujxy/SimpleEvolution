@@ -119,8 +119,11 @@ def test_cli_writes_a_crashed_conclusion_when_the_loop_dies(
         "goal": "test goal", "gate_block": "gates", "editable_paths": [],
         "episode_id": "crash-ep",
         "model": {"api": "openai", "model": "m", "base_url": "http://x",
-                  "api_key": "k"},
-        "assistant": {"command": "claude", "env": {}},
+                  "api_key": "k", "reasoning_effort": "low",
+                  "max_output_tokens": 8192},
+        "assistant": {"command": "claude", "env": {},
+                      "model": "deepseek-v4-flash", "effort": "low"},
+        "network": {"proxy": ""},
         "budget": {"steps": 5, "wall_seconds": 60},
     }
     spec_path = tmp_path / "spec.json"

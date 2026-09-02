@@ -312,7 +312,7 @@ def _assistant(tmp_path: Path, *, with_memory: bool) -> InWorldAssistant:
     )
     return InWorldAssistant(
         world=world,
-        config=AssistantConfig(command=str(_fake_claude(tmp_path))),
+        config=AssistantConfig(model="deepseek-v4-flash", effort="medium", command=str(_fake_claude(tmp_path))),
         ledger=ledger, episode_id="t",
     )
 

@@ -12,14 +12,17 @@
     "model": "deepseek-v4-flash",
     "base_url": "https://api.deepseek.com",
     "api_key": "FILL_BEFORE_RUNNING",
-    "reasoning_effort": "medium"
+    "reasoning_effort": "medium",
+    "max_output_tokens": 8192
   },
   "assistant": {
     "command": "claude",
     "env": {
       "ANTHROPIC_AUTH_TOKEN": "FILL_BEFORE_RUNNING",
       "ANTHROPIC_BASE_URL": "FILL_BEFORE_RUNNING"
-    }
+    },
+    "model": "deepseek-v4-flash",
+    "effort": "medium"
   },
   "budget": {
     "steps": 3000,
@@ -32,5 +35,8 @@
     "distill_word_cap": 1200,
     "cognitive_timeout_seconds": 10800,
     "seat_timeout_max_minutes": 480
+  },
+  "network": {
+    "proxy": ""
   }
 }

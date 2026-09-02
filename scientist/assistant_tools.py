@@ -98,6 +98,21 @@ def _decode_stream(stdout: str) -> tuple[str, object]:
     return text, usage
 
 
+def _served_model_from_raw(raw: str) -> str | None:
+    """The model the endpoint most often served in this transcript
+    (response bodies name it; the CLI's own local synthetic entries
+    carry claude-* names that never reached the network — a real
+    serving name is whatever repeats)."""
+    import collections
+    import re
+    counts = collections.Counter(
+        re.findall(r'"model":"([^"]+)"', raw))
+    for name, _ in counts.most_common():
+        if not name.startswith("claude") and name != "<synthetic>":
+            return name
+    return None
+
+
 def _session_id_from_raw(raw: str) -> str:
     """First non-empty ``session_id`` in a seat's stream-json transcript.
 
@@ -196,14 +211,13 @@ class AssistantConfig:
         node_world = assistant.get("node_world")
         return cls(
             command=str(assistant.get("command") or "claude"),
-            # the worker model is a declared experimental constant, never
-            # an env default's accident: an unspecified assistant.model
-            # inherits the PI's declared model — ONE variable for the
-            # whole run (user ruling 2026-09-01, 6f1f200; the omilrec
-            # launch path missed that patch and its seats silently ran
-            # the endpoint's v4-pro mapping for two live runs)
-            model=(assistant.get("model")
-                   or (spec.get("model") or {}).get("model")),
+            # Config-level values carry NO defaults — not an inheritance
+            # from another key, not the CLI's own default resolution
+            # (which the endpoint silently aliases: opus→v4-pro, the
+            # accident that ran omilrec seats on pro for two live
+            # runs). Undeclared = launch() refuses; _validate_spec
+            # catches it before the world starts.
+            model=assistant.get("model") or None,
             effort=assistant.get("effort") or None,
             node_world=Path(node_world) if node_world else None,
             env=assistant.get("env") or None,
@@ -527,6 +541,23 @@ class InWorldAssistant:
         memory ship: the workspace already carries all of it."""
         if role not in ROLE_NAMES:
             return {"ok": False, "error": f"unknown collaborator role: {role}"}
+        # Fail closed on undeclared config: the seat's model and effort
+        # are config-level values with no defaults — spawning without
+        # them hands the choice to the CLI's default resolution and
+        # whatever the endpoint aliases it to (opus→v4-pro, twice live)
+        missing = [
+            key for key, value in (
+                ("assistant.model", self.config.model),
+                ("assistant.effort", self.config.effort))
+            if not value]
+        if missing:
+            return {
+                "ok": False,
+                "error": "seat not started: " + ", ".join(missing)
+                         + " undeclared in the run spec — config-level "
+                         "values carry no defaults; declare them and "
+                         "relaunch",
+            }
 
         side_dir: Path | None = None
         if resume is None:
@@ -673,6 +704,22 @@ class InWorldAssistant:
                 "own judgment requires."
             )
 
+        # Project-level claude settings in the work tree would silently
+        # reconfigure every seat that runs there (the CLI reads
+        # .claude/settings.json upward from its cwd). The run spec is
+        # the only config manager; a stray file is an error observation,
+        # not something to run under.
+        for stray in (work_dir / ".claude" / "settings.json",
+                      work_dir / ".claude" / "settings.local.json"):
+            if stray.exists():
+                return {
+                    "ok": False,
+                    "error": f"project settings would silently "
+                             f"reconfigure the seat: {stray} — the run "
+                             "spec is the only config manager; remove "
+                             "it from the tree and relaunch",
+                }
+
         # -- start the seat; the directory is born --------------------------
         started = time.time()
         raw_path = self._raw_dir(collaborator_id) / "raw.txt"
@@ -695,6 +742,10 @@ class InWorldAssistant:
                                      resume_session=session_hint)
         print(f"[research-team] {role} {collaborator_id} running "
               f"(box {timeout}s, workspace {workspace}"
+              # the effective seat model, in the log, every launch —
+              # the r8/r9 accident was invisible precisely because no
+              # line anywhere said what the seats actually ran
+              + (f", model {self.config.model}" if self.config.model else "")
               + (", resumed" if session_hint else "") + ")",
               flush=True)
         try:
@@ -735,6 +786,8 @@ class InWorldAssistant:
                 "side_dir": str(side_dir) if side_dir else None,
                 "mode": workspace,
                 "argv": argv,
+                "model": self.config.model,
+                "effort": self.config.effort,
                 "session_hint": session_hint,
                 "continued_from": continued_from or None,
                 "brief": str(action.get("brief") or "").strip(),
@@ -823,6 +876,19 @@ class InWorldAssistant:
         (d / "proc.pid").unlink(missing_ok=True)
         self._procs.pop(call_id, None)
         evidence = self._evidence_envelope(call_id, side_dir, started)
+        # The arrival gate: the model the endpoint actually SERVED (the
+        # response body names it — the r8/r9 substitution was invisible
+        # only because nothing compared it) against the declaration on
+        # the manifest. A mismatch is stamped loudly, not filtered.
+        served = _served_model_from_raw(raw)
+        declared = mani.get("model")
+        model_check = {"declared_model": declared,
+                       "served_model": served}
+        if served and declared and served != declared:
+            model_check["MISMATCH"] = (
+                f"the endpoint served {served} where the spec declared "
+                f"{declared} — treat every number this engagement "
+                "produced accordingly")
         common = {
             "call_id": call_id,
             "collaborator_id": call_id,
@@ -831,6 +897,7 @@ class InWorldAssistant:
             "started": started,
             "finished_at": time.time(),
             "session_id": session_id,
+            "model_check": model_check,
             **({"continued_from": continued_from}
                if continued_from else {}),
             "harness_evidence": evidence,

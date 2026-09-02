@@ -19,7 +19,12 @@ Spec shape (see docs/design; all keys optional unless marked):
     hints[], charter (overrides the packaged Scientist charter,
                       prompts/scientist.md),
     model{api?|model, base_url, api_key, reasoning_effort},
-    assistant{command, model, effort, node_world, env{}},
+    assistant{command, model, effort, node_world, env{}} — the run's
+              declared model/reasoning_effort govern BOTH the PI and
+              the seats; assistant.model / assistant.effort are the
+              only override, declared here, interpreted once in
+              AssistantConfig.from_spec (never a launcher-side copy,
+              never the CLI default resolution),
     budget{steps, wall_seconds, command_timeout_seconds,
            command_default_timeout_seconds,
            command_output_cap_chars, consult_timeout_seconds,
@@ -33,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -115,6 +121,64 @@ def _write_conclusion(ledger_root: Path, result: dict) -> Path:
     return path
 
 
+def _validate_spec(spec: dict) -> None:
+    """Config completeness at the door: the run spec is the ONLY config
+    manager, so a config-level value it does not declare is a startup
+    error — never an env fallback, a python default, or the CLI's own
+    resolution (the seat-model lesson: an undeclared assistant.model
+    let the CLI default resolve to an opus-tier name the endpoint
+    silently aliased to v4-pro, for two live runs)."""
+    missing: list[str] = []
+    model = spec.get("model") or {}
+    for key in ("model", "base_url", "api_key", "reasoning_effort",
+                "max_output_tokens"):
+        if not model.get(key):
+            missing.append(f"model.{key}")
+    assistant = spec.get("assistant") or {}
+    for key in ("model", "effort"):
+        if not assistant.get(key):
+            missing.append(f"assistant.{key}")
+    if "proxy" not in (spec.get("network") or {}):
+        missing.append("network.proxy (declare '' for direct)")
+    if missing:
+        raise SystemExit(
+            "spec incomplete — " + ", ".join(missing)
+            + "; config-level values carry no defaults, declare them "
+            "and relaunch")
+    for managed in ("/etc/claude-manager-settings.json",
+                    "/usr/local/share/claude/managed-settings.json",
+                    str(Path.home() / ".claude" / "managed-settings.json")):
+        if Path(managed).exists():
+            raise SystemExit(
+                f"enterprise managed settings present: {managed} — the "
+                "run spec is the only config manager; remove it or run "
+                "elsewhere")
+
+
+_PROXY_VARS = ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
+               "all_proxy", "ALL_PROXY")
+
+
+def _apply_network_policy(spec: dict) -> None:
+    """The spec declares the network path; this enforces it on this
+    process (and every child: the PI's HTTP and the seats' CLI both
+    honor these vars). '' = direct — ambient proxy vars are stripped,
+    because an undeclared local proxy is part of no controlled
+    experiment."""
+    proxy = str((spec.get("network") or {}).get("proxy") or "").strip()
+    if not proxy:
+        removed = [v for v in _PROXY_VARS if os.environ.pop(v, None)]
+        if removed:
+            print(f"[network] policy: direct — stripped ambient "
+                  f"{', '.join(removed)}", flush=True)
+        return
+    for var in ("http_proxy", "https_proxy"):
+        os.environ[var] = proxy
+    os.environ.pop("HTTP_PROXY", None)
+    os.environ.pop("HTTPS_PROXY", None)
+    print(f"[network] policy: proxy {proxy}", flush=True)
+
+
 def _run_probe(spec: dict, args) -> int:
     """One model call against the assembled context: the cheap check
     that a spec produces the standing context and the first actions we
@@ -187,6 +251,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     spec = json.loads(args.spec.read_text(encoding="utf-8"))
+    _validate_spec(spec)
+    _apply_network_policy(spec)
     if args.probe:
         return _run_probe(spec, args)
 

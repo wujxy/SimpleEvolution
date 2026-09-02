@@ -202,6 +202,7 @@ def _runtime(tmp_path) -> InWorldAssistant:
     return InWorldAssistant(
         world=world,
         config=AssistantConfig(
+            model="deepseek-v4-flash", effort="medium",
             command=str(script), goal="improve the system", gate_block="tests pass"
         ),
         ledger=ledger,
