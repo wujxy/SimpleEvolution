@@ -1,6 +1,6 @@
 # JunoResBench release validation atlas
 
-Overall state: **ACCEPTED**
+Overall state: **REJECTED**
 
 Expert reconstruction gates are deferred; this report validates serialized physics and observables.
 REVIEW means that the owner must inspect the figure before publication; no machine gate replaces that review.
@@ -22,15 +22,15 @@ REVIEW means that the owner must inspect the figure before publication; no machi
 | `waveform_examples` | 低/中/高电荷波形是否合理 | REVIEW |
 | `waveform_overlays` | 脉冲成形模板是否稳定 | REVIEW |
 | `pulse_integral_vs_peak` | 峰高与积分是否自洽 | REVIEW |
-| `roi_structure` | 稀疏 ROI 是否真正稀疏 | PASS |
+| `roi_structure` | 稀疏 ROI 是否真正稀疏 | FAIL |
 
 ## Machine gates
 
-- **PASS** `roi_start_zero_fraction`: 0.00157356 < 0.2 — window-start ROIs must not be noise-dominated
-- **PASS** `roi_near_full_window_fraction`: 0 < 0.05 — ROI padding must not merge most channels into full windows
-- **PASS** `sparse_to_stored_dense_ratio`: 0.102518 < 0.35 — sparse storage must materially reduce stored-channel samples
-- **PASS** `charge_energy_correlation`: 0.998984 > 0 — waveform charge must retain positive energy information
-- **PASS** `time_distance_slope_ns_per_m`: 7.67753 > 0 — within-event first-light time must increase with PMT distance
+- **FAIL** `roi_start_zero_fraction`: 0.95099 < 0.2 — window-start ROIs must not be noise-dominated
+- **FAIL** `roi_near_full_window_fraction`: 0.997605 < 0.05 — ROI padding must not merge most channels into full windows
+- **FAIL** `sparse_to_stored_dense_ratio`: 0.999698 < 0.35 — sparse storage must materially reduce stored-channel samples
+- **PASS** `charge_energy_correlation`: 0.998736 > 0 — waveform charge must retain positive energy information
+- **PASS** `time_distance_slope_ns_per_m`: 7.26046 > 0 — within-event first-light time must increase with PMT distance
 
 ## Figures
 

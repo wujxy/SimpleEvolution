@@ -270,6 +270,7 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
     ])
     sample_energy = energy[selected]
     sample_radius = radius[selected]
+    sampled_probe = role[selected] == 0
     paths = {}
 
     fig, axes = plt.subplots(1, 3, figsize=(13, 4))
@@ -291,7 +292,12 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
     paths["energy_radius_coverage"] = _save(fig, output, "energy_radius_coverage")
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    ax.scatter(sample_radius, total_charge / sample_energy, c=sample_energy, s=28)
+    ax.scatter(
+        sample_radius[sampled_probe],
+        total_charge[sampled_probe] / sample_energy[sampled_probe],
+        c=sample_energy[sampled_probe],
+        s=28,
+    )
     ax.set(xlabel="vertex radius [m]", ylabel="stored pulse integral / MeV [ADC count]",
            title="Radial light yield: geometry-driven nonuniformity must be calibratable")
     paths["radial_light_yield"] = _save(fig, output, "radial_light_yield")
@@ -459,11 +465,15 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
             sum(item.event.samples.size for item in metrics)
             / sum(len(item.pmt_ids) * item.event.n_samples for item in metrics)
         ),
-        "charge_energy_correlation": float(np.corrcoef(sample_energy, total_charge)[0, 1]),
+        "charge_energy_correlation": float(np.corrcoef(
+            sample_energy[sampled_probe], total_charge[sampled_probe]
+        )[0, 1]),
         "time_distance_slope_ns_per_m": time_distance_slope,
         "mean_hit_pmts": float(hit_count.mean()),
         "mean_stored_pmts": float(np.mean([len(item.pmt_ids) for item in metrics])),
-        "mean_integral_per_mev": float(np.mean(total_charge / sample_energy)),
+        "mean_integral_per_mev": float(np.mean(
+            total_charge[sampled_probe] / sample_energy[sampled_probe]
+        )),
         "median_first_sample_ns": float(np.nanmedian(median_time)),
         "pulse_selection_threshold_adc": 5.0 * float(reader.metadata["threshold_adc"]),
         "raw_roi_threshold_adc": float(reader.metadata["threshold_adc"]),

@@ -30,7 +30,9 @@ EXPECTED = {
 }
 
 
-def _synthetic_release(root: Path, bad_roi=False, public_vertices=True):
+def _synthetic_release(
+    root: Path, bad_roi=False, public_vertices=True, low_energy_control=False
+):
     split = root / "public/dev"
     split.mkdir(parents=True)
     (root / "private").mkdir()
@@ -43,11 +45,15 @@ def _synthetic_release(root: Path, bad_roi=False, public_vertices=True):
     positions *= 19.0 / np.linalg.norm(positions, axis=1)[:, None]
     np.savez(root / "public/detector_geometry.npz", pmt_positions_m=positions)
     energies = np.tile(np.arange(1.0, 7.0), 2)
+    roles = np.zeros(n_event, dtype=np.int8)
+    if low_energy_control:
+        energies[-1] = 0.1
+        roles[-1] = 1
     vertices = np.column_stack((np.linspace(0, 14, n_event), np.zeros((n_event, 2))))
     public_truth = dict(
         evt_e_true=energies,
         evt_e_vis=energies * 0.975,
-        evt_sample_role=np.zeros(n_event, dtype=np.int8),
+        evt_sample_role=roles,
     )
     if public_vertices:
         public_truth["evt_vertex_m"] = vertices
@@ -146,6 +152,17 @@ def test_owner_side_plotter_accepts_private_only_vertices(tmp_path):
     paths = build_waveform_figures(release, output, sample_limit=8)
 
     assert set(paths) == EXPECTED
+
+
+def test_light_yield_summary_excludes_sub_mev_control_events(tmp_path):
+    release = tmp_path / "release"
+    output = tmp_path / "figures"
+    _synthetic_release(release, low_energy_control=True)
+
+    build_waveform_figures(release, output, sample_limit=12)
+    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+
+    assert summary["mean_integral_per_mev"] < 1_000
 
 
 def test_rejects_invalid_sparse_offsets(tmp_path):

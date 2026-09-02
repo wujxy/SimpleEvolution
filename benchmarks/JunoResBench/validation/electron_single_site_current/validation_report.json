@@ -4,11 +4,7 @@
     "expert_reference_reaches_target",
     "score_bootstrap_stability"
   ],
-  "failures": [
-    "roi_start_zero_fraction",
-    "roi_near_full_window_fraction",
-    "sparse_to_stored_dense_ratio"
-  ],
+  "failures": [],
   "hygiene": {
     "pass": true,
     "unexpected_executables": []
@@ -17,23 +13,23 @@
   "physics": {
     "energy_conservation_max_error_mev": 8.881784197001252e-15,
     "energy_conservation_pass": true,
-    "low_energy_visible_fraction": 0.8829888315952632,
-    "mid_energy_visible_fraction": 0.9822390008287234,
+    "low_energy_visible_fraction": 0.8831917370094657,
+    "mid_energy_visible_fraction": 0.9822379189932753,
     "quenching_pass": true
   },
-  "release_ready": false,
+  "release_ready": true,
   "structures": {
     "private_final": {
-      "events": 9680,
+      "events": 17680,
       "pass": true,
-      "samples": 49789438677,
-      "segments": 49866113
+      "samples": 9494506859,
+      "segments": 103801047
     },
     "public_dev": {
-      "events": 9680,
+      "events": 17680,
       "pass": true,
-      "samples": 49817589448,
-      "segments": 49893849
+      "samples": 9499297397,
+      "segments": 103851863
     }
   },
   "task": "electron_single_site",
@@ -43,90 +39,90 @@
       "operator": ">",
       "pass": true,
       "rationale": "waveform charge must retain positive energy information",
-      "value": 0.9987355687743686
+      "value": 0.9989838908315962
     },
     "roi_near_full_window_fraction": {
       "limit": 0.05,
       "operator": "<",
-      "pass": false,
+      "pass": true,
       "rationale": "ROI padding must not merge most channels into full windows",
-      "value": 0.997604577039574
+      "value": 0.0
     },
     "roi_start_zero_fraction": {
       "limit": 0.2,
       "operator": "<",
-      "pass": false,
+      "pass": true,
       "rationale": "window-start ROIs must not be noise-dominated",
-      "value": 0.950989514250457
+      "value": 0.001573555757566092
     },
     "sparse_to_stored_dense_ratio": {
       "limit": 0.35,
       "operator": "<",
-      "pass": false,
+      "pass": true,
       "rationale": "sparse storage must materially reduce stored-channel samples",
-      "value": 0.9996983732639119
+      "value": 0.10251809650677356
     },
     "time_distance_slope_ns_per_m": {
       "limit": 0.0,
       "operator": ">",
       "pass": true,
       "rationale": "within-event first-light time must increase with PMT distance",
-      "value": 7.26046215940136
+      "value": 7.6775322310938
     }
   },
   "waveform_summary": {
-    "center_event": 55,
-    "charge_energy_correlation": 0.9987355687743686,
-    "edge_event": 2150,
+    "center_event": 2750,
+    "charge_energy_correlation": 0.9989838908315962,
+    "edge_event": 9170,
     "events_scanned": 32,
-    "events_total": 9680,
-    "mean_hit_pmts": 4702.15625,
-    "mean_integral_per_mev": 3079817.2839469025,
-    "mean_stored_pmts": 4729.5625,
-    "median_first_sample_ns": 377.5,
+    "events_total": 17680,
+    "mean_hit_pmts": 2124.125,
+    "mean_integral_per_mev": 3116041.6304928996,
+    "mean_stored_pmts": 5254.8125,
+    "median_first_sample_ns": 361.5,
     "note": "Waveforms are trigger-relative; t0 cannot be recovered from release truth without stored trigger time.",
-    "pulse_selection_threshold_adc": 30.0,
-    "raw_roi_near_full_window_fraction": 0.997604577039574,
-    "raw_roi_start_zero_fraction": 0.950989514250457,
-    "raw_roi_threshold_adc": 6.0,
+    "pulse_selection_threshold_adc": 145.0,
+    "raw_roi_near_full_window_fraction": 0.0,
+    "raw_roi_start_zero_fraction": 0.001573555757566092,
+    "raw_roi_threshold_adc": 29.0,
     "selected_event_indices": [
-      55,
-      2150,
+      2750,
+      9170,
       0,
-      312,
-      624,
-      936,
-      1248,
-      1561,
-      1873,
-      2185,
-      2497,
-      2810,
-      3122,
-      3434,
-      3746,
-      4058,
-      4371,
-      4683,
-      4995,
-      5307,
-      5620,
-      5932,
-      6244,
-      6556,
-      6868,
-      7181,
-      7493,
-      7805,
-      8117,
-      8430,
-      8742,
-      9054
+      570,
+      1140,
+      1710,
+      2281,
+      2851,
+      3421,
+      3992,
+      4562,
+      5132,
+      5702,
+      6273,
+      6843,
+      7413,
+      7984,
+      8554,
+      9124,
+      9694,
+      10265,
+      10835,
+      11405,
+      11976,
+      12546,
+      13116,
+      13686,
+      14257,
+      14827,
+      15397,
+      15968,
+      16538
     ],
-    "sparse_to_stored_dense_ratio": 0.9996983732639119,
-    "time_distance_slope_ns_per_m": 7.26046215940136,
-    "tof_residual_core_sigma_ns": 16.241777387986975,
-    "waveform_samples_read": 151300350,
-    "waveform_samples_total": 49817589448
+    "sparse_to_stored_dense_ratio": 0.10251809650677356,
+    "time_distance_slope_ns_per_m": 7.6775322310938,
+    "tof_residual_core_sigma_ns": 15.279519619691872,
+    "waveform_samples_read": 17238828,
+    "waveform_samples_total": 9499297397
   }
 }

@@ -187,14 +187,14 @@ evaluator、bench 脚本和数据均只读。宿主只把 `release/public` 映�
 - 当前 Codex 所在 user namespace 无法再次嵌套 Apptainer，因此实际 mount smoke
   需从普通外层 shell 执行；静态挂载参数、权限契约和小型端到端 solver 已测试。
 
-## 12. v2 实际波形人工验收
+## 12. 旧 `6 ADC` 候选的拒绝证据
 
 波形图不是重新调用产生子得到的，而是直接从冻结 `public/dev` 的 index 与
 `segment_samples.npy` mmap 抽取 32 个确定性事例。总计读取 151,300,350 个采样，
 占完整 49,817,589,448 个采样的 `0.304%`。中心与边缘 hit-pattern 选用同为 5 MeV
 的 probe 事例，避免用能量差伪造位置差。
 
-图位于 `figures/electron_single_site_v2/waveform_audit/`：
+旧图与机器报告保存在 `validation/electron_single_site_roi6_rejected/`：
 
 | 图 | 验收问题 | 本次观察 |
 |---|---|---|
@@ -238,3 +238,21 @@ count 为 0.0610 mV，因此噪声 RMS 约 `5.73 ADC`，阈值仅 `1.05 sigma`�
 逐事例居中的 TOF residual，避免画出物理上无意义的 `sample_time-t0`。当前任务不
 评价 t0，所以这不影响 agent 输出合同；若未来要验证绝对 timing，应在 private
 truth 增加 `t_trigger`，但不能向 agent 公开。
+
+## 13. 当前 `29 ADC` release 验收
+
+2026-09-03 对挂载的 17,680-event dev/final release 重新运行独立门禁，结果为
+`ACCEPTED`。最终图册保存在 `validation/electron_single_site_current/`，同一组
+用户可见图同步到 `figures/electron_single_site_v2/waveform_audit/`。关键结果为：
+
+- 能量守恒最大误差 `8.88e-15 MeV`，低能可见比例 `0.8832`，中能为 `0.9822`；
+- ROI 起点为 0 的比例由 `95.10%` 降至 `0.157%`；
+- 近整窗 ROI 比例由 `99.76%` 降至 `0%`；
+- sparse/stored-dense 样本比由 `99.97%` 降至 `10.25%`；
+- 目标 probe 的 charge--energy 相关系数为 `0.99898`；
+- 事例内首光时间--距离斜率为 `7.68 ns/m`，方向正确；
+- 1--10 MeV probe 平均积分光产额为 `3.116e6 ADC/MeV`。
+
+亚 MeV control 仍保留在 coverage 图和公开开发数据中，但不参与 `Q/E` 光产额均值；
+原因是接近零能量时暗噪声电荷底除以 `E` 会产生非物理视觉离群点。该选择只修正
+owner-side 验收统计，不修改任何 release 数据或 agent 评分定义。
