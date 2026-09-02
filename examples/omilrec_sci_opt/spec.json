@@ -12,7 +12,7 @@
     "model": "deepseek-v4-flash",
     "base_url": "https://api.deepseek.com",
     "api_key": "FILL_BEFORE_RUNNING",
-    "reasoning_effort": "low"
+    "reasoning_effort": "medium"
   },
   "assistant": {
     "command": "claude",

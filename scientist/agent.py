@@ -43,11 +43,13 @@ _IDLE_NUDGE = (
     "with a terminal tool (deliver_world / abstain)."
 )
 
-# Remaining-ammo visibility: a sparse, purely informational budget note.
+# Wall-clock visibility: a sparse, purely informational pace note.
 # Prior art (see the _KILL_KNOCK note above) is that obligation/countdown
-# texts made stopping WORSE — so this line carries no directive verb and
-# no deadline pressure: it states what is left, full stop, and the call
-# stays the scientist's.
+# texts made stopping WORSE — and the whole-context audit (portrait pass,
+# 2026-09-02) added: a battery-meter percentage is a depletion frame even
+# with no directive verb. So this line states the clock and the step as
+# facts for pacing, full stop — no budget label, no percentage, no
+# "remains" — and the call stays the scientist's.
 _BUDGET_NOTE_EVERY = 50
 
 # The listening door: three refusals in one episode and the deliver
@@ -64,14 +66,12 @@ _LISTEN_REJECTION = (
 
 def _budget_note(step: int, steps_budget: int,
                  remaining_wall: float, wall_seconds: float) -> str:
-    """What is left, said plainly — remaining first, never elapsed."""
+    """The clock and the step, said plainly — pace facts, not a meter."""
     if wall_seconds <= 0:
         return ""
     left = max(remaining_wall, 0.0)
-    pct = int(round(100.0 * left / wall_seconds))
-    return (f"[budget] {pct}% of the run remains: step {step}/"
-            f"{steps_budget}, {left / 3600.0:.1f}h of the "
-            f"{wall_seconds / 3600.0:.1f}h wall left.")
+    return (f"[wall] step {step}/{steps_budget}; "
+            f"{left / 3600.0:.1f}h of wall.")
 
 
 def _last_src_write(world) -> float:
