@@ -102,6 +102,57 @@ WRITE_FILE_TOOL = _fn(
     ["path", "content"],
 )
 
+FIND_FILES_TOOL = _fn(
+    "find_files",
+    "Locate files by name pattern under a root — the bounded finder. "
+    "It carries its own scan budget: a tree that outgrows it stops "
+    "with an honest report of what was covered, so it stays cheap over "
+    "any tree, mounted ones included. This is the instrument for "
+    "where-is-X questions; shell find over a wide tree is the runaway "
+    "this replaces.",
+    {
+        "pattern": {
+            "type": "string",
+            "description": "fnmatch pattern (*.yaml, evtrec_*) "
+                           "matched against file names and paths "
+                           "relative to the root",
+        },
+        "root": {
+            "type": "string",
+            "description": "absolute directory to search under "
+                           "(default /work)",
+        },
+    },
+    ["pattern"],
+)
+
+SEARCH_TEXT_TOOL = _fn(
+    "search_text",
+    "Search file contents by regex under a root — the bounded grep. "
+    "It skips binary and very large files before reading them, caps "
+    "its matches, and carries the same scan budget as find_files. "
+    "This is the instrument for who-mentions-X questions; shell "
+    "grep -r over a wide tree is the runaway this replaces.",
+    {
+        "pattern": {
+            "type": "string",
+            "description": "Python regular expression, matched line "
+                           "by line",
+        },
+        "root": {
+            "type": "string",
+            "description": "absolute directory to search under "
+                           "(default /work)",
+        },
+        "glob": {
+            "type": "string",
+            "description": "optional fnmatch filter on file names "
+                           "(*.yaml) applied before reading",
+        },
+    },
+    ["pattern"],
+)
+
 
 # --- forwarded tools (the host wrapper executes these over RPC) ------------
 #
@@ -600,6 +651,8 @@ NATIVE_TOOLS: tuple[dict, ...] = (
     REMEMBER_TOOL,
     NOTE_TOOL,
     READ_FILE_TOOL,
+    FIND_FILES_TOOL,
+    SEARCH_TEXT_TOOL,
     BASH_TOOL,
     WRITE_FILE_TOOL,
     SEARCH_EXPERIMENTS_TOOL,

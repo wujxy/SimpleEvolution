@@ -11,9 +11,12 @@ symlink-safe, prefix-checked) is inherited from ``PathBoundary`` /
 """
 from __future__ import annotations
 
+import fnmatch
 import os
+import re
 import signal
 import subprocess
+import time
 from pathlib import Path
 
 from .research_files import PathBoundary, ResearchFiles, _WRITE_MAX_CHARS
@@ -26,6 +29,17 @@ from .research_files import PathBoundary, ResearchFiles, _WRITE_MAX_CHARS
 # (command_timeout_seconds).
 _BASH_TIMEOUT_CEILING = 1800
 _BASH_TIMEOUT_DEFAULT = 300
+
+# The bounded searchers (find_files / search_text): the economics are
+# the tool, not the caller's discipline. A whole-tree scan of a mounted
+# filesystem (find /cvmfs — twice live, r4 and r8) dies at the budget
+# with an honest report of what was covered, matches cap out, big and
+# binary files are skipped before they are read. Any tree, any root,
+# always cheap.
+_SEARCH_DEADLINE_S = 15.0
+_SEARCH_MAX_RESULTS = 200
+_SEARCH_MATCHES_PER_FILE = 50
+_SEARCH_FILE_BYTE_CAP = 2_000_000
 
 
 class LocalWorld:
@@ -40,6 +54,7 @@ class LocalWorld:
         timeout_seconds: int = _BASH_TIMEOUT_DEFAULT,
         cap_chars: int = 40000,
         timeout_ceiling: int | None = None,
+        search_budget_seconds: float = _SEARCH_DEADLINE_S,
         state: Path | None = None,
     ):
         self.work = Path(work)
@@ -67,6 +82,7 @@ class LocalWorld:
         self.timeout_seconds = timeout_seconds
         self.timeout_ceiling = int(
             timeout_ceiling or _BASH_TIMEOUT_CEILING)
+        self.search_budget_seconds = float(search_budget_seconds)
         self.cap_chars = cap_chars
         self.last_workdir = str(self.work)
         self.git_env = self._git_env()
@@ -126,6 +142,10 @@ class LocalWorld:
                 return self._write_file(action)
             if name == "bash":
                 return self._bash(action)
+            if name == "find_files":
+                return self._find_files(action)
+            if name == "search_text":
+                return self._search_text(action)
         except KeyError as exc:
             # a malformed call (missing argument) bounces back to the
             # model as a tool error to retry — it must not kill the run
@@ -229,3 +249,133 @@ class LocalWorld:
             "truncated": truncated,
             "output": output[:self.cap_chars],
         }
+
+    # -- bounded searchers ---------------------------------------------
+    # The economics are the tool, not the caller's discipline: a scan
+    # that outgrows its budget stops and says what it covered, matches
+    # cap out, big and binary files are skipped before they are read.
+    # Any tree — including a mounted one — is therefore always cheap to
+    # ask (the live failure this replaces: find /cvmfs, r4 and r8).
+
+    def _search_root(self, action: dict) -> tuple[Path, bool]:
+        """Resolve the search root: inside the boundary via the mapping,
+        outside it (a read-only mount) as itself."""
+        root = action.get("root") or "/work"
+        if not isinstance(root, str) or not root.startswith("/"):
+            raise ValueError(f"root must be absolute: {root!r}")
+        try:
+            return self.boundary.resolve(root), True
+        except ValueError:
+            pass  # outside work/repo/scratch — a mounted tree
+        candidate = Path(root)
+        if not candidate.is_dir():
+            raise ValueError(f"root does not exist: {root!r}")
+        return candidate, False
+
+    def _walk_bounded(self, root: Path, deadline: float,
+                      state: dict):
+        """Yield (path, size) under root until the tree ends or the
+        wall-clock budget does. state['exhausted'] is True only on
+        natural completion; state['scanned'] counts entries seen."""
+        state["exhausted"] = False
+        stack = [root]
+        while stack:
+            if time.monotonic() >= deadline:
+                return
+            d = stack.pop()
+            try:
+                with os.scandir(d) as scan:
+                    for entry in scan:
+                        state["scanned"] += 1
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                stack.append(Path(entry.path))
+                                continue
+                            size = entry.stat(
+                                follow_symlinks=False).st_size
+                        except OSError:
+                            continue
+                        yield Path(entry.path), size
+            except OSError:
+                continue
+        state["exhausted"] = True
+
+    def _search(self, action: dict, match) -> dict:
+        host_root, mapped = self._search_root(action)
+        deadline = time.monotonic() + self.search_budget_seconds
+        state: dict = {"exhausted": False, "scanned": 0}
+        matches: list[str] = []
+        for entry, size in self._walk_bounded(
+                host_root, deadline, state):
+            container = (self.boundary.to_container(entry) if mapped
+                         else str(entry))
+            relative = entry.relative_to(host_root).as_posix()
+            found = match(entry, size, container, relative)
+            if found:
+                matches.extend(found)
+                if len(matches) >= _SEARCH_MAX_RESULTS:
+                    break
+        report = {
+            "ok": True,
+            "matches": matches[:_SEARCH_MAX_RESULTS],
+            "scanned_entries": state["scanned"],
+            "budget_exhausted": not state["exhausted"],
+        }
+        if len(matches) >= _SEARCH_MAX_RESULTS:
+            report["note"] = (
+                "result cap reached — more may exist; narrow the "
+                "pattern or root for a precise answer"
+            )
+        elif not state["exhausted"]:
+            report["note"] = (
+                "the scan budget ran out before the tree ended — "
+                "narrow the root or pattern; silence elsewhere means "
+                "unscanned, not absent"
+            )
+        return report
+
+    def _find_files(self, action: dict) -> dict:
+        pattern = action.get("pattern")
+        if not pattern:
+            return {"ok": False, "error": "pattern is required"}
+
+        def match(entry, size, container, relative):
+            return [container] if (
+                fnmatch.fnmatch(entry.name, pattern)
+                or fnmatch.fnmatch(relative, pattern)) else None
+
+        return self._search(action, match)
+
+    def _search_text(self, action: dict) -> dict:
+        try:
+            regex = re.compile(action.get("pattern") or "")
+        except re.error as exc:
+            return {"ok": False, "error": f"bad pattern: {exc}"}
+        glob_filter = action.get("glob")
+
+        def match(entry, size, container, relative):
+            if size is not None and size > _SEARCH_FILE_BYTE_CAP:
+                return None
+            if glob_filter and not fnmatch.fnmatch(
+                    entry.name, glob_filter):
+                return None
+            try:
+                with open(entry, "rb") as handle:
+                    head = handle.read(8192)
+                    if b"\x00" in head:
+                        return None  # binary
+                    body = head + handle.read()
+            except OSError:
+                return None
+            hits = []
+            for lineno, line in enumerate(
+                    body.decode("utf-8", errors="replace").splitlines(),
+                    start=1):
+                if regex.search(line):
+                    hits.append(f"{container}:{lineno}:"
+                                f"{line.strip()[:200]}")
+                    if len(hits) >= _SEARCH_MATCHES_PER_FILE:
+                        break
+            return hits or None
+
+        return self._search(action, match)

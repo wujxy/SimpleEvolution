@@ -249,7 +249,8 @@ def build_system_prompt(spec: dict, *, roots: dict | None = None) -> str:
 def dispatch_action(action: dict, *, world, assistant, ledger) -> dict:
     """Run one non-terminal tool action against its in-world organ."""
     name = action["action"]
-    if name in ("bash", "read_file", "write_file"):
+    if name in ("bash", "read_file", "write_file",
+                "find_files", "search_text"):
         # Same law as engagements below: one failed dispatch reads as
         # an error observation the PI can act on, never a dead run
         # (first observed live: a write_file missing its path argument
