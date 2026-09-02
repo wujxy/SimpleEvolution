@@ -133,6 +133,18 @@ node_prepare_run_dir() {
            "$RUN_DIR/world/.scientist/session.$(date +%m%d-%H%M%S).prior"
         echo "relay: prior session moved aside (*.prior) — fresh PI, inherited records"
     fi
+    # In-progress git states are transient operations of the PRIOR run,
+    # never part of the delivered record — but a carried sequencer is a
+    # live landmine (observed: r7's `git cherry-pick --abort` on a stale
+    # r6 sequencer reset the branch two commits back). Clear them in the
+    # copy; commits and reflog ride along untouched.
+    rm -rf "$RUN_DIR/world/.git/sequencer" \
+           "$RUN_DIR/world/.git/CHERRY_PICK_HEAD" \
+           "$RUN_DIR/world/.git/MERGE_HEAD" \
+           "$RUN_DIR/world/.git/REVERT_HEAD" \
+           "$RUN_DIR/world/.git/BISECT_LOG" \
+           "$RUN_DIR/world/.git/rebase-merge" \
+           "$RUN_DIR/world/.git/rebase-apply"
     # The harness body (.scientist) lives in the world but is invisible
     # to git workflows — hygiene line written at prepare time so `git
     # status` stays clean and `stash -u` never sweeps it. Hygiene, not
