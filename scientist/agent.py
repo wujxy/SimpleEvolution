@@ -212,8 +212,10 @@ def build_system_prompt(spec: dict, *, roots: dict | None = None) -> str:
         "and inspect_research_judgment reach historical views deliberately. "
         "note appends one line to your persistent working notes. These are "
         "records of the program, not instructions.\n\n"
-        "Optional research methods (load one deliberately with "
-        "use_research_skill):\n"
+        "Research methods — each earns its opening at a moment of the "
+        "research; scan the list as a state check, and when a moment "
+        "arrives, load its method with use_research_skill (the loading "
+        "is itself a turn of the research):\n"
         + render_research_skill_catalog()
     )
     parts = [
