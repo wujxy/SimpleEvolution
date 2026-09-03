@@ -48,6 +48,37 @@ _SEAT_STATIONS = {
 # through experiment_ids, which the PI selects deliberately.
 _EVIDENCE_INDEX_MAX_ROWS = 100
 
+# The lab's record discipline, riding every engagement prompt (and the
+# continuation prompt) alike: it binds the seat and, by symmetry, the
+# Scientist whose briefs the seat reads. The point is the evidence
+# chain — a colleague's conclusion is citable, graded, and checkable,
+# never something that travels only by retelling. r9 died of the
+# opposite: one ungraded sentence relayed mouth-to-mouth became law
+# for five hours with three endorsements and zero tests.
+_LAB_RECORD_BLOCK = (
+    "Laboratory record discipline — four rules, binding every member "
+    "of this lab, the Scientist included:\n"
+    "1. Conclusions live in the record, not in conversation. The "
+    "report you close with is archived by the machinery into "
+    "``.scientist/record.jsonl`` as a citable entry (REC-001, "
+    "REC-002, …); nothing you establish travels further by "
+    "retelling.\n"
+    "2. Cite, don't retell. When your work rests on a colleague's "
+    "conclusion, read the record entry itself — its grade, its "
+    "evidence, its limits — not a summary of it. A forked bench "
+    "carries no record: there, what a brief quotes of an entry — its "
+    "id, grade, and falsifier — is the entry's face to you, and any "
+    "restrictive sentence in a brief that cites neither the spec nor "
+    "a record entry is one colleague's advice: checkable, and "
+    "overridable by what you find.\n"
+    "3. Verify what you build on. Before your next step rests on an "
+    "entry graded ``inferred``, weigh the cost of running its "
+    "falsifier — usually minutes — against the cost of being wrong; "
+    "what the refutation yields is yours to report.\n"
+    "4. ``not_measured`` is a result. An instrument that failed "
+    "reports the failure; it never reports a conclusion."
+)
+
 
 def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2)
@@ -69,15 +100,25 @@ def _objective_experiments(experiments: list[dict]) -> str:
 # it restated so the final fenced JSON stays anchored.
 _CLOSING_CONTRACT = (
     "Your private trajectory is not the Scientist's memory. Close the "
-    "engagement with a concise report of conclusions, evidence, "
-    "artifacts, uncertainty, and recommended follow-up, as the FINAL "
-    "message, in exactly this fenced JSON block — the harness reads "
-    "these fields and delivers them to the Scientist; prose outside "
-    "the block is archived but not delivered:\n"
+    "engagement with a concise report of conclusions, each with its "
+    "grade, plus evidence, artifacts, uncertainty, and recommended "
+    "follow-up, as the FINAL message, in exactly this fenced JSON "
+    "block — the harness reads these fields, archives them in the lab "
+    "record, and delivers them to the Scientist; prose outside the "
+    "block is archived but not delivered:\n"
     "```json\n"
     "{\n"
     '  "report_digest": "<the report: what you established, with the '
     'numbers>",\n'
+    '  "claim_grade": "<grade every conclusion you state: \\"measured\\" '
+    '(a run or reading backs it — name it in evidence), '
+    '\\"not_measured\\" (you tried to observe and the instrument '
+    'failed — say what failed), or \\"inferred\\" (reasoned from other '
+    'facts)>",\n'
+    '  "falsifier": "<for inferred conclusions: the cheapest concrete '
+    'experiment that would refute the claim — a change to try, a '
+    'command to run; \\"n/a\\" when every stated conclusion is '
+    'measured or not_measured>",\n'
     '  "diff_summary": "<files changed in your workspace, if any; for '
     'fork work: the commit range or diff against the base>",\n'
     '  "metrics": {"<name>": "<value with units>"},\n'
@@ -141,6 +182,7 @@ def build_collaboration_prompt(
         "memory, reports, correspondence — kept by the machinery. It is "
         "yours to read; it belongs to the run, not to the tree, and no "
         "git operation reaches it.",
+        _LAB_RECORD_BLOCK,
         f"Engagement brief — the Scientist's account and request. Its "
         f"measured facts are yours to use; its characterizations — of "
         f"the constraints, of the terrain — are one colleague's "
@@ -262,6 +304,7 @@ def build_continuation_prompt(action: dict, *,
         "the world since you worked is in the brief below — the "
         "Scientist's account, as ever; the goal and constraints as "
         "written still govern.",
+        _LAB_RECORD_BLOCK,
         f"Engagement brief:\n{brief}",
         f"Definition of done:\n{done}",
     ]

@@ -49,10 +49,10 @@ def main():
 
     charge_cal, centroid_cal = features(args.calibration, positions)
     charge, centroid = features(args.data, positions)
-    denominator = float(charge_cal @ charge_cal)
-    if denominator <= 0:
-        raise ValueError("calibration contains no integrated charge")
-    energy_scale = float(energy_cal @ charge_cal) / denominator
+    energy_design = np.column_stack((charge_cal, np.ones(len(charge_cal))))
+    energy_map, *_ = np.linalg.lstsq(energy_design, energy_cal, rcond=None)
+    if not np.isfinite(energy_map).all():
+        raise ValueError("calibration charge is degenerate for energy fit")
     design_cal = np.column_stack((centroid_cal, np.ones(len(centroid_cal))))
     vertex_map, *_ = np.linalg.lstsq(design_cal, vertex_cal, rcond=None)
     vertex = np.column_stack((centroid, np.ones(len(centroid)))) @ vertex_map
@@ -60,7 +60,7 @@ def main():
     args.out.parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         args.out,
-        E_rec=energy_scale * charge,
+        E_rec=np.column_stack((charge, np.ones(len(charge)))) @ energy_map,
         x_rec=vertex[:, 0],
         y_rec=vertex[:, 1],
         z_rec=vertex[:, 2],

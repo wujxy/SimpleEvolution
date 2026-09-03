@@ -25,6 +25,12 @@ Files (all line-JSON, append-only where the scientist writes):
                               when it opens the world, from the lineage)
 - ``assistant_calls.jsonl`` — one row per role engagement (the name is
                               historical; simpleevo's db readers know it)
+- ``record.jsonl``          — the lab's public record: one citable row
+                              per engagement report, appended by the
+                              harness at collection with its claimed
+                              grade and falsifier. The evidence chain's
+                              substrate — a colleague's conclusion is
+                              citable (REC-001…), never just retold.
 - ``usage.jsonl``           — one row per model call (the token ledger)
 
 The search/inspect logic over the seeded archive is a lean port of the
@@ -90,6 +96,7 @@ class LocalLedger:
         self.research_memory_path = self.root / "research_memory.jsonl"
         self.experiments_path = self.root / "experiments.jsonl"
         self.assistant_calls_path = self.root / "assistant_calls.jsonl"
+        self.record_path = self.root / "record.jsonl"
         self.usage_path = self.root / "usage.jsonl"
         self.notes_path = self.root / "notes.md"
 
@@ -673,6 +680,37 @@ class LocalLedger:
         }
 
     # -- assistant calls and usage (world files, post-hoc readable) ---------
+
+    def note_record(self, digest: dict) -> dict:
+        """Archive one finalized engagement report as a citable record row.
+
+        Appends to ``record.jsonl`` (the lab's public record) and
+        returns the row's id. No grading, filtering, or validation
+        happens here — the claimed grade and falsifier ride exactly as
+        the seat wrote them; the record's whole job is that they are
+        visible, attributed, and checkable, not that they are right.
+        """
+        rows = _read_rows(self.record_path)
+        record_id = f"REC-{len(rows) + 1:03d}"
+        evidence = digest.get("harness_evidence") or {}
+        _append_row(self.record_path, {
+            "record_id": record_id,
+            "call_id": digest.get("call_id"),
+            "role": digest.get("role"),
+            "ts": digest.get("finished_at"),
+            "status": digest.get("status"),
+            "report": digest.get("report_digest"),
+            "claim_grade": digest.get("claim_grade") or "",
+            "falsifier": digest.get("falsifier") or "",
+            "evidence": digest.get("evidence") or [],
+            "artifacts": digest.get("artifacts") or [],
+            "metrics": digest.get("metrics") or {},
+            "uncertainty": digest.get("uncertainty") or "",
+            "recommended_follow_up":
+                digest.get("recommended_follow_up") or "",
+            "workspace": evidence.get("workspace"),
+        })
+        return {"ok": True, "record_id": record_id}
 
     def note_assistant_call(self, record: dict) -> None:
         _append_row(self.assistant_calls_path, record)

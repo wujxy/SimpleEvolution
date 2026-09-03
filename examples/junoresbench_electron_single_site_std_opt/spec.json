@@ -12,7 +12,7 @@
     "model": "deepseek-v4-flash",
     "base_url": "https://api.deepseek.com",
     "api_key": "FILL_BEFORE_RUNNING",
-    "reasoning_effort": "low",
+    "reasoning_effort": "medium",
     "max_output_tokens": 8192
   },
   "assistant": {
@@ -22,11 +22,12 @@
       "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"
     },
     "model": "deepseek-v4-flash",
-    "effort": "low"
+    "effort": "medium"
   },
   "budget": {
     "steps": 3000,
     "wall_seconds": 604800,
+    "command_default_timeout_seconds": 300,
     "command_timeout_seconds": 14400,
     "command_output_cap_chars": 40000,
     "consult_timeout_seconds": 3600,

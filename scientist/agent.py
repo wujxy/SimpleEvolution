@@ -189,6 +189,10 @@ def build_system_prompt(spec: dict, *, roots: dict | None = None) -> str:
     team = load_semantic("research_team", None).strip()
     memory = load_semantic("research_memory", None).strip()
     anatomy = load_semantic("world_anatomy", None).strip()
+    # The code rides every run unconditionally, like the team and
+    # memory blocks: it is the profession's identity, not task
+    # configuration a spec should be tuning per run.
+    code = load_semantic("scientist_code", None).strip()
 
     world = _render_goal_block(
         goal=goal, editable=editable, base_sha=base_sha,
@@ -209,6 +213,17 @@ def build_system_prompt(spec: dict, *, roots: dict | None = None) -> str:
     )
     research_records = (
         "# Research Records\n\n"
+        "``/work/.scientist/record.jsonl`` is the lab's public record: "
+        "every colleague engagement's report archived as it is collected, "
+        "each with its claimed grade (measured / not_measured / inferred) "
+        "and its falsifier, citable as REC-001, REC-002, …. Read it "
+        "directly. The machinery writes it, not you: your own results "
+        "enter the same public tree through ``remember`` — your research "
+        "memory — and no one writes another's entries. When a brief of "
+        "yours rests on a colleague's conclusion, cite the record entry — "
+        "grade, limits, and falsifier included — rather than retelling "
+        "it; a retelling drops the very qualifiers the next reader most "
+        "needs.\n\n"
         "search_experiments answers coverage questions over past experiments "
         "— what ground is already covered, where the gaps are. "
         "inspect_experiment reads one past experiment in full, the only way "
@@ -226,6 +241,7 @@ def build_system_prompt(spec: dict, *, roots: dict | None = None) -> str:
     wake_up = render_startup_skills()
     parts = [
         charter.rstrip(),
+        code,
         team,
         memory,
         goal_and_constraints,

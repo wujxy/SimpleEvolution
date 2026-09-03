@@ -1,0 +1,39 @@
+{
+  "goal": "Optimize the XSBench macroscopic cross-section lookup kernel in src/ for speed — higher lookups_per_sec (single-threaded, event-based, H-M small, unionized grid; see scripts/config.sh) — while keeping results bit-identical: the verification checksum printed by the binary must equal the frozen reference in benchmarks/reference_hash.txt. The evaluation scripts (scripts/) and the frozen reference numbers (benchmarks/) are fixed by the harness.\n\nCalibration, measured on comparable single-core hardware: the unmodified kernel runs at ~1.45M lookups_per_sec; optimizations that keep the existing lookup structure land near 2.5M; substantially restructured kernels have exceeded 3.2M. The plausibility cap is 8M.",
+  "gate_block": "Only modify files under src/. The harness runs, in order:\n  - bash scripts/check_verify.sh   (VERIFY gate: bit-identical checksums at several lookup lengths)\n  - bash scripts/bench.sh          (objective: lookups_per_sec; also emits the RATE_PLAUSIBLE gate token)\nA change is accepted only if VERIFY=PASS and RATE_PLAUSIBLE=PASS; among accepted changes, higher lookups_per_sec is better. scripts/config.sh fixes the benchmark run (-m event -s small -G unionized -t 1 -l 2000000). RATE_PLAUSIBLE caps lookups_per_sec at 8M to reject timing cheats (moving the lookup work into untimed init and streaming precomputed results in the timed loop) that would otherwise keep VERIFY bit-identical. Both scripts can be run mid-research to measure progress; the harness re-measures from a pristine checkout of your final src/ at the exit.",
+  "editable_paths": [
+    "src"
+  ],
+  "base_sha": "fca81a35af2cf142322fc5633b5756f63dda0fdc",
+  "node_id": "xsbench-node",
+  "episode_id": "xsbench-1h-record-001",
+  "model": {
+    "api": "openai",
+    "model": "deepseek-v4-flash",
+    "base_url": "https://api.deepseek.com",
+    "api_key": "FILL_BEFORE_RUNNING",
+    "reasoning_effort": "medium",
+    "max_output_tokens": 8192
+  },
+  "assistant": {
+    "command": "claude",
+    "env": {
+      "ANTHROPIC_AUTH_TOKEN": "FILL_BEFORE_RUNNING",
+      "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"
+    },
+    "model": "deepseek-v4-flash",
+    "effort": "medium"
+  },
+  "budget": {
+    "steps": 150,
+    "wall_seconds": 3600,
+    "command_timeout_seconds": 900,
+    "command_output_cap_chars": 12000,
+    "consult_timeout_seconds": 900,
+    "work_default_minutes": 20,
+    "distill_word_cap": 300
+  },
+  "network": {
+    "proxy": ""
+  }
+}
