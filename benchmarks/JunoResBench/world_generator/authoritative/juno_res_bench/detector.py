@@ -16,7 +16,7 @@ bit-for-bit.
 import numpy as np
 
 from .config import DetectorConfig
-from .geometry import PMTLayout
+from .geometry import PMT_GENERIC, PMTLayout
 from .rng import make_rngs
 from .truth import DetectorCalibration, EventInput, EventTruth, PhotonSoA
 from .stages import s1_response, s2_photons, s3_optics, s4_detection, s5_electronics
@@ -27,6 +27,11 @@ def build_calibration(
 ) -> DetectorCalibration:
     """Per-PMT calibration truth, drawn once per detector (E2/D3 hooks)."""
     n = layout.n_pmt
+    if np.any(layout.pmt_model != PMT_GENERIC):
+        from .pmt_response import build_type_aware_response
+        if np.any(layout.pmt_model == PMT_GENERIC):
+            raise ValueError("typed detector response does not allow generic PMTs")
+        return DetectorCalibration(**build_type_aware_response(cfg, layout, rng))
     return DetectorCalibration(
         pde_delta=rng.normal(0.0, cfg.pde_sigma, n) if cfg.pde_sigma > 0 else np.zeros(n),
         gain=1.0 + gain_spread * rng.standard_normal(n) if gain_spread > 0 else np.ones(n),
@@ -36,6 +41,13 @@ def build_calibration(
             else np.zeros(n)
         ),
         tts_sigma_ns=np.full(n, cfg.tts_sigma_ns),
+        dark_rate_hz=np.full(n, cfg.dark_rate_hz),
+        pmt_model=layout.pmt_model.copy(),
+        spe_charge_resolution=np.full(n, 0.30),
+        tts_core_sigma_ns=np.full(n, cfg.tts_sigma_ns),
+        tts_satellite_prob=np.zeros(n),
+        tts_satellite_offset_ns=np.zeros(n),
+        tts_satellite_sigma_ns=np.zeros(n),
     )
 
 

@@ -82,8 +82,11 @@ python benchmarks/JunoResBench/world_generator/build_task.py \
   --probe-events-per-point 1 --controls 64
 ```
 
-真实坐标和型号身份只完成第一批结构升级；不同 PMT 型号的光学和波形响应属于
-下一批，不能仅凭本批改动宣称 benchmark 难度已经提高。
+性能响应不读取 JUNOSW 的逐管参数库。产生子仅以公开 JUNO 总体测量为锚点，按
+固定 seed 为三类 PMT 合成私有 PDE、DCR、gain、time offset、SPE 电荷和 TTS
+响应；数值来源与建模选择见[产生子物理与分辨率预算](docs/generator_physics_and_resolution_budget.md)。
+这增加了 charge/time 模型的自由度，但最终难度仍必须由重新生成 release 后的
+盲测结果确认，不能由代码复杂度代替。
 
 图由 `scripts/plot_electron_single_site_release.py` 从冻结 truth 生成，不打开稀疏
 波形样本文件，也不属于 agent 可见的任务包。

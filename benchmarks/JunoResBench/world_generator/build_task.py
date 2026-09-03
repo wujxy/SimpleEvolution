@@ -31,6 +31,7 @@ from benchmarks.JunoResBench.world_generator.oracle_vertex import charge_pattern
 PUBLIC_METADATA = {
     "layout", "geometry_source", "geometry_sha256", "pmt_model_counts",
     "n_pmt", "radius_m", "sample_interval_ns", "adc_bits", "window_ns",
+    "response_model",
 }
 
 PMT_MODEL_NAME = {
@@ -61,6 +62,10 @@ def _metadata(config, layout, simulator):
             PMT_MODEL_NAME[int(model)]: int(count)
             for model, count in zip(models, counts)
         },
+        "response_model": (
+            "generic_legacy" if np.all(layout.pmt_model == PMT_GENERIC)
+            else "synthetic_public_anchors_v1"
+        ),
         "n_pmt": layout.n_pmt,
         "radius_m": layout.radius_m,
         "sample_interval_ns": simulator.wave_cfg.sample_interval_ns,

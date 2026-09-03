@@ -106,14 +106,24 @@ def run_s4(
 
     # ---- per-type thinning blocks (stream isolation) ----------------------
     det_mask = np.zeros(n_arr, bool)
-    tts_draw = np.zeros(n_arr)
+    generic_response = np.all(calib.pmt_model == -1)
+    tts_residual_all = np.zeros(n_arr)
     for ptype in (0, 1):
         m = arrived_type == ptype
         n_blk = int(m.sum())
         if n_blk == 0:
             continue
         det_mask[m] = rng.random(n_blk) < p_det_ph[m]
-        tts_draw[m] = rng.normal(0.0, 1.0, n_blk)
+        if generic_response:
+            tts_residual_all[m] = (
+                rng.normal(0.0, 1.0, n_blk)
+                * calib.tts_sigma_ns[s3.pmt_idx[m]]
+            )
+        else:
+            from ..pmt_response import sample_transit_time
+            tts_residual_all[m] = sample_transit_time(
+                calib, s3.pmt_idx[m], rng
+            )
 
     idx = np.where(det_mask)[0]
     pmt_idx = s3.pmt_idx[idx]
@@ -121,8 +131,7 @@ def run_s4(
     t_arr = s3.t_arrive_ns[idx].astype(np.float64)
 
     # TTS (D5) + static per-PMT transit time offset (E2)
-    tts = calib.tts_sigma_ns[pmt_idx]
-    t_hit = t_arr + tts_draw[idx] * tts + calib.time_offset_ns[pmt_idx]
+    t_hit = t_arr + tts_residual_all[idx] + calib.time_offset_ns[pmt_idx]
 
     n_pe_pmt = np.bincount(pmt_idx, minlength=n_pmt).astype(np.int64)
     pe_type = photon_type[s3.photon_idx[idx]].astype(np.int8)

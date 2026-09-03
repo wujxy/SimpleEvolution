@@ -1,8 +1,8 @@
-"""Detector-level configuration for the JunoResBench toy MC.
+"""Detector-level configuration for the JunoResBench synthetic MC.
 
-All physics constants trace back to JUNO-SW J26.4.1 DetSimV2 (see
-docs/effects.md and docs/differences.md for provenance and rationale);
-the optical transport is deliberately collapsed into analytic functions.
+The model uses public JUNO measurements as scale/shape anchors. Installed
+JUNOSW performance and calibration databases are not runtime inputs; only
+the separately loaded CD-LPMT position/type geometry is used directly.
 """
 
 from dataclasses import dataclass

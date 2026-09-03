@@ -107,6 +107,7 @@ def test_generator_writes_only_data_into_dataset(tmp_path):
     assert metadata["layout"] == "uniform"
     assert metadata["geometry_sha256"] == []
     assert metadata["pmt_model_counts"] == {"generic": 16}
+    assert metadata["response_model"] == "generic_legacy"
 
 
 @requires_generation

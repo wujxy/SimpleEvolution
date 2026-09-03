@@ -51,8 +51,8 @@ def run_s5(
     # ---- dark noise: all channels, extended span (E4) --------------------
     span_lo = t0 - cfg.dark_span_pre_ns
     span_hi = t0 + cfg.dark_span_post_ns
-    mu_dark = cfg.dark_rate_hz * (span_hi - span_lo) * 1e-9
-    n_dark_ch = rng.poisson(mu_dark, len(calib.gain))
+    mu_dark = calib.dark_rate_hz * (span_hi - span_lo) * 1e-9
+    n_dark_ch = rng.poisson(mu_dark)
     n_dark = int(n_dark_ch.sum())
     dark_t = rng.uniform(span_lo, span_hi, n_dark)
     dark_ch = np.repeat(np.arange(len(calib.gain), dtype=np.int64), n_dark_ch)
@@ -85,7 +85,13 @@ def run_s5(
     for ptype in (0, 1):
         m = pe_type_w == ptype
         if m.any():
-            q_pe[m] = wavegen._sample_amplitudes(int(m.sum()), 1.0)
+            if np.all(calib.pmt_model == -1):
+                q_pe[m] = wavegen._sample_amplitudes(int(m.sum()), 1.0)
+            else:
+                from ..pmt_response import sample_spe_charge
+                q_pe[m] = sample_spe_charge(
+                    calib, pmt_idx_w[m], wavegen.rng
+                )
 
     # in-window dark hits, grouped by channel for waveform synthesis
     dw = (dark_t >= window_start) & (dark_t < window_start + cfg.window_ns)
@@ -188,9 +194,14 @@ def _synthesize_hits(ids, n_pe_pmt, t_rel, q_pe, dark_t, dark_ch, calib, cfg,
         n_dark_ch = j1 - j0
         if n_dark_ch:
             times.append(dark_t_s[j0:j1])
-            amps.append(
-                wavegen._sample_amplitudes(n_dark_ch, 1.0) * calib.gain[pmt]
-            )
+            if calib.pmt_model[pmt] == -1:
+                dark_amp = wavegen._sample_amplitudes(n_dark_ch, 1.0)
+            else:
+                from ..pmt_response import sample_spe_charge
+                dark_amp = sample_spe_charge(
+                    calib, np.full(n_dark_ch, pmt), wavegen.rng
+                )
+            amps.append(dark_amp * calib.gain[pmt])
 
         # afterpulses (E3): per-PE delayed pulses, waveform only (not truth)
         if cfg.afterpulse_prob > 0:
@@ -206,10 +217,14 @@ def _synthesize_hits(ids, n_pe_pmt, t_rel, q_pe, dark_t, dark_ch, calib, cfg,
                     n_ap_win = int(in_win.sum())
                     if n_ap_win:
                         times.append(t_ap[in_win])
-                        amps.append(
-                            wavegen._sample_amplitudes(n_ap_win, 1.0)
-                            * calib.gain[pmt]
-                        )
+                        if calib.pmt_model[pmt] == -1:
+                            ap_amp = wavegen._sample_amplitudes(n_ap_win, 1.0)
+                        else:
+                            from ..pmt_response import sample_spe_charge
+                            ap_amp = sample_spe_charge(
+                                calib, np.full(n_ap_win, pmt), wavegen.rng
+                            )
+                        amps.append(ap_amp * calib.gain[pmt])
         adc.append(
             wavegen._synthesize(np.concatenate(times), np.concatenate(amps))
         )

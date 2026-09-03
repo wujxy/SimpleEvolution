@@ -161,12 +161,23 @@ class DetectorCalibration:
     gain:      relative gain of each PMT (stage 5)
     time_offset_ns: static per-PMT time offset (stage 5)
     tts_sigma_ns:   per-PMT TTS width (stage 4; per-PMT variation v1)
+    dark_rate_hz:   per-PMT dark-count rate
+    pmt_model:      geometry PMT-family code
+    spe_charge_resolution: per-PMT relative SPE charge RMS
+    tts_*:          core/satellite approximation to transit-time response
     """
 
     pde_delta: np.ndarray        # (N_pmt,) float64
     gain: np.ndarray             # (N_pmt,) float64
     time_offset_ns: np.ndarray   # (N_pmt,) float64
     tts_sigma_ns: np.ndarray     # (N_pmt,) float64
+    dark_rate_hz: np.ndarray
+    pmt_model: np.ndarray
+    spe_charge_resolution: np.ndarray
+    tts_core_sigma_ns: np.ndarray
+    tts_satellite_prob: np.ndarray
+    tts_satellite_offset_ns: np.ndarray
+    tts_satellite_sigma_ns: np.ndarray
 
 
 # ---- stage outputs -------------------------------------------------------
