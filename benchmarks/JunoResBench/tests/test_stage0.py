@@ -4,6 +4,7 @@ Run: python3 benchmarks/JunoResBench/tests/test_stage0.py
 """
 
 import hashlib
+import os
 import sys
 import time
 from pathlib import Path
@@ -163,6 +164,27 @@ def test_juno_layout_rejects_invalid_pairs(
 
     with pytest.raises(ValueError, match=message):
         PMTLayout.from_juno_csv(pos, typ)
+
+
+@pytest.mark.skipif(
+    os.environ.get("JRB_RUN_JUNO_GEOMETRY") != "1",
+    reason="requires the JUNO J26.4.1 CVMFS geometry mount",
+)
+def test_installed_juno_geometry():
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import (
+        PMT_HAMAMATSU,
+        PMT_HIGHQE_NNVT,
+        PMT_NNVT,
+    )
+
+    layout = PMTLayout.from_juno_csv()
+
+    assert layout.n_pmt == 17612
+    assert np.unique(layout.copy_no).size == 17612
+    assert (layout.pmt_model == PMT_HAMAMATSU).sum() == 4955
+    assert (layout.pmt_model == PMT_NNVT).sum() == 2738
+    assert (layout.pmt_model == PMT_HIGHQE_NNVT).sum() == 9919
+    assert 19.0 < layout.radius_m < 19.5
 
 
 def test_calibration():

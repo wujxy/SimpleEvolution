@@ -17,7 +17,7 @@ from benchmarks.JunoResBench.world_generator.build_task import select_layout
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "world_generator" / "build_task.py"
-pytestmark = pytest.mark.skipif(
+requires_generation = pytest.mark.skipif(
     os.environ.get("JRB_RUN_GENERATION") != "1",
     reason="real waveform generation runs only on the designated batch cluster",
 )
@@ -81,6 +81,7 @@ def _truth(root):
         return {key: data[key] for key in data.files}
 
 
+@requires_generation
 def test_generator_writes_only_data_into_dataset(tmp_path):
     output = tmp_path / "electron"
 
@@ -108,6 +109,7 @@ def test_generator_writes_only_data_into_dataset(tmp_path):
     assert metadata["pmt_model_counts"] == {"generic": 16}
 
 
+@requires_generation
 def test_two_tasks_share_geometry_and_differ_in_particle_topology(tmp_path):
     electron = tmp_path / "electron"
     positron = tmp_path / "positron"
@@ -123,6 +125,7 @@ def test_two_tasks_share_geometry_and_differ_in_particle_topology(tmp_path):
     assert set(_truth(positron)["evt_particle_type"]) == {2}
 
 
+@requires_generation
 def test_probe_role_stays_aligned_with_shuffled_probe_energy(tmp_path):
     output = tmp_path / "electron"
 

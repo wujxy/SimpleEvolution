@@ -26,7 +26,7 @@
 - Modify `benchmarks/JunoResBench/world_generator/build_task.py`: CLI selection, production default, public geometry metadata.
 - Modify `benchmarks/JunoResBench/tests/test_stage0.py`: unit coverage for the layout schema and paired parser.
 - Modify `benchmarks/JunoResBench/tests/test_two_tier_black_box.py`: explicit uniform fixture generation and public-artifact assertions.
-- Modify `benchmarks/JunoResBench/world_generator/README.md`: production/preflight commands and CVMFS inputs.
+- Modify `benchmarks/JunoResBench/README.md`: production/preflight commands and CVMFS inputs.
 - Modify `benchmarks/JunoResBench/docs/generator_physics_and_resolution_budget.md`: record the geometry upgrade and its physical purpose.
 
 ### Task 1: Add typed, aligned PMT geometry
@@ -284,7 +284,7 @@ git commit -m "feat(jrb): publish LPMT geometry identity and provenance"
 ### Task 4: Document and verify the phase boundary
 
 **Files:**
-- Modify: `benchmarks/JunoResBench/world_generator/README.md`
+- Modify: `benchmarks/JunoResBench/README.md`
 - Modify: `benchmarks/JunoResBench/docs/generator_physics_and_resolution_budget.md`
 - Test: `benchmarks/JunoResBench/tests/test_stage0.py`
 
@@ -368,7 +368,7 @@ Confirm that no CVMFS CSV, NPZ waveform release, evaluator environment or
 unrelated working-tree file is staged. Then commit:
 
 ```bash
-git add benchmarks/JunoResBench/world_generator/README.md benchmarks/JunoResBench/docs/generator_physics_and_resolution_budget.md benchmarks/JunoResBench/tests/test_stage0.py
+git add benchmarks/JunoResBench/README.md benchmarks/JunoResBench/docs/generator_physics_and_resolution_budget.md benchmarks/JunoResBench/tests/test_stage0.py
 git commit -m "docs(jrb): define real geometry production provenance"
 ```
 

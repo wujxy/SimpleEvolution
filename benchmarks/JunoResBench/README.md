@@ -1,6 +1,6 @@
 # JunoResBench
 
-JunoResBench 是一个 JUNO-like 稀疏 PMT 波形重建 benchmark。当前版本只认
+JunoResBench 是一个 JUNO-like 稀疏 PMT 波形重建 benchmark。项目只认
 `world_generator/`、`tasks/` 和外部 release 数据三类彼此独立的组成部分。
 
 ## 当前任务
@@ -10,8 +10,9 @@ JunoResBench 是一个 JUNO-like 稀疏 PMT 波形重建 benchmark。当前版�
 | [`tasks/electron_single_site`](tasks/electron_single_site) | 1--10 MeV 单电子稀疏波形 | `E_rec,x_rec,y_rec,z_rec` | `R_1MeV <= 3.0%` 且 1 MeV 顶点 RMS 不超过冻结门槛 |
 | [`tasks/ibd_positron_multisite`](tasks/ibd_positron_multisite) | 正电子径迹与两条 511 keV gamma 的多点波形 | `E_rec` | `R_1MeV <= 3.0%` |
 
-当前只生成了单电子 release。由于磁盘约束，十个 probe 能点各有 200 个事例，
-另有 7680 个连续 control。该 release 不评价 t0。
+已经生成的单电子 release 暴露了低维总电荷捷径，现仅作为失败诊断样本，不是
+可发布的研究 benchmark。替代世界的设计见
+[`2026-09-03-junoresbench-juno-world-redesign-design.md`](../../docs/superpowers/specs/2026-09-03-junoresbench-juno-world-redesign-design.md)。
 
 ## 三方隔离
 
@@ -53,6 +54,37 @@ examples/junoresbench_electron_single_site_std_opt/
 - [电子径迹拓扑图](figures/electron_single_site_v2/track_topology.png)
 - [probe/control 人口图](figures/electron_single_site_v2/probe_population.png)
 
+## 新世界的真实 LPMT 几何
+
+正式生产默认读取 JUNO J26.4.1 的 CD-LPMT 位置和类型表：
+
+```bash
+python benchmarks/JunoResBench/world_generator/build_task.py \
+  --task ibd_positron_multisite \
+  --out /path/to/candidate \
+  --seed 20260903
+```
+
+产生子按 `CopyNo` 对齐两张表并 fail-closed。当前表包含 17,612 支 LPMT：
+4,955 支 Hamamatsu、2,738 支 NNVT 和 9,919 支 HighQENNVT。发行数据公开位置、
+CopyNo 和型号身份；逐管 PDE、gain、TTS 和 time offset 等私有响应常数不公开。
+源文件 SHA-256、行数和型号计数写入发行 metadata，源 CSV 不复制进 git。
+
+快速开发必须显式选择合成小几何，避免误把它用于正式生产：
+
+```bash
+python benchmarks/JunoResBench/world_generator/build_task.py \
+  --geometry-mode uniform --n-pmt 128 \
+  --task ibd_positron_multisite \
+  --out /tmp/jrb-preflight \
+  --seed 20260903 \
+  --calibration-events-per-point 1 \
+  --probe-events-per-point 1 --controls 64
+```
+
+真实坐标和型号身份只完成第一批结构升级；不同 PMT 型号的光学和波形响应属于
+下一批，不能仅凭本批改动宣称 benchmark 难度已经提高。
+
 图由 `scripts/plot_electron_single_site_release.py` 从冻结 truth 生成，不打开稀疏
 波形样本文件，也不属于 agent 可见的任务包。
 
@@ -91,5 +123,6 @@ python benchmarks/JunoResBench/world_generator/validate_release.py \
 见 [`validation/electron_single_site_current`](validation/electron_single_site_current)，
 旧 `6 ADC` 候选的拒绝报告见
 [`validation/electron_single_site_roi6_rejected`](validation/electron_single_site_roi6_rejected)。
-本阶段明确不要求 baseline 或专家算法达到 3%；这些是未来长跑后的经验性证据，
-不是当前产生子物理验收的伪前置条件。
+旧门禁曾允许 deferred 重建可达性和难度；首次 agent 运行已经证明该规则不足。
+替代发行必须同时通过物理门禁、盲测可达性和非平凡难度验证，且这些检查只评价
+结果，不规定参与者使用任何算法。
