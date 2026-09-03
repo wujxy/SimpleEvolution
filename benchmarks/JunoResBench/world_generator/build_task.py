@@ -16,6 +16,10 @@ from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.detect
 from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import (
     JUNO_LPMT_CSV,
     JUNO_LPMT_TYPE_CSV,
+    PMT_GENERIC,
+    PMT_HAMAMATSU,
+    PMT_HIGHQE_NNVT,
+    PMT_NNVT,
     PMTLayout,
 )
 from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.sparse_waveforms import SparseSplitWriter, encode_event
@@ -24,7 +28,17 @@ from benchmarks.JunoResBench.world_generator.populations import calibration_popu
 from benchmarks.JunoResBench.world_generator.oracle_vertex import charge_pattern_vertex_rms, freeze_threshold
 
 
-PUBLIC_METADATA = {"layout", "n_pmt", "radius_m", "sample_interval_ns", "adc_bits", "window_ns"}
+PUBLIC_METADATA = {
+    "layout", "geometry_source", "geometry_sha256", "pmt_model_counts",
+    "n_pmt", "radius_m", "sample_interval_ns", "adc_bits", "window_ns",
+}
+
+PMT_MODEL_NAME = {
+    PMT_GENERIC: "generic",
+    PMT_HAMAMATSU: "hamamatsu",
+    PMT_NNVT: "nnvt",
+    PMT_HIGHQE_NNVT: "highqe_nnvt",
+}
 
 
 def roi_threshold_adc(wave_cfg, sigma=5.0):
@@ -33,10 +47,20 @@ def roi_threshold_adc(wave_cfg, sigma=5.0):
 
 
 def _metadata(config, layout, simulator):
+    models, counts = np.unique(layout.pmt_model, return_counts=True)
     return {
         "seed": None,
         "detector_config": asdict(config),
-        "layout": "uniform",
+        "layout": (
+            "uniform" if layout.source == "synthetic"
+            else "juno_j26_4_1_cd_lpmt"
+        ),
+        "geometry_source": layout.source,
+        "geometry_sha256": list(layout.source_sha256),
+        "pmt_model_counts": {
+            PMT_MODEL_NAME[int(model)]: int(count)
+            for model, count in zip(models, counts)
+        },
         "n_pmt": layout.n_pmt,
         "radius_m": layout.radius_m,
         "sample_interval_ns": simulator.wave_cfg.sample_interval_ns,
@@ -113,7 +137,12 @@ def build(task_name, output_root, seed, layout, calibration_events_per_point, pr
     private = output_root / "private"
     public.mkdir(parents=True)
     private.mkdir()
-    np.savez_compressed(public / "detector_geometry.npz", pmt_positions_m=layout.positions_m)
+    np.savez_compressed(
+        public / "detector_geometry.npz",
+        pmt_positions_m=layout.positions_m,
+        pmt_copy_no=layout.copy_no,
+        pmt_model=layout.pmt_model,
+    )
     calibration = calibration_population(seeds[0], calibration_events_per_point)
     _simulate(calibration, simulator, layout, public / "calibration", None)
     np.savez_compressed(public / "calibration" / "labels.npz", source_energy_mev=calibration["evt_e_true"], deployment_position_m=calibration["evt_vertex_m"])

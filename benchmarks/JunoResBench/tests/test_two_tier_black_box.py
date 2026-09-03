@@ -1,6 +1,7 @@
 """Process-level checks for the isolated two-tier generator."""
 
 from pathlib import Path
+import json
 import os
 import subprocess
 import sys
@@ -72,7 +73,7 @@ def test_select_layout_juno_fails_closed(tmp_path):
 
 def _geometry(root):
     with np.load(root / "public" / "detector_geometry.npz") as data:
-        return data["pmt_positions_m"]
+        return {key: data[key] for key in data.files}
 
 
 def _truth(root):
@@ -88,6 +89,23 @@ def test_generator_writes_only_data_into_dataset(tmp_path):
     assert (output / "public" / "calibration" / "index.npz").is_file()
     assert (output / "private" / "truth.npz").is_file()
     assert not list(output.rglob("*.py"))
+    geometry = _geometry(output)
+    assert set(geometry) == {
+        "pmt_positions_m", "pmt_copy_no", "pmt_model"
+    }
+    assert np.array_equal(geometry["pmt_copy_no"], np.arange(16))
+    assert np.all(geometry["pmt_model"] == PMT_GENERIC)
+    assert not {
+        "gain", "pde_delta", "time_offset_ns", "tts_sigma_ns"
+    } & set(geometry)
+    metadata = json.loads(
+        (output / "public" / "dev" / "metadata.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert metadata["layout"] == "uniform"
+    assert metadata["geometry_sha256"] == []
+    assert metadata["pmt_model_counts"] == {"generic": 16}
 
 
 def test_two_tasks_share_geometry_and_differ_in_particle_topology(tmp_path):
@@ -97,7 +115,10 @@ def test_two_tasks_share_geometry_and_differ_in_particle_topology(tmp_path):
     _build("electron_single_site", electron)
     _build("ibd_positron_multisite", positron)
 
-    assert np.array_equal(_geometry(electron), _geometry(positron))
+    assert np.array_equal(
+        _geometry(electron)["pmt_positions_m"],
+        _geometry(positron)["pmt_positions_m"],
+    )
     assert set(_truth(electron)["evt_particle_type"]) == {0}
     assert set(_truth(positron)["evt_particle_type"]) == {2}
 
