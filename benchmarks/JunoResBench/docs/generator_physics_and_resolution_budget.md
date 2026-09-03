@@ -88,7 +88,7 @@ afterpulse probability。
 |---|---|---|
 | 发光 | 闪烁光按局部可见能量 Poisson 抽样，中心标定为 `10168 photons/MeV` 和有效 `1500 detected PE/MeV`；四分量闪烁时间常数为 4.6、15.1、76.1、397.0 ns。 | 给出光子计数涨落，并保留早/晚光的顶点信息。 |
 | Cherenkov | 对每个超过阈值的带电步按 Frank--Tamm 型 `1-1/(n beta)^2` 与路径长度抽样；1 MeV 电子的量级约为闪烁光的 2.5%。 | 是小但有方向性和早到时序的信息源，不能用一个总电荷模型完全替代。 |
-| 光学输运 | trace 模式逐光子处理波长依赖吸收、再发射及其延迟、Rayleigh 散射、PMT 圆盘命中和 ESR 漫反射；探测端还有波长 QE、入射角 collection efficiency 与位置非均匀性。 | 多点沉积、边缘事件和时间残差由这一层变为可观测差异。trace normalization 只用于保持中心 PE 标定锚点，不抹掉位置/时间效应。 |
+| 光学输运 | trace 模式逐光子处理波长依赖吸收、再发射及其延迟、Rayleigh 散射、LS--acrylic--water 传播、介质边界、固定结构、PMT 圆盘命中和 ESR 漫反射；探测端还有波长 QE 与入射角 collection efficiency。 | 多点沉积、边缘事件和时间残差由这一层变为可观测差异。trace normalization 只用于保持中心 PE 标定锚点，不抹掉位置/时间效应。 |
 | PMT/电子学 | 按 HPK/NNVT/High-QE NNVT 抽样逐管 PDE、DCR、gain、time offset；HPK 与 NNVT 使用不同的 SPE 电荷族和 TTS 形状；另含后脉冲、触发定义的 1 us 窗口、1 GHz/14 bit ADC、白噪声和零抑制。 | 同一光子在不同管上不再得到可交换响应；charge、time 与 occupancy 提供互补且失配的观测，迫使重建处理标定和似然形状。 |
 
 逐管响应是合成潜变量，不对应任何真实 JUNO PMT。这样保留公开测量支持的型号差异
@@ -102,14 +102,21 @@ afterpulse probability。
   Cherenkov 使用 Frank--Tamm 形状的短波增强谱。
 - Stage 3 从 Stage 2 接收并传播该波长；只有真实的吸收--再发射过程才生成新的
   fluor 波长，不再在光学传播入口重抽发射谱。
-- 每一段液闪传播使用波长相关的群速度，而不是统一的常数折射率飞行时间。
+- LS、acrylic 和 water 每一段传播均使用本介质的波长相关群速度，而不是统一的
+  常数折射率飞行时间。
+- 光子在 17.7 m LS 球、12.4 cm acrylic 壳和外部水缓冲层间用解析球面求交；
+  每次跨界执行非偏振 Fresnel 抽样、Snell 折射或全反射，反射光继续传播。
+- acrylic 外表面的 chimney、590 点节点格和支撑带是固定 detector-coordinate
+  解析遮挡体；它们作用于真实穿越点，而不是逐事件随机响应斑点。
 - trace 模式的 PMT 探测使用散射或反射后的最终传播方向，不再用初始发射方向或
   沉积点到 PMT 的弦方向替代。
 - trace 光学已经显式产生路径损失和空间非均匀性，因此探测阶段不再叠加旧的手工
   径向光产额多项式；中心处只保留一次全局 PE 标定。
 
-这组修改首先修复变量所有权和因果连续性，尚不等价于完整 JUNO 光学。LS--acrylic--
-water 的 Snell/Fresnel/TIR、固定结构遮挡和 PMT 表面反射属于下一批多介质实现。
+17.7 m、12.4 cm 和 PMT 球尺度由公开 JUNO 几何约束。acrylic/water 的平滑色散、
+吸收长度以及结构光学深度是公开尺度约束下的合成实现，不冒充 JUNOSW 参数。当前
+仍不等价于完整 JUNO 光学：PMT glass/photocathode 多层反射与未探测光子的回流属于
+下一批 PMT 光学实现。
 
 ## 4. 1 MeV 分辨率的先验预算
 
