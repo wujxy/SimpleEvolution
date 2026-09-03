@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -99,6 +100,69 @@ def test_direction_grid():
     acc = (got == np.arange(lay.n_pmt)).mean()
     assert acc > 0.85, f"direction grid accuracy {acc:.2f} too low"
     print(f"ok  direction grid ({len(grid.bin_dirs)} bins, acc={acc:.2f})")
+
+
+def test_juno_layout_aligns_position_and_type_by_copy_number(tmp_path):
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import (
+        PMT_HAMAMATSU,
+        PMT_HIGHQE_NNVT,
+        PMT_NNVT,
+    )
+
+    pos = tmp_path / "pos.csv"
+    typ = tmp_path / "type.csv"
+    pos.write_text(
+        "# header\n2 0 0 -19365 180 0\n0 0 0 19365 0 0\n"
+        "1 19365 0 0 90 0\n",
+        encoding="utf-8",
+    )
+    typ.write_text(
+        "# header\n1 NNVT\n2 HighQENNVT\n0 Hamamatsu\n",
+        encoding="utf-8",
+    )
+
+    layout = PMTLayout.from_juno_csv(pos, typ)
+
+    assert np.array_equal(layout.copy_no, [0, 1, 2])
+    assert np.allclose(layout.positions_m[:, 2], [19.365, 0.0, -19.365])
+    assert np.array_equal(
+        layout.pmt_model,
+        [PMT_HAMAMATSU, PMT_NNVT, PMT_HIGHQE_NNVT],
+    )
+    assert layout.source == "JUNO J26.4.1 CD-LPMT"
+    assert len(layout.source_sha256) == 2
+
+
+@pytest.mark.parametrize(
+    ("position_rows", "type_rows", "message"),
+    [
+        (
+            "0 0 0 1 0 0\n0 0 0 1 0 0\n",
+            "0 Hamamatsu\n",
+            "duplicate CopyNo",
+        ),
+        (
+            "0 0 0 1 0 0\n1 0 0 -1 0 0\n",
+            "0 Hamamatsu\n",
+            "position/type CopyNo mismatch",
+        ),
+        (
+            "0 0 0 1 0 0\n",
+            "0 mystery\n",
+            "unknown PMT type",
+        ),
+    ],
+)
+def test_juno_layout_rejects_invalid_pairs(
+    tmp_path, position_rows, type_rows, message
+):
+    pos = tmp_path / "pos.csv"
+    typ = tmp_path / "type.csv"
+    pos.write_text(position_rows, encoding="utf-8")
+    typ.write_text(type_rows, encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        PMTLayout.from_juno_csv(pos, typ)
 
 
 def test_calibration():

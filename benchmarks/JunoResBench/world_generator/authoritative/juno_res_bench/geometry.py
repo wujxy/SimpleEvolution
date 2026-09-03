@@ -8,6 +8,8 @@ Two layout modes:
 """
 
 from dataclasses import dataclass
+import hashlib
+from pathlib import Path
 
 import numpy as np
 
@@ -15,6 +17,20 @@ JUNO_LPMT_CSV = (
     "/cvmfs/juno.ihep.ac.cn/el9_amd64_gcc15/Release/J26.4.1/"
     "data/Detector/Geometry/PMTPos_CD_LPMT.csv"
 )
+JUNO_LPMT_TYPE_CSV = (
+    "/cvmfs/juno.ihep.ac.cn/el9_amd64_gcc15/Release/J26.4.1/"
+    "data/Detector/Geometry/PMTType_CD_LPMT.csv"
+)
+
+PMT_GENERIC = -1
+PMT_HAMAMATSU = 0
+PMT_NNVT = 1
+PMT_HIGHQE_NNVT = 2
+_PMT_MODEL_CODE = {
+    "Hamamatsu": PMT_HAMAMATSU,
+    "NNVT": PMT_NNVT,
+    "HighQENNVT": PMT_HIGHQE_NNVT,
+}
 
 
 def fibonacci_sphere(n: int, radius_m: float) -> np.ndarray:
@@ -28,26 +44,33 @@ def fibonacci_sphere(n: int, radius_m: float) -> np.ndarray:
     ) * radius_m
 
 
-def load_juno_lpmt_csv(path: str = JUNO_LPMT_CSV) -> np.ndarray:
-    """Read JUNO PMTPos_CD_LPMT.csv -> (N, 3) positions in meters.
-
-    Format: CopyNo X Y Z theta phi (mm / deg); '#' and quoted comment lines
-    are skipped.
-    """
-    rows = []
-    with open(path) as f:
+def _data_lines(path):
+    with Path(path).open(encoding="utf-8-sig") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#") or line.startswith('"#'):
                 continue
-            parts = line.split()
-            if len(parts) < 4:
-                continue
-            rows.append((float(parts[1]), float(parts[2]), float(parts[3])))
-    pos_mm = np.asarray(rows, dtype=np.float64)
-    if pos_mm.ndim != 2 or pos_mm.shape[1] != 3:
-        raise ValueError(f"unexpected CSV layout in {path}")
-    return pos_mm * 1e-3
+            yield line.split()
+
+
+def _unique_rows(path, min_fields):
+    rows = {}
+    for parts in _data_lines(path):
+        if len(parts) < min_fields:
+            raise ValueError(f"unexpected CSV row in {path}: {' '.join(parts)}")
+        copy_no = int(parts[0])
+        if copy_no in rows:
+            raise ValueError(f"duplicate CopyNo {copy_no} in {path}")
+        rows[copy_no] = parts
+    return rows
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        for block in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -55,6 +78,31 @@ class PMTLayout:
     """PMT centers on a sphere; normals point toward the detector center."""
 
     positions_m: np.ndarray   # (N, 3)
+    copy_no: np.ndarray = None
+    pmt_model: np.ndarray = None
+    source: str = "synthetic"
+    source_sha256: tuple = ()
+
+    def __post_init__(self):
+        positions = np.asarray(self.positions_m, dtype=np.float64)
+        if positions.ndim != 2 or positions.shape[1] != 3 or not np.isfinite(positions).all():
+            raise ValueError("positions_m must be a finite (N, 3) array")
+        n = len(positions)
+        copy_no = (np.arange(n, dtype=np.int32) if self.copy_no is None
+                   else np.asarray(self.copy_no, dtype=np.int32))
+        pmt_model = (np.full(n, PMT_GENERIC, dtype=np.int8)
+                     if self.pmt_model is None
+                     else np.asarray(self.pmt_model, dtype=np.int8))
+        if copy_no.shape != (n,) or np.unique(copy_no).size != n:
+            raise ValueError("copy_no must contain one unique value per PMT")
+        if pmt_model.shape != (n,) or not np.isin(
+            pmt_model,
+            [PMT_GENERIC, PMT_HAMAMATSU, PMT_NNVT, PMT_HIGHQE_NNVT],
+        ).all():
+            raise ValueError("pmt_model contains an unknown code")
+        object.__setattr__(self, "positions_m", positions)
+        object.__setattr__(self, "copy_no", copy_no)
+        object.__setattr__(self, "pmt_model", pmt_model)
 
     @property
     def n_pmt(self) -> int:
@@ -75,8 +123,43 @@ class PMTLayout:
         return cls(positions_m=fibonacci_sphere(n_pmt, radius_m))
 
     @classmethod
-    def from_juno_csv(cls, path: str = JUNO_LPMT_CSV) -> "PMTLayout":
-        return cls(positions_m=load_juno_lpmt_csv(path))
+    def from_juno_csv(
+        cls,
+        position_path: str | Path = JUNO_LPMT_CSV,
+        type_path: str | Path = JUNO_LPMT_TYPE_CSV,
+    ) -> "PMTLayout":
+        """Load and align official CD-LPMT position/type rows by CopyNo."""
+        positions = _unique_rows(position_path, 4)
+        types = _unique_rows(type_path, 2)
+        if positions.keys() != types.keys():
+            raise ValueError("position/type CopyNo mismatch")
+        copy_no = np.asarray(sorted(positions), dtype=np.int32)
+        pos_mm = np.asarray(
+            [[float(value) for value in positions[i][1:4]] for i in copy_no],
+            dtype=np.float64,
+        )
+        models = []
+        for i in copy_no:
+            name = types[i][1].strip()
+            if name not in _PMT_MODEL_CODE:
+                raise ValueError(f"unknown PMT type: {name}")
+            models.append(_PMT_MODEL_CODE[name])
+        return cls(
+            positions_m=pos_mm * 1e-3,
+            copy_no=copy_no,
+            pmt_model=np.asarray(models, dtype=np.int8),
+            source="JUNO J26.4.1 CD-LPMT",
+            source_sha256=(_sha256(position_path), _sha256(type_path)),
+        )
+
+
+def load_juno_lpmt_csv(path: str = JUNO_LPMT_CSV) -> np.ndarray:
+    """Backward-compatible position-only loader."""
+    rows = _unique_rows(path, 4)
+    return np.asarray(
+        [[float(value) for value in rows[i][1:4]] for i in sorted(rows)],
+        dtype=np.float64,
+    ) * 1e-3
 
 
 def nearest_pmt_indices(
