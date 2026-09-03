@@ -13,7 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.config import DetectorConfig
 from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.detector import DetectorSim
-from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import PMTLayout
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import (
+    JUNO_LPMT_CSV,
+    JUNO_LPMT_TYPE_CSV,
+    PMTLayout,
+)
 from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.sparse_waveforms import SparseSplitWriter, encode_event
 from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import PARTICLE_CODE_TYPE
 from benchmarks.JunoResBench.world_generator.populations import calibration_population, physics_population
@@ -86,14 +90,24 @@ def _ensure_fresh(path):
         raise FileExistsError(f"refusing to reuse non-empty output directory: {path}")
 
 
-def build(task_name, output_root, seed, n_pmt, calibration_events_per_point, probe_events_per_point, controls):
+def select_layout(mode, n_pmt, position_csv, type_csv):
+    """Select real production geometry or an explicit synthetic test layout."""
+    if mode == "uniform":
+        if n_pmt is None:
+            raise ValueError("uniform geometry requires n_pmt")
+        return PMTLayout.uniform(n_pmt, DetectorConfig().detector_radius_m)
+    if mode == "juno":
+        return PMTLayout.from_juno_csv(position_csv, type_csv)
+    raise ValueError(f"unknown geometry mode: {mode}")
+
+
+def build(task_name, output_root, seed, layout, calibration_events_per_point, probe_events_per_point, controls):
     """Generate a task's data artifacts without copying executable code."""
     output_root = Path(output_root)
     _ensure_fresh(output_root)
     streams = np.random.SeedSequence(seed).spawn(5)
     seeds = [int(stream.generate_state(1, dtype=np.uint64)[0]) for stream in streams]
     config = DetectorConfig(optics_mode="trace", full_readout=True, three_gamma_frac=0.0)
-    layout = PMTLayout.uniform(n_pmt, config.detector_radius_m)
     simulator = DetectorSim(config, layout, seed=seeds[4])
     public = output_root / "public"
     private = output_root / "private"
@@ -126,12 +140,21 @@ def main():
     parser.add_argument("--task", choices=("electron_single_site", "ibd_positron_multisite"), required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--seed", type=int, required=True)
-    parser.add_argument("--n-pmt", type=int, default=17612)
+    parser.add_argument("--geometry-mode", choices=("juno", "uniform"), default="juno")
+    parser.add_argument("--juno-position-csv", default=JUNO_LPMT_CSV)
+    parser.add_argument("--juno-type-csv", default=JUNO_LPMT_TYPE_CSV)
+    parser.add_argument("--n-pmt", type=int)
     parser.add_argument("--calibration-events-per-point", type=int, default=20)
     parser.add_argument("--probe-events-per-point", type=int, default=1000)
     parser.add_argument("--controls", type=int, default=6400)
     args = parser.parse_args()
-    build(args.task, args.out, args.seed, args.n_pmt, args.calibration_events_per_point, args.probe_events_per_point, args.controls)
+    layout = select_layout(
+        args.geometry_mode,
+        args.n_pmt,
+        args.juno_position_csv,
+        args.juno_type_csv,
+    )
+    build(args.task, args.out, args.seed, layout, args.calibration_events_per_point, args.probe_events_per_point, args.controls)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,11 @@ import sys
 import numpy as np
 import pytest
 
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import (
+    PMT_GENERIC,
+)
+from benchmarks.JunoResBench.world_generator.build_task import select_layout
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "world_generator" / "build_task.py"
@@ -25,6 +30,7 @@ def _build(task_name, output_root):
             "--task", task_name,
             "--out", str(output_root),
             "--seed", "20260901",
+            "--geometry-mode", "uniform",
             "--n-pmt", "16",
             "--calibration-events-per-point", "1",
             "--probe-events-per-point", "1",
@@ -32,6 +38,36 @@ def _build(task_name, output_root):
         ],
         check=True,
     )
+
+
+def test_select_layout_uses_aligned_juno_pair(tmp_path):
+    pos = tmp_path / "pos.csv"
+    typ = tmp_path / "type.csv"
+    pos.write_text(
+        "0 0 0 19365 0 0\n1 19365 0 0 90 0\n2 0 0 -19365 180 0\n",
+        encoding="utf-8",
+    )
+    typ.write_text(
+        "2 HighQENNVT\n0 Hamamatsu\n1 NNVT\n",
+        encoding="utf-8",
+    )
+
+    layout = select_layout("juno", None, pos, typ)
+
+    assert layout.n_pmt == 3
+    assert set(layout.pmt_model) == {0, 1, 2}
+
+
+def test_select_layout_keeps_uniform_explicit():
+    layout = select_layout("uniform", 16, None, None)
+
+    assert layout.n_pmt == 16
+    assert np.all(layout.pmt_model == PMT_GENERIC)
+
+
+def test_select_layout_juno_fails_closed(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        select_layout("juno", None, tmp_path / "missing-pos", tmp_path / "missing-type")
 
 
 def _geometry(root):
