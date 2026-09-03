@@ -23,6 +23,7 @@ examples/junoresbench_full_opt/
 examples/junoresbench_full_std_opt/
 examples/junoresbench_static_opt/
 examples/junoresbench_wb_opt/
+examples/junoresbench_python_runtime/eval_venv/
 
 # Mounted JunoResBench release views: small package plus external-data symlinks.
 benchmarks/JunoResBench/runtime/
