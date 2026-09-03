@@ -1,9 +1,11 @@
 """Scientist prompt loading.
 
-The PI charter (``scientist.md``) and the team/memory blocks
+The PI charter (``scientist.md``), the scientist's code
+(``scientist_code.md``), and the team/memory blocks
 (``research_team.md``, ``research_memory.md``) live in this package and
 travel with it. A spec may override the charter by passing ``charter``
-directly; these files are the packaged defaults.
+directly; the code rides every run unconditionally. These files are the
+packaged defaults.
 """
 from __future__ import annotations
 

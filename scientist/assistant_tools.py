@@ -377,6 +377,26 @@ class InWorldAssistant:
                 "usage": usage if isinstance(usage, dict) else None,
             })
 
+    def _register_record(self, digest: dict) -> None:
+        """Archive a finalized report in the lab's public record.
+
+        Called exactly once per engagement, immediately before the
+        digest is persisted — the returned id rides into digest.json,
+        so the report the Scientist receives names the record entry it
+        became. Idempotence is collect()'s: the existing-digest
+        short-circuit means no engagement is recorded twice.
+        """
+        with self._lock:
+            try:
+                noted = self.ledger.note_record(digest)
+            except OSError as exc:
+                # A record that cannot be written must not lose the
+                # report it describes — the engagement still delivers;
+                # the archive gap is visible as a missing id.
+                digest["record_note"] = f"record append failed: {exc}"
+                return
+        digest["record_id"] = noted.get("record_id")
+
     def _command_payload(self, allowed_tools: str,
                          resume_session: str | None = None) -> list[str]:
         payload = [
@@ -924,6 +944,7 @@ class InWorldAssistant:
                     "ok": True,
                     "channel": "belief",
                 }
+                self._register_record(digest)
                 self._persist_raw(call_id, prompt, digest)
                 self._note(call_id, role,
                            f"{mani.get('brief') or ''} -> [{status_hint}] "
@@ -932,6 +953,7 @@ class InWorldAssistant:
             digest = {**common, "status": "failed", "ok": False,
                       "error": note or f"{status_hint} with no salvageable "
                                        "output"}
+            self._register_record(digest)
             self._persist_raw(call_id, prompt, digest)
             self._note(call_id, role,
                        f"{mani.get('brief') or ''} -> {note}", None)
@@ -957,6 +979,8 @@ class InWorldAssistant:
             "diff_summary": diff_summary,
             "self_report_digest": self_report,
             "report_digest": self_report,
+            "claim_grade": str(tail.get("claim_grade") or ""),
+            "falsifier": str(tail.get("falsifier") or ""),
             "evidence": tail.get("evidence") or [],
             "artifacts": tail.get("artifacts") or [],
             "uncertainty": tail.get("uncertainty") or "",
@@ -968,6 +992,7 @@ class InWorldAssistant:
             # assistant's own report.
             "channel": "belief",
         }
+        self._register_record(digest)
         self._persist_raw(call_id, prompt, digest)
         self._note(call_id, role,
                    f"{mani.get('brief') or ''} -> {self_report}", usage)
