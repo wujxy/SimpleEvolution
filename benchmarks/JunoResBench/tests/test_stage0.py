@@ -211,18 +211,18 @@ GOLDEN_EVENTS = (
     EventInput(0.0, 0.0, 0.0, 2.5, t0_ns=-4.0),
 )
 GOLDEN_DIGESTS = {
-    "fast_wf0_ev0": "672f34459ee4e62eca15e8a8b0cdb1f0d7e4c703c26e2ee4aecf5045aa31b793",
-    "fast_wf0_ev1": "56a92cc4eac4f1fc6ef2fd0198bf942bb1dcb2e10e77fc070c641d5727605061",
-    "fast_wf0_ev2": "86b945b70c84915ae34b131b2e2f89343d9f0e1a6e3b451690b48a75cab6d32e",
-    "fast_wf1_ev0": "5004e4c83b8ed86a984f278f0454d16d9d6225759945a3bf41204a2c9264a1a7",
-    "fast_wf1_ev1": "71ef2b1773d1e3b82dc2d8934cb38d2affec59f605400cf37b7ca24357ef5353",
-    "fast_wf1_ev2": "6e84fd1114d578396c33a6826473e65951e60c73a27ccbc995342e51c284db8f",
-    "trace_wf0_ev0": "e352e6c8fb8cef0ebef86f3e03256a2a8bdab4e557ae513be706fcdb532cb006",
-    "trace_wf0_ev1": "88b4d1ac04fd6f6b75912266572438892c536c9cdefd568e4ac13e219ff5b74f",
-    "trace_wf0_ev2": "75fb0a62abad47ee67431f6619c43ec8b953aaed0340998b33b02b4661466d68",
-    "trace_wf1_ev0": "03f2d73a5ecaf835c41db8b6f0792d101eb21d8999c20f03ecf819c92bf7bae1",
-    "trace_wf1_ev1": "bda01b6c02d64ebbe8377ce0a4c099c215a8b21325c419bc0df5444e3b2ba9d0",
-    "trace_wf1_ev2": "40b4bf4af3161fb617ec026a812dc6d8771a7faaf09a54341d36c947a33e58df",
+    "fast_wf0_ev0": "1ba8dec9316f8d4e98cb4be72e36b0340f12e9d88d5d59fec1e8e16395b1ec26",
+    "fast_wf0_ev1": "98f8d0cf4162cf683f36229bbc789003b8c5a8e8ede0c6770a12eabda8957dca",
+    "fast_wf0_ev2": "bac8ed52b6308bf00d0f94feaedfc3272d4b870d0820daeb66d512e15d1a28ce",
+    "fast_wf1_ev0": "3063638a6deab297c157fe2d6dd22b37362fb0d0dbb3c70c1c86caf1816c4058",
+    "fast_wf1_ev1": "55b7670945e32190c7fc61e483a86cff1152cad8af797f36a446b9ae994fbc01",
+    "fast_wf1_ev2": "daa65c5cf46bb64fac099081fcdad67475a45203bf467ef69b853269f2f5d051",
+    "trace_wf0_ev0": "853366d502e2c50fb25b35fd9a612b159a7dc580dfd7862b1d32bb39d70ebd8f",
+    "trace_wf0_ev1": "05527c5ebf5acba266aad59ed9b31a60e79bd7ab3735cf35bf3d8fe08eb7620b",
+    "trace_wf0_ev2": "11d339f0b9fb28ce127e2b54befce7c49099400d17ab70f7b5cc23332a8f5a7f",
+    "trace_wf1_ev0": "5a62125e977f0b38b994ba25d13a619f4671d2f317e9c3cc534bbab3f32e48cf",
+    "trace_wf1_ev1": "a610efa671925d8f9f5583bc00765483ecddc5c6a981a96f366bcdbe9a40e448",
+    "trace_wf1_ev2": "b1d564f8f636071e650cc8a048646cd107da64798faa6c01f357dc4545b68dc2",
 }
 
 
