@@ -16,6 +16,64 @@ from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geomet
 from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages.s4_detection import ce_factor
 
 
+def test_trace_arrival_direction_overrides_emission_chord():
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages.s4_detection import (
+        _arrival_cosine,
+    )
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import (
+        EventInput,
+        S3Output,
+    )
+
+    layout = PMTLayout.uniform(1, radius_m=19.365)
+    final_dir = -layout.inward_normals[[0]]
+    s3 = S3Output(
+        n_arrived_pmt=np.array([1]),
+        pmt_idx=np.array([0], np.int32),
+        t_arrive_ns=np.array([0], np.float32),
+        photon_idx=np.array([0]),
+        det_scale=np.ones(1),
+        dir_at_pmt=final_dir,
+    )
+    cos_inc = _arrival_cosine(
+        s3,
+        EventInput(0, 0, 0, 1.0),
+        layout,
+        pos_ph=np.array([[10.0, 0.0, 0.0]]),
+        arrived_type=np.array([0], np.int8),
+        photon_dir=None,
+    )
+    assert np.allclose(cos_inc, 1.0)
+
+
+def test_trace_base_detection_has_no_hand_radial_factor():
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages.s4_detection import (
+        _base_detection_probability,
+    )
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import (
+        EventInput,
+        S3Output,
+    )
+
+    cfg = DetectorConfig(optics_mode="trace")
+    s3 = S3Output(
+        n_arrived_pmt=np.array([1]),
+        pmt_idx=np.array([0], np.int32),
+        t_arrive_ns=np.array([0], np.float32),
+        photon_idx=np.array([0]),
+        det_scale=np.ones(1),
+        lam_nm=np.array([430.0]),
+        dir_at_pmt=np.array([[0.0, 0.0, 1.0]]),
+    )
+    center = _base_detection_probability(
+        s3, EventInput(0, 0, 0, 1.0), cfg, None
+    )
+    edge = _base_detection_probability(
+        s3, EventInput(15, 0, 0, 1.0), cfg, None
+    )
+    assert np.array_equal(np.asarray(center), np.asarray(edge))
+
+
 def test_ce_interpolation():
     cfg = DetectorConfig()
     # table anchors reproduced exactly

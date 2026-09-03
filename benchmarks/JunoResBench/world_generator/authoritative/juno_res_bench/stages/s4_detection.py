@@ -28,6 +28,43 @@ def ce_factor(cfg: DetectorConfig, cos_inc: np.ndarray) -> np.ndarray:
     )
 
 
+def _base_detection_probability(s3, event, cfg, photon_pos):
+    """Detection scale before angular, per-PMT and wavelength response."""
+    if cfg.optics_mode == "trace":
+        p_det = cfg.p_det_center
+    elif photon_pos is not None:
+        pos_ph = np.asarray(photon_pos, np.float64)[s3.photon_idx]
+        r_ph = np.linalg.norm(pos_ph, axis=1)
+        p_det = cfg.p_det_center * cfg.mu_pe_ratio(np.maximum(r_ph, 1e-6))
+    else:
+        r = float(np.linalg.norm(event.vertex_m))
+        p_det = cfg.p_det_center * cfg.mu_pe_ratio(max(r, 1e-6))
+    scale = s3.det_scale if s3.det_scale is not None else np.ones(len(s3.pmt_idx))
+    return p_det * scale
+
+
+def _arrival_cosine(s3, event, layout, pos_ph, arrived_type, photon_dir):
+    """Cosine of PMT incidence angle, preferring the final traced ray."""
+    n_in = layout.inward_normals[s3.pmt_idx]
+    if s3.dir_at_pmt is not None:
+        direction = np.asarray(s3.dir_at_pmt, np.float64).copy()
+        direction /= np.linalg.norm(direction, axis=1, keepdims=True)
+        return -np.einsum("ij,ij->i", direction, n_in)
+
+    if pos_ph is not None:
+        direction = layout.positions_m[s3.pmt_idx] - pos_ph
+    else:
+        direction = layout.positions_m[s3.pmt_idx] - event.vertex_m[None, :]
+    direction /= np.linalg.norm(direction, axis=1, keepdims=True)
+    cos_inc = -np.einsum("ij,ij->i", direction, n_in)
+    if photon_dir is not None:
+        emitted = np.asarray(photon_dir, np.float64)[s3.photon_idx]
+        emitted /= np.linalg.norm(emitted, axis=1, keepdims=True)
+        cher_cos = -np.einsum("ij,ij->i", emitted, n_in)
+        cos_inc = np.where(arrived_type == 1, cher_cos, cos_inc)
+    return cos_inc
+
+
 def run_s4(
     s3: S3Output,
     event,
@@ -39,19 +76,9 @@ def run_s4(
     layout=None,
     photon_pos: np.ndarray = None,
 ) -> S4Output:
-    # calibrated collection factor: per-photon when emission positions are
-    # given (multi-step deposition chains), event-scalar otherwise (legacy)
-    if photon_pos is not None:
-        pos_ph = np.asarray(photon_pos, np.float64)[s3.photon_idx]
-        r_ph = np.linalg.norm(pos_ph, axis=1)
-        p_det = cfg.p_det_center * cfg.mu_pe_ratio(np.maximum(r_ph, 1e-6))
-    else:
-        r = float(np.linalg.norm(event.vertex_m))
-        p_det = cfg.p_det_center * cfg.mu_pe_ratio(max(r, 1e-6))
-    # per-photon scale: 1.0 for scint (coverage folded in p_det), 1/coverage
-    # for Cherenkov hits (geometry was explicit in stage 3)
-    scale = s3.det_scale if s3.det_scale is not None else np.ones(len(s3.pmt_idx))
-    p_det_ph = p_det * scale
+    pos_ph = (np.asarray(photon_pos, np.float64)[s3.photon_idx]
+              if photon_pos is not None else None)
+    p_det_ph = _base_detection_probability(s3, event, cfg, photon_pos)
 
     n_arr = len(s3.pmt_idx)
     n_pmt = len(s3.n_arrived_pmt)
@@ -70,22 +97,9 @@ def run_s4(
     arrived_type = photon_type[s3.photon_idx]
 
     # ---- incidence angle and CE(θ) (D2) ---------------------------------
-    # scint photons: incidence along the emission-point->PMT chord
-    # (isotropic emission direction is irrelevant; single-step events =
-    # the legacy vertex->PMT chord); Cherenkov photons: their ray dir.
-    if photon_pos is not None:
-        chord = layout.positions_m[s3.pmt_idx] - pos_ph
-    else:
-        chord = layout.positions_m[s3.pmt_idx] - event.vertex_m[None, :]
-    chord /= np.linalg.norm(chord, axis=1, keepdims=True)
-    n_in = layout.inward_normals[s3.pmt_idx]               # (N_arr, 3)
-    cos_inc = -np.einsum("ij,ij->i", chord, n_in)
-    if photon_dir is not None:
-        ph_dir = photon_dir[s3.photon_idx].astype(np.float64)
-        ph_dir /= np.linalg.norm(ph_dir, axis=1, keepdims=True)
-        cos_inc_c = -np.einsum("ij,ij->i", ph_dir, n_in)
-        m_c = arrived_type == 1
-        cos_inc = np.where(m_c, cos_inc_c, cos_inc)
+    cos_inc = _arrival_cosine(
+        s3, event, layout, pos_ph, arrived_type, photon_dir
+    )
     ce = ce_factor(cfg, cos_inc)
 
     # ---- per-PMT PDE offset (D3) -----------------------------------------
