@@ -8,6 +8,9 @@ from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.bounda
     medium_group_index,
     medium_refractive_index,
 )
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.detector_structures import (
+    structure_transmission,
+)
 
 
 def test_normal_incidence_fresnel_and_probability_conservation():
@@ -58,3 +61,17 @@ def test_three_media_have_distinct_dispersion_and_group_indices():
         group = medium_group_index(name, lam)
         assert np.all(group > phase)
         assert group[0] > group[-1]
+
+
+def test_structure_map_is_fixed_in_detector_coordinates():
+    radius = 17.824
+    points = radius * np.array([
+        [0.0, 0.0, 1.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+    ])
+    first = structure_transmission(points, radius)
+    second = structure_transmission(points.copy(), radius)
+    assert np.array_equal(first, second)
+    assert first[0] < first[1]  # chimney is fixed at detector +z
+    assert np.all(structure_transmission(points, radius, enabled=False) == 1.0)

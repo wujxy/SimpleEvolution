@@ -112,6 +112,26 @@ def test_direct_trace_accumulates_three_medium_group_delay():
     assert abs(float(np.min(out.t_tof_ns)) - expected) < 0.02
 
 
+def test_top_chimney_occludes_actual_boundary_paths():
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages import s3_trace
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import EventInput
+
+    photons = _direct_photons(430.0, n=4000)
+    layout = _north_pole_layout()
+    event = EventInput(0, 0, 0, 1.0)
+    open_out = s3_trace.trace_photons(
+        photons, event,
+        DetectorConfig(optics_mode="trace", fixed_structures=False),
+        layout, np.random.default_rng(771),
+    )
+    masked_out = s3_trace.trace_photons(
+        photons, event,
+        DetectorConfig(optics_mode="trace", fixed_structures=True),
+        layout, np.random.default_rng(771),
+    )
+    assert len(masked_out.pmt_idx) < 0.5 * len(open_out.pmt_idx)
+
+
 def test_yield_consistency():
     """Trace and fast modes agree on the calibrated center yield."""
     lay = PMTLayout.uniform()

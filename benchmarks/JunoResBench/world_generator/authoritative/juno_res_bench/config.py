@@ -126,6 +126,7 @@ class DetectorConfig:
     pmt_diameter_m: float = 0.508           # 20-inch PMT
     ls_radius_m: float = 17.7               # inner acrylic / LS boundary
     acrylic_thickness_m: float = 0.124      # public JUNO-scale acrylic shell
+    fixed_structures: bool = True           # fixed-coordinate analytic masks
     # geometric coverage self-check anchor:
     #   N_pmt * pi*(d/2)^2 / (4 pi R^2) = 17612 * ... / (4 pi 19.365^2)
     #                                   = 0.749  (~75%, JUNO-like)

@@ -21,6 +21,7 @@ from ..boundary_optics import (
     medium_refractive_index,
 )
 from ..config import DetectorConfig
+from ..detector_structures import structure_transmission
 from ..geometry import nearest_pmt_indices
 from ..optics_tables import (
     lambert_reflect,
@@ -199,6 +200,18 @@ def trace_photons(photons, event, cfg: DetectorConfig, layout, rng, grid=None):
                 dirs[idx_d] = new_dir
                 medium[idx_d[~reflected]] = med_to[~reflected]
                 pos[idx_d] += new_dir * 1e-6
+
+                crosses_structures = (
+                    (~reflected) & outward & (med_from == 1) & (med_to == 2)
+                )
+                if crosses_structures.any():
+                    idx_s = idx_d[crosses_structures]
+                    transmission = structure_transmission(
+                        pb[dielectric][crosses_structures], acrylic_radius,
+                        enabled=cfg.fixed_structures,
+                    )
+                    blocked = rng.random(len(idx_s)) >= transmission
+                    active[idx_s[blocked]] = False
 
             at_pmt = ~dielectric
             if at_pmt.any():
