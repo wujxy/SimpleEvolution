@@ -33,7 +33,7 @@ class DetectorConfig:
     # trace-mode detection normalization: compensates the explicit absorption
     # losses so the calibrated center-pe anchor holds (calibrated against the
     # fast mode with the current optical tables; re-calibrate if tables change)
-    trace_det_norm: float = 0.96
+    trace_det_norm: float = 1.015
 
     # ---- scintillation ---------------------------------------------------
     # intrinsic photon production
@@ -124,6 +124,8 @@ class DetectorConfig:
     # ---- geometry --------------------------------------------------------
     detector_radius_m: float = 19.365       # PMT sphere radius (JUNO CD LPMT)
     pmt_diameter_m: float = 0.508           # 20-inch PMT
+    ls_radius_m: float = 17.7               # inner acrylic / LS boundary
+    acrylic_thickness_m: float = 0.124      # public JUNO-scale acrylic shell
     # geometric coverage self-check anchor:
     #   N_pmt * pi*(d/2)^2 / (4 pi R^2) = 17612 * ... / (4 pi 19.365^2)
     #                                   = 0.749  (~75%, JUNO-like)

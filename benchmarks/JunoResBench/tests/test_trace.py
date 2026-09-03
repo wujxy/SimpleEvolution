@@ -84,6 +84,34 @@ def test_blue_photons_have_larger_group_delay():
     assert blue > red + 5.0
 
 
+def test_direct_trace_accumulates_three_medium_group_delay():
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.boundary_optics import (
+        medium_group_index,
+    )
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages import s3_trace
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import EventInput
+
+    cfg = DetectorConfig(optics_mode="trace")
+    wavelength_nm = 500.0
+    radius_m = 19.365
+    out = s3_trace.trace_photons(
+        _direct_photons(wavelength_nm, n=2000), EventInput(0, 0, 0, 1.0),
+        cfg, _north_pole_layout(radius_m), np.random.default_rng(531),
+    )
+    distances = {
+        "ls": cfg.ls_radius_m,
+        "acrylic": cfg.acrylic_thickness_m,
+        "water": radius_m - cfg.ls_radius_m - cfg.acrylic_thickness_m,
+    }
+    expected = sum(
+        distance * medium_group_index(name, np.array([wavelength_nm]))[0]
+        for name, distance in distances.items()
+    ) / 0.299792458
+    # The prompt edge is the unscattered/unreflected causal path. Bulk and
+    # interface recycling can only make later arrivals.
+    assert abs(float(np.min(out.t_tof_ns)) - expected) < 0.02
+
+
 def test_yield_consistency():
     """Trace and fast modes agree on the calibrated center yield."""
     lay = PMTLayout.uniform()

@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from .optics_tables import ls_group_index, ls_refractive_index
+from .optics_tables import abs_length_m, ls_group_index, ls_refractive_index
 
 
 _CAUCHY = {
@@ -37,6 +37,21 @@ def medium_group_index(name, lam_nm):
     if name not in _CAUCHY:
         raise ValueError(f"unknown optical medium: {name}")
     return _cauchy(name, lam_nm, group=True)
+
+
+def medium_absorption_length(name, lam_nm):
+    """Synthetic wavelength-dependent bulk absorption length in metres."""
+    if name == "ls":
+        return abs_length_m(lam_nm)
+    lam_nm = np.asarray(lam_nm, float)
+    if name == "acrylic":
+        plateau, uv, center, width = 50.0, 5.0, 355.0, 30.0
+    elif name == "water":
+        plateau, uv, center, width = 100.0, 20.0, 365.0, 35.0
+    else:
+        raise ValueError(f"unknown optical medium: {name}")
+    shortwave = 1.0 / (1.0 + np.exp((lam_nm - center) / width))
+    return plateau + (uv - plateau) * shortwave
 
 
 def fresnel_unpolarized(cos_i, n_from, n_to):
