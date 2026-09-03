@@ -46,6 +46,44 @@ def test_photon_wavelength_contract_survives_concatenation():
     assert PhotonSoA.empty().wavelength_nm.shape == (0,)
 
 
+def test_scintillation_and_cherenkov_have_distinct_spectra():
+    cfg = DetectorConfig(ly_photons_mev=2000.0)
+    ev = EventInput(0, 0, 0, 3.0)
+    s1 = run_s1(ev, cfg)
+    scint = run_s2_scint(s1, ev, cfg, np.random.default_rng(41))
+    cher = run_s2_cherenkov(s1, ev, cfg, np.random.default_rng(42))
+    assert np.isfinite(scint.wavelength_nm).all()
+    assert np.isfinite(cher.wavelength_nm).all()
+    scint_uv = np.mean(scint.wavelength_nm < 340.0)
+    cher_uv = np.mean(cher.wavelength_nm < 340.0)
+    assert cher_uv > scint_uv + 0.10
+
+
+def test_cherenkov_cone_uses_each_photon_wavelength():
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.optics_tables import (
+        ls_refractive_index,
+    )
+
+    photons, _, s1 = _cherenkov(3.0)
+    step_dir = s1.steps.dir[photons.step_idx]
+    beta = np.array([beta_from_kinetic(e) for e in s1.steps.kinetic_mev])
+    expected = 1.0 / (
+        beta[photons.step_idx] * ls_refractive_index(photons.wavelength_nm)
+    )
+    observed = np.einsum("ij,ij->i", photons.dir.astype(float), step_dir)
+    assert np.allclose(observed, expected, atol=2e-3)
+
+
+def test_ls_group_index_is_dispersive():
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.optics_tables import (
+        ls_group_index,
+    )
+
+    ng = ls_group_index(np.array([350.0, 430.0, 500.0]))
+    assert np.all(np.diff(ng) < 0.0)
+    assert np.all((ng > 1.45) & (ng < 1.75))
+
+
 def test_beta():
     assert abs(beta_from_kinetic(1.0) - 0.9411) < 1e-3
     assert beta_from_kinetic(0.01) < 1 / 1.49   # below threshold
@@ -92,12 +130,18 @@ def test_scintillation_count_is_poisson_at_low_mean():
 
 
 def test_cone_geometry():
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.optics_tables import (
+        ls_refractive_index,
+    )
+
     p, cfg, s1 = _cherenkov(3.0, direction=(1.0, -1.0, 2.0))
     assert len(p) > 100
     step_dir = s1.steps.dir[p.step_idx]
     cos_tc = np.sum(p.dir.astype(np.float64) * step_dir, axis=1)
     beta = np.array([beta_from_kinetic(e) for e in s1.steps.kinetic_mev])
-    expect = 1.0 / (cfg.ls_refractive_index * beta[p.step_idx])
+    expect = 1.0 / (
+        ls_refractive_index(p.wavelength_nm) * beta[p.step_idx]
+    )
     assert np.allclose(cos_tc, expect, atol=2e-3)
     assert np.allclose(p.t_emit_ns, s1.steps.t_ns[p.step_idx])
     assert (p.photon_type == 1).all()

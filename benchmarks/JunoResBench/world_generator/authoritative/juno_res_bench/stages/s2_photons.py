@@ -19,6 +19,11 @@ vertex step.
 import numpy as np
 
 from ..config import DetectorConfig
+from ..optics_tables import (
+    ls_refractive_index,
+    sample_cherenkov_lambda,
+    sample_scintillation_lambda,
+)
 from ..stopping_power import electron_stopping_power_mev_cm
 from ..truth import PhotonSoA, S1Output
 
@@ -80,6 +85,7 @@ def run_s2_scint(s1: S1Output, event, cfg: DetectorConfig, rng: np.random.Genera
     comp = rng.choice(len(wts), size=n_gamma, p=wts)
     t_emit = rng.exponential(taus[comp])
     t_emit = (t_emit + np.repeat(t_step, n_per_step)).astype(np.float32)
+    wavelength_nm = sample_scintillation_lambda(rng, n_gamma)
 
     return PhotonSoA(
         photon_type=np.zeros(n_gamma, np.int8),
@@ -87,6 +93,7 @@ def run_s2_scint(s1: S1Output, event, cfg: DetectorConfig, rng: np.random.Genera
         dir=dirs,
         t_emit_ns=t_emit,
         step_idx=np.repeat(np.arange(len(n_per_step), dtype=np.int32), n_per_step),
+        wavelength_nm=wavelength_nm,
     )
 
 
@@ -108,7 +115,6 @@ def run_s2_cherenkov(s1: S1Output, event, cfg: DetectorConfig, rng: np.random.Ge
 
     idx = np.where(above)[0]
     ct_k = cos_tc[idx]
-    st_k = np.sqrt(1.0 - ct_k**2)
     lam = (length_m[idx] * cfg.cherenkov_photons_per_m
            * np.maximum(0.0, 1.0 - ct_k**2))
     n_per = rng.poisson(lam).astype(np.int64)
@@ -116,6 +122,10 @@ def run_s2_cherenkov(s1: S1Output, event, cfg: DetectorConfig, rng: np.random.Ge
     if n_c == 0:
         return PhotonSoA.empty()
 
+    beta_ph = np.repeat(beta[idx], n_per)
+    wavelength_nm = sample_cherenkov_lambda(rng, beta_ph)
+    ct_ph = 1.0 / (beta_ph * ls_refractive_index(wavelength_nm))
+    st_ph = np.sqrt(np.maximum(0.0, 1.0 - ct_ph**2))
     phi = rng.uniform(0.0, 2.0 * np.pi, n_c)
 
     # per-step cone directions (loop over steps, vectorized in phi)
@@ -128,11 +138,15 @@ def run_s2_cherenkov(s1: S1Output, event, cfg: DetectorConfig, rng: np.random.Ge
         d = d / np.linalg.norm(d)
         u, v = _orthonormal_basis(d)
         ph = phi[off:off + nj]
-        out_dirs.append(
-            (ct_k[j] * d[None, :]
-             + st_k[j] * (np.cos(ph)[:, None] * u[None, :]
-                          + np.sin(ph)[:, None] * v[None, :])).astype(np.float32)
-        )
+        ct = ct_ph[off:off + nj]
+        st = st_ph[off:off + nj]
+        out_dirs.append((
+            ct[:, None] * d[None, :]
+            + st[:, None] * (
+                np.cos(ph)[:, None] * u[None, :]
+                + np.sin(ph)[:, None] * v[None, :]
+            )
+        ).astype(np.float32))
         out_pos.append(np.tile(pos[k].astype(np.float32), (nj, 1)))
         out_t.append(np.full(nj, float(t_step[k]), np.float32))
         out_step.append(np.full(nj, k, np.int32))
@@ -144,4 +158,5 @@ def run_s2_cherenkov(s1: S1Output, event, cfg: DetectorConfig, rng: np.random.Ge
         dir=np.concatenate(out_dirs),
         t_emit_ns=np.concatenate(out_t),
         step_idx=np.concatenate(out_step),
+        wavelength_nm=wavelength_nm,
     )

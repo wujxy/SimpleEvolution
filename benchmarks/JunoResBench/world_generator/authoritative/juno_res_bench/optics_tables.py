@@ -19,6 +19,8 @@ LAM_UV_CENTER = 370.0
 LAM_UV_SIGMA = 25.0
 LAM_EMIT_MIN = 320.0    # short-λ cutoff (LAB absorption edge)
 LAM_UV_FRACTION = 0.30
+CHER_LAMBDA_MIN_NM = 300.0
+CHER_LAMBDA_MAX_NM = 600.0
 
 
 def _trunc_gauss(rng, n, center, sigma):
@@ -38,6 +40,53 @@ def sample_emission_lambda(rng, n):
     lam[is_uv] = _trunc_gauss(rng, n_uv, LAM_UV_CENTER, LAM_UV_SIGMA)
     lam[~is_uv] = _trunc_gauss(rng, n - n_uv, LAM_EMIT_CENTER, LAM_EMIT_SIGMA)
     return lam
+
+
+def sample_scintillation_lambda(rng, n):
+    """Primary scintillation spectrum; named separately from Cherenkov."""
+    return sample_emission_lambda(rng, n)
+
+
+def ls_refractive_index(lam_nm):
+    """Synthetic LAB-like Cauchy dispersion, anchored to n(430 nm)=1.49."""
+    lam_um = np.asarray(lam_nm, float) * 1e-3
+    b = 0.0080
+    a = 1.49 - b / 0.43**2
+    return a + b / lam_um**2
+
+
+def ls_group_index(lam_nm):
+    """Cauchy group index n_g=n-lambda*dn/dlambda."""
+    lam_um = np.asarray(lam_nm, float) * 1e-3
+    b = 0.0080
+    a = 1.49 - b / 0.43**2
+    return a + 3.0 * b / lam_um**2
+
+
+def sample_cherenkov_lambda(rng, beta):
+    """Sample Frank--Tamm wavelengths for the supplied electron betas."""
+    beta = np.asarray(beta, float)
+    out = np.empty(len(beta), float)
+    unresolved = np.ones(len(beta), bool)
+    n_blue = ls_refractive_index(np.array([CHER_LAMBDA_MIN_NM]))[0]
+    for _ in range(64):
+        if not unresolved.any():
+            break
+        idx = np.where(unresolved)[0]
+        lam = rng.uniform(CHER_LAMBDA_MIN_NM, CHER_LAMBDA_MAX_NM, len(idx))
+        n_lam = ls_refractive_index(lam)
+        weight = np.maximum(
+            0.0, 1.0 - 1.0 / (beta[idx] ** 2 * n_lam**2)
+        ) / lam**2
+        envelope = np.maximum(
+            0.0, 1.0 - 1.0 / (beta[idx] ** 2 * n_blue**2)
+        ) / CHER_LAMBDA_MIN_NM**2
+        accept = rng.random(len(idx)) * envelope <= weight
+        out[idx[accept]] = lam[accept]
+        unresolved[idx[accept]] = False
+    if unresolved.any():
+        raise RuntimeError("Cherenkov wavelength rejection sampler did not converge")
+    return out
 
 
 def sample_fluor_lambda(rng, n):

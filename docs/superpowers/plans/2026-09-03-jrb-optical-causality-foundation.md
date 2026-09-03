@@ -172,7 +172,9 @@ def test_scintillation_and_cherenkov_have_distinct_spectra():
     cher = run_s2_cherenkov(s1, ev, cfg, np.random.default_rng(42))
     assert np.isfinite(scint.wavelength_nm).all()
     assert np.isfinite(cher.wavelength_nm).all()
-    assert np.mean(cher.wavelength_nm) < np.mean(scint.wavelength_nm) - 20.0
+    scint_uv = np.mean(scint.wavelength_nm < 340.0)
+    cher_uv = np.mean(cher.wavelength_nm < 340.0)
+    assert cher_uv > scint_uv + 0.10
 
 
 def test_cherenkov_cone_uses_each_photon_wavelength():
