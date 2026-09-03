@@ -121,10 +121,16 @@ class PhotonSoA:
     dir: np.ndarray           # (N, 3) float32, emission direction (unit)
     t_emit_ns: np.ndarray     # (N,) float32, emission time rel. t0
     step_idx: np.ndarray = None   # (N,) int32
+    wavelength_nm: np.ndarray = None  # (N,) float64, source wavelength
 
     def __post_init__(self):
+        n = len(self.photon_type)
         if self.step_idx is None:
-            self.step_idx = np.zeros(len(self.photon_type), np.int32)
+            self.step_idx = np.zeros(n, np.int32)
+        if self.wavelength_nm is None:
+            self.wavelength_nm = np.full(n, np.nan, np.float64)
+        if len(self.wavelength_nm) != n:
+            raise ValueError("wavelength_nm must align with photon_type")
 
     @classmethod
     def empty(cls) -> "PhotonSoA":
@@ -134,6 +140,7 @@ class PhotonSoA:
             dir=np.zeros((0, 3), np.float32),
             t_emit_ns=np.zeros(0, np.float32),
             step_idx=np.zeros(0, np.int32),
+            wavelength_nm=np.zeros(0, np.float64),
         )
 
     def __len__(self) -> int:
@@ -150,6 +157,7 @@ class PhotonSoA:
             dir=np.concatenate([p.dir for p in parts]),
             t_emit_ns=np.concatenate([p.t_emit_ns for p in parts]),
             step_idx=np.concatenate([p.step_idx for p in parts]),
+            wavelength_nm=np.concatenate([p.wavelength_nm for p in parts]),
         )
 
 
@@ -215,6 +223,7 @@ class S3Output:
                                    # folded into the scint p_det)
     lam_nm: np.ndarray = None      # (N_arrived,) float64, photon wavelength
                                    # (trace mode; enables QE(lambda) in stage 4)
+    dir_at_pmt: np.ndarray = None  # (N_arrived, 3), final propagation direction
 
 
 @dataclass(frozen=True)

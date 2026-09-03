@@ -18,6 +18,18 @@ from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.optics
 )
 
 
+def test_arrival_direction_contract_accepts_aligned_array():
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import S3Output
+
+    out = S3Output(
+        n_arrived_pmt=np.array([1]),
+        pmt_idx=np.array([0], np.int32),
+        t_arrive_ns=np.array([10.0], np.float32),
+        dir_at_pmt=np.array([[0.0, 0.0, 1.0]], np.float32),
+    )
+    assert out.dir_at_pmt.shape == (1, 3)
+
+
 def test_yield_consistency():
     """Trace and fast modes agree on the calibrated center yield."""
     lay = PMTLayout.uniform()

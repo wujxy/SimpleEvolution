@@ -22,6 +22,30 @@ from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages
 from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import EventInput
 
 
+def test_photon_wavelength_contract_survives_concatenation():
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import PhotonSoA
+
+    a = PhotonSoA(
+        photon_type=np.array([0], np.int8),
+        pos_m=np.zeros((1, 3), np.float32),
+        dir=np.array([[0, 0, 1]], np.float32),
+        t_emit_ns=np.zeros(1, np.float32),
+        step_idx=np.zeros(1, np.int32),
+        wavelength_nm=np.array([430.0]),
+    )
+    b = PhotonSoA(
+        photon_type=np.array([1], np.int8),
+        pos_m=np.zeros((1, 3), np.float32),
+        dir=np.array([[0, 1, 0]], np.float32),
+        t_emit_ns=np.zeros(1, np.float32),
+        step_idx=np.zeros(1, np.int32),
+        wavelength_nm=np.array([350.0]),
+    )
+    out = PhotonSoA.concatenate([a, b])
+    assert np.array_equal(out.wavelength_nm, [430.0, 350.0])
+    assert PhotonSoA.empty().wavelength_nm.shape == (0,)
+
+
 def test_beta():
     assert abs(beta_from_kinetic(1.0) - 0.9411) < 1e-3
     assert beta_from_kinetic(0.01) < 1 / 1.49   # below threshold
