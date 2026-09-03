@@ -19,14 +19,13 @@ from ..geometry import nearest_pmt_indices
 from ..optics_tables import (
     abs_length_m,
     lambert_reflect,
-    qe_relative,
+    ls_group_index,
     rayleigh_length_m,
     rayleigh_rotate,
     reemission_prob,
     REEMISSION_DELAY_NS,
     REEM_LAMBDA_MAX,
     ESR_REFLECTIVITY,
-    sample_emission_lambda,
     sample_fluor_lambda,
 )
 from ..truth import S3Output
@@ -61,15 +60,15 @@ def trace_photons(photons, event, cfg: DetectorConfig, layout, rng, grid=None):
     pos = photons.pos_m.astype(np.float64).copy()
     dirs = photons.dir.astype(np.float64).copy()
     dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
-    lam = sample_emission_lambda(rng, n0)
+    lam = photons.wavelength_nm.astype(np.float64).copy()
+    if not np.isfinite(lam).all():
+        raise ValueError("trace mode requires finite Stage-2 photon wavelengths")
     t = photons.t_emit_ns.astype(np.float64).copy()
     ptype = photons.photon_type.copy()
     src_idx = np.arange(n0)
 
-    v_over_c = 1.0 / (C_M_NS / cfg.ls_refractive_index)   # ns per meter
-
     arrived = {"pmt_idx": [], "t_arrive": [], "t_tof": [],
-               "photon_idx": [], "lam": [], "cos_inc": []}
+               "photon_idx": [], "lam": [], "dir_at_pmt": []}
     from ..geometry import coverage_fraction
     det_scale = 1.0 / coverage_fraction(layout, cfg.pmt_diameter_m)
 
@@ -92,7 +91,7 @@ def trace_photons(photons, event, cfg: DetectorConfig, layout, rng, grid=None):
 
         # advance (written back below)
         pos[act_idx] = p + dmin[:, None] * dd
-        t[act_idx] = t_act + dmin * v_over_c
+        t[act_idx] = t_act + dmin * ls_group_index(lm) / C_M_NS
 
         # absorbed (T1/T2)
         m_abs = kind == 0
@@ -132,7 +131,7 @@ def trace_photons(photons, event, cfg: DetectorConfig, layout, rng, grid=None):
             arrived["t_tof"].append(t[ia] - photons.t_emit_ns[ia])
             arrived["photon_idx"].append(ia)
             arrived["lam"].append(lam[ia])
-            arrived["cos_inc"].append(np.einsum("ij,ij->i", db[hit], hit_dir[hit]))
+            arrived["dir_at_pmt"].append(db[hit])
             active[ia] = False
             # ESR reflection (T5) / absorption (T6)
             ib = idx_bnd[~hit]
@@ -153,6 +152,7 @@ def trace_photons(photons, event, cfg: DetectorConfig, layout, rng, grid=None):
             photon_idx=np.zeros(0, np.int64),
             det_scale=np.zeros(0),
             lam_nm=np.zeros(0),
+            dir_at_pmt=np.zeros((0, 3), np.float32),
         )
 
     pmt_idx = np.concatenate(arrived["pmt_idx"])
@@ -164,6 +164,7 @@ def trace_photons(photons, event, cfg: DetectorConfig, layout, rng, grid=None):
         photon_idx=np.concatenate(arrived["photon_idx"]).astype(np.int64),
         det_scale=np.full(len(pmt_idx), det_scale),
         lam_nm=np.concatenate(arrived["lam"]),
+        dir_at_pmt=np.concatenate(arrived["dir_at_pmt"]).astype(np.float32),
     )
 
 

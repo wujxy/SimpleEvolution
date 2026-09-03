@@ -30,6 +30,60 @@ def test_arrival_direction_contract_accepts_aligned_array():
     assert out.dir_at_pmt.shape == (1, 3)
 
 
+def _direct_photons(wavelength_nm, n=200):
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import PhotonSoA
+
+    return PhotonSoA(
+        photon_type=np.zeros(n, np.int8),
+        pos_m=np.zeros((n, 3), np.float32),
+        dir=np.tile([0, 0, 1], (n, 1)).astype(np.float32),
+        t_emit_ns=np.zeros(n, np.float32),
+        step_idx=np.zeros(n, np.int32),
+        wavelength_nm=np.full(n, wavelength_nm, np.float64),
+    )
+
+
+def _north_pole_layout(radius_m=19.365):
+    return PMTLayout(np.array([[0.0, 0.0, radius_m]]))
+
+
+def test_trace_starts_from_stage2_wavelength():
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages import s3_trace
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import EventInput
+
+    cfg = DetectorConfig(optics_mode="trace")
+    out = s3_trace.trace_photons(
+        _direct_photons(500.0), EventInput(0, 0, 0, 1.0), cfg,
+        _north_pole_layout(), np.random.default_rng(51)
+    )
+    assert len(out.lam_nm) > 0
+    assert np.all(out.lam_nm == 500.0)
+
+
+def test_trace_populates_unit_final_directions():
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages import s3_trace
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import EventInput
+
+    cfg = DetectorConfig(optics_mode="trace")
+    out = s3_trace.trace_photons(
+        _direct_photons(500.0), EventInput(0, 0, 0, 1.0), cfg,
+        _north_pole_layout(), np.random.default_rng(52)
+    )
+    assert out.dir_at_pmt.shape == (len(out.pmt_idx), 3)
+    assert np.allclose(np.linalg.norm(out.dir_at_pmt, axis=1), 1.0)
+
+
+def test_blue_photons_have_larger_group_delay():
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.optics_tables import (
+        ls_group_index,
+    )
+
+    distance_m = 17.7
+    blue = distance_m * ls_group_index(np.array([350.0]))[0] / 0.299792458
+    red = distance_m * ls_group_index(np.array([500.0]))[0] / 0.299792458
+    assert blue > red + 5.0
+
+
 def test_yield_consistency():
     """Trace and fast modes agree on the calibrated center yield."""
     lay = PMTLayout.uniform()
