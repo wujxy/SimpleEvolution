@@ -20,6 +20,10 @@ from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.pmt_re
     sample_spe_charge,
     sample_transit_time,
 )
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.pmt_optics import (
+    photocathode_collection_factor,
+    pmt_surface_reflectance,
+)
 
 
 def _typed_layout(n_each=4000):
@@ -115,3 +119,23 @@ def test_typed_response_preserves_cherenkov_stream_isolation():
     assert np.array_equal(
         np.sort(on.q_pe[on.pe_type == 0]), np.sort(off.q_pe)
     )
+
+
+def test_pmt_reflectance_is_bounded_type_and_angle_dependent():
+    model = np.array([PMT_HAMAMATSU, PMT_NNVT, PMT_HIGHQE_NNVT])
+    normal = pmt_surface_reflectance(model, np.full(3, 430.0), np.ones(3))
+    grazing = pmt_surface_reflectance(model, np.full(3, 430.0), np.full(3, 0.2))
+    assert np.all((normal > 0.0) & (normal < 1.0))
+    assert normal[1] > normal[0]
+    assert np.all(grazing > normal)
+
+
+def test_photocathode_collection_uses_landing_radius_and_azimuth():
+    model = np.array([PMT_HAMAMATSU] * 3 + [PMT_NNVT] * 3)
+    rho = np.tile([0.0, 0.8, 0.8], 2)
+    phi = np.tile([0.0, 0.0, np.pi / 4.0], 2)
+    factor = photocathode_collection_factor(model, rho, phi)
+    assert factor[0] > factor[1]
+    assert factor[1] != factor[2]
+    assert not np.array_equal(factor[:3], factor[3:])
+    assert np.all(factor > 0.0)

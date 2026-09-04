@@ -224,6 +224,8 @@ class S3Output:
     lam_nm: np.ndarray = None      # (N_arrived,) float64, photon wavelength
                                    # (trace mode; enables QE(lambda) in stage 4)
     dir_at_pmt: np.ndarray = None  # (N_arrived, 3), final propagation direction
+    hit_radius_frac: np.ndarray = None  # (N_arrived,), normalized photocathode radius
+    hit_azimuth_rad: np.ndarray = None  # (N_arrived,), local photocathode azimuth
 
 
 @dataclass(frozen=True)

@@ -22,6 +22,7 @@ from ..boundary_optics import (
 )
 from ..config import DetectorConfig
 from ..detector_structures import structure_transmission
+from ..pmt_optics import pmt_surface_reflectance
 from ..geometry import nearest_pmt_indices
 from ..optics_tables import (
     lambert_reflect,
@@ -85,6 +86,23 @@ def _pmt_hit_mask(layout, hit_dirs, cfg):
     return near, cos_ang >= cos_acc
 
 
+def _landing_coordinates(layout, pmt_idx, hit_dirs, cfg):
+    axis = layout.positions_m[pmt_idx].astype(float)
+    axis /= np.linalg.norm(axis, axis=1, keepdims=True)
+    cosine = np.einsum("ij,ij->i", hit_dirs, axis)
+    tangent = hit_dirs - cosine[:, None] * axis
+    radius = (layout.radius_m * np.linalg.norm(tangent, axis=1)
+              / (cfg.pmt_diameter_m / 2.0))
+    ref = np.where(np.abs(axis[:, 2:3]) < 0.9,
+                   np.array([0.0, 0.0, 1.0]), np.array([1.0, 0.0, 0.0]))
+    u = np.cross(axis, ref)
+    u /= np.linalg.norm(u, axis=1, keepdims=True)
+    v = np.cross(axis, u)
+    azimuth = np.arctan2(np.einsum("ij,ij->i", tangent, v),
+                         np.einsum("ij,ij->i", tangent, u))
+    return np.clip(radius, 0.0, 1.0), azimuth
+
+
 def trace_photons(photons, event, cfg: DetectorConfig, layout, rng, grid=None):
     """Vectorized per-photon transport. Returns per-arrived arrays.
 
@@ -112,7 +130,8 @@ def trace_photons(photons, event, cfg: DetectorConfig, layout, rng, grid=None):
         raise ValueError("trace photons must originate inside the LS sphere")
 
     arrived = {"pmt_idx": [], "t_arrive": [], "t_tof": [],
-               "photon_idx": [], "lam": [], "dir_at_pmt": []}
+               "photon_idx": [], "lam": [], "dir_at_pmt": [],
+               "hit_radius": [], "hit_azimuth": []}
     from ..geometry import coverage_fraction
     det_scale = 1.0 / coverage_fraction(layout, cfg.pmt_diameter_m)
 
@@ -225,13 +244,37 @@ def trace_photons(photons, event, cfg: DetectorConfig, layout, rng, grid=None):
                 hit = np.einsum("ij,ij->i", pmt_hit_dir, pmt_dir) >= np.cos(
                     np.arctan((cfg.pmt_diameter_m / 2.0) / layout.radius_m)
                 )
-                ia = idx_pmt[hit]
-                arrived["pmt_idx"].append(near[hit].astype(np.int32))
+                ih = idx_pmt[hit]
+                near_hit = near[hit]
+                dir_hit = pmt_arrival_dir[hit]
+                surface_normal = pmt_hit_dir[hit]
+                cos_inc = np.clip(
+                    np.einsum("ij,ij->i", dir_hit, surface_normal), 0.0, 1.0
+                )
+                reflectance = pmt_surface_reflectance(
+                    layout.pmt_model[near_hit], lam[ih], cos_inc
+                )
+                reflected_pmt = rng.random(len(ih)) < reflectance
+                ir = ih[reflected_pmt]
+                if len(ir):
+                    dirs[ir] = (dir_hit[reflected_pmt]
+                                - 2.0 * cos_inc[reflected_pmt, None]
+                                * surface_normal[reflected_pmt])
+                    pos[ir] += dirs[ir] * 1e-6
+
+                accepted = ~reflected_pmt
+                ia = ih[accepted]
+                landing_r, landing_phi = _landing_coordinates(
+                    layout, near_hit[accepted], surface_normal[accepted], cfg
+                )
+                arrived["pmt_idx"].append(near_hit[accepted].astype(np.int32))
                 arrived["t_arrive"].append(t[ia])
                 arrived["t_tof"].append(t[ia] - photons.t_emit_ns[ia])
                 arrived["photon_idx"].append(ia)
                 arrived["lam"].append(lam[ia])
-                arrived["dir_at_pmt"].append(pmt_arrival_dir[hit])
+                arrived["dir_at_pmt"].append(dir_hit[accepted])
+                arrived["hit_radius"].append(landing_r)
+                arrived["hit_azimuth"].append(landing_phi)
                 active[ia] = False
                 ib = idx_pmt[~hit]
                 refl = rng.random(int((~hit).sum())) < ESR_REFLECTIVITY
@@ -252,6 +295,8 @@ def trace_photons(photons, event, cfg: DetectorConfig, layout, rng, grid=None):
             det_scale=np.zeros(0),
             lam_nm=np.zeros(0),
             dir_at_pmt=np.zeros((0, 3), np.float32),
+            hit_radius_frac=np.zeros(0, np.float32),
+            hit_azimuth_rad=np.zeros(0, np.float32),
         )
 
     pmt_idx = np.concatenate(arrived["pmt_idx"])
@@ -264,6 +309,8 @@ def trace_photons(photons, event, cfg: DetectorConfig, layout, rng, grid=None):
         det_scale=np.full(len(pmt_idx), det_scale),
         lam_nm=np.concatenate(arrived["lam"]),
         dir_at_pmt=np.concatenate(arrived["dir_at_pmt"]).astype(np.float32),
+        hit_radius_frac=np.concatenate(arrived["hit_radius"]).astype(np.float32),
+        hit_azimuth_rad=np.concatenate(arrived["hit_azimuth"]).astype(np.float32),
     )
 
 

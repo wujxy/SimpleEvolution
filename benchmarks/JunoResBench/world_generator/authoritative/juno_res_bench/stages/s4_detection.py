@@ -17,6 +17,7 @@ perturbs the scintillation detection draws.
 import numpy as np
 
 from ..config import DetectorConfig
+from ..pmt_optics import photocathode_collection_factor
 from ..truth import DetectorCalibration, S3Output, S4Output
 
 
@@ -101,6 +102,13 @@ def run_s4(
         s3, event, layout, pos_ph, arrived_type, photon_dir
     )
     ce = ce_factor(cfg, cos_inc)
+    if (s3.hit_radius_frac is not None
+            and s3.hit_azimuth_rad is not None):
+        ce *= photocathode_collection_factor(
+            calib.pmt_model[s3.pmt_idx],
+            s3.hit_radius_frac,
+            s3.hit_azimuth_rad,
+        )
 
     # ---- per-PMT PDE offset (D3) -----------------------------------------
     pde = 1.0 + calib.pde_delta[s3.pmt_idx]
