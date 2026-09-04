@@ -47,6 +47,55 @@ def test_electron_score_requires_energy_and_vertex_targets():
     assert score["passed"] is False
 
 
+def test_electron_score_rejects_large_probe_energy_bias():
+    probe, reconstructed, controls = _energy_fixture()
+    biased = reconstructed * 1.05
+    truth_vertex = np.zeros((len(probe), 3))
+    reconstructed_vertex = np.zeros((len(probe), 3))
+
+    score = score_electron(
+        probe,
+        biased,
+        truth_vertex,
+        reconstructed_vertex,
+        controls,
+        controls * 1.05,
+        vertex_threshold_m=0.54,
+    )
+
+    assert score["valid"] is True
+    assert score["energy_passed"] is True
+    assert score["energy_bias_passed"] is False
+    assert score["gates"]["energy_bias"] is False
+    assert score["passed"] is False
+    assert max(abs(item) for item in score["metrics"]["energy_bias_by_probe"]) > 0.02
+
+
+def test_electron_score_rejects_radial_vertex_bias():
+    probe, reconstructed, controls = _energy_fixture()
+    truth_vertex = np.zeros((len(probe), 3))
+    truth_vertex[:, 0] = 8.0
+    reconstructed_vertex = truth_vertex.copy()
+    reconstructed_vertex[:, 0] += 0.35
+
+    score = score_electron(
+        probe,
+        reconstructed,
+        truth_vertex,
+        reconstructed_vertex,
+        controls,
+        controls,
+        vertex_threshold_m=0.54,
+    )
+
+    assert score["valid"] is True
+    assert score["vertex_passed"] is True
+    assert score["vertex_bias_passed"] is False
+    assert score["gates"]["vertex_bias"] is False
+    assert score["passed"] is False
+    assert max(abs(item) for item in score["metrics"]["vertex_radial_bias_by_probe_m"]) > 0.20
+
+
 def test_electron_prediction_requires_four_finite_scalars():
     assert parse_prediction((1.0, 0.0, 0.0, 0.0)) == (1.0, 0.0, 0.0, 0.0)
     with pytest.raises(ValueError, match="four finite"):
@@ -85,6 +134,29 @@ def test_online_evaluator_splits_probe_and_control_roles():
     prediction = np.column_stack(
         (
             np.concatenate((reconstructed, control_rec)),
+            np.zeros((len(role), 3)),
+        )
+    )
+
+    score = score_predictions(truth, prediction, {"vertex_threshold_m": 0.54})
+
+    assert score["valid"] is True
+
+
+def test_online_evaluator_controls_validate_against_true_energy():
+    probe, reconstructed, controls = _energy_fixture()
+    role = np.concatenate(
+        (np.zeros(len(probe), dtype=np.int8), np.ones(len(controls), dtype=np.int8))
+    )
+    truth = {
+        "evt_sample_role": role,
+        "evt_e_true": np.concatenate((probe, controls)),
+        "evt_e_vis": np.concatenate((probe, 0.8 * controls)),
+        "evt_vertex_m": np.zeros((len(role), 3)),
+    }
+    prediction = np.column_stack(
+        (
+            np.concatenate((reconstructed, controls)),
             np.zeros((len(role), 3)),
         )
     )
