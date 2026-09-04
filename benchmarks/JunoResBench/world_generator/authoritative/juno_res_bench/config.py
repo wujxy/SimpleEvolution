@@ -33,7 +33,7 @@ class DetectorConfig:
     # trace-mode detection normalization: compensates the explicit absorption
     # losses so the calibrated center-pe anchor holds (calibrated against the
     # fast mode with the current optical tables; re-calibrate if tables change)
-    trace_det_norm: float = 1.015
+    trace_det_norm: float = 1.225
 
     # ---- scintillation ---------------------------------------------------
     # intrinsic photon production

@@ -73,6 +73,36 @@ def test_trace_populates_unit_final_directions():
     assert np.allclose(np.linalg.norm(out.dir_at_pmt, axis=1), 1.0)
 
 
+def test_trace_populates_photocathode_landing_coordinates():
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages import s3_trace
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import EventInput
+
+    out = s3_trace.trace_photons(
+        _direct_photons(430.0, n=500), EventInput(0, 0, 0, 1.0),
+        DetectorConfig(optics_mode="trace"), _north_pole_layout(),
+        np.random.default_rng(521),
+    )
+    assert out.hit_radius_frac.shape == (len(out.pmt_idx),)
+    assert out.hit_azimuth_rad.shape == (len(out.pmt_idx),)
+    assert np.all((out.hit_radius_frac >= 0.0) & (out.hit_radius_frac <= 1.0))
+
+
+def test_pmt_reflection_returns_photons_to_water(monkeypatch):
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages import s3_trace
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import EventInput
+
+    monkeypatch.setattr(
+        s3_trace, "pmt_surface_reflectance",
+        lambda model, wavelength, cosine: np.ones(len(model)),
+    )
+    out = s3_trace.trace_photons(
+        _direct_photons(430.0, n=100), EventInput(0, 0, 0, 1.0),
+        DetectorConfig(optics_mode="trace", fixed_structures=False),
+        _north_pole_layout(), np.random.default_rng(522),
+    )
+    assert len(out.pmt_idx) == 0
+
+
 def test_blue_photons_have_larger_group_delay():
     from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.optics_tables import (
         ls_group_index,

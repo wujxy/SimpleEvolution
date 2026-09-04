@@ -148,7 +148,7 @@ JUNO 将 LAB、PPO 和 bis-MSB 等效为一套联合光学模型，同时处理�
 | 约1.8 m水缓冲层 | 折射、吸收、散射和额外TOF | M/V/C | 高 | 未显式存在 |
 | LS--acrylic Fresnel | 透射/反射依赖波长和入射角 | M/C | 极高 | 未实现 |
 | acrylic--water Fresnel | 第二次折射和反射 | M/C | 高 | 未实现 |
-| water--PMT glass 边界 | 改变PMT入射角和反射概率 | M/C | 高 | 未实现 |
+| water--PMT glass 边界 | 改变PMT入射角和反射概率 | M/C | 高 | 合成PMT表面响应 |
 | 全反射 TIR | 产生边缘突变、多路径和局域盲区 | M/V/C | 极高 | 未实现 |
 | acrylic/water 吸收与散射 | 增加路径相关损失和延迟 | M/V/C | 中高 | 未实现 |
 | PMT间隙与离散覆盖 | 对球面光场作离散空间采样 | M/V/C | 高 | 已用真实LPMT位置和圆盘 |
@@ -177,10 +177,10 @@ P(i,t_{\rm arrive}\mid\mathbf{x},\lambda)
 | PMT 类型 | HPK、NNVT、HQE属于不同响应族 | M/V/C | 高 | 已区分部分参数 |
 | QE 波长响应 | \(QE_i(\lambda)\) | M/C | 高 | 统一相对QE曲线 |
 | CE 入射角响应 | \(CE_i(\theta)\) | M/C | 极高，边缘增强 | 单一NNVT曲线 |
-| 光阴极落点 | PDE、TT、TTS、SPE谱随表面位置变化 | M/V/C | 高 | 未实现 |
-| 方位角非均匀 | \(PDE(\theta,\phi)\) | M/C | 中高 | 未实现 |
-| 光阴极多层干涉 | 反射和吸收依赖 \(\lambda,\theta\) | M/C | 高 | 未实现 |
-| PMT反射光回流 | 未探测光子可反射并击中其他PMT | M/V/C | 高 | 命中后终止 |
+| 光阴极落点 | PDE、TT、TTS、SPE谱随表面位置变化 | M/V/C | 高 | 已用于PE collection；TT/TTS/SPE落点依赖未实现 |
+| 方位角非均匀 | \(PDE(\theta,\phi)\) | M/C | 中高 | 合成collection map |
+| 光阴极多层干涉 | 反射和吸收依赖 \(\lambda,\theta\) | M/C | 高 | 合成表面反射；未做薄膜矩阵 |
+| PMT反射光回流 | 未探测光子可反射并击中其他PMT | M/V/C | 高 | 已实现反射回流 |
 | PMT内部反射/电极遮挡 | 改变吸收和有效面积 | M/C | 中高 | 未实现 |
 | 磁场与PMT朝向 | 改变PDE、TT和TTS | M/V/C | 中等 | 未实现 |
 | photon-to-PE抽样 | 每个入射光子作Bernoulli探测 | V | 极高 | 已实现 |
@@ -579,7 +579,9 @@ adaptation、本底分离或通用full-MC问题。
 ```
 
 自然涌现。中心只保留一个全局光产额 normalization；它不依赖事件位置，不能替代
-或抵消真实的 \(g(r,\theta,\phi)\)。PMT glass/photocathode 反射仍待后续闭合。
+或抵消真实的 \(g(r,\theta,\phi)\)。3A 已加入合成 PMT surface reflectance、
+反射回流和光阴极落点 collection；这闭合了 PMT 光学的主要因果断点，但仍保留
+完整薄膜光学、保护罩细节和落点相关 TT/TTS/SPE 谱作为后续增强项。
 
 ### 16.8 三个需要闭合的核心机制
 

@@ -110,13 +110,16 @@ afterpulse probability。
   解析遮挡体；它们作用于真实穿越点，而不是逐事件随机响应斑点。
 - trace 模式的 PMT 探测使用散射或反射后的最终传播方向，不再用初始发射方向或
   沉积点到 PMT 的弦方向替代。
+- 到达 PMT 圆盘的光子先经过一层合成的 water-facing surface response：反射概率
+  依赖 PMT 型号、波长和入射角；未反射光子记录归一化光阴极落点，并在 Stage 4
+  施加型号相关的径向/方位 collection map。反射光回到水中继续传播。
 - trace 光学已经显式产生路径损失和空间非均匀性，因此探测阶段不再叠加旧的手工
   径向光产额多项式；中心处只保留一次全局 PE 标定。
 
 17.7 m、12.4 cm 和 PMT 球尺度由公开 JUNO 几何约束。acrylic/water 的平滑色散、
-吸收长度以及结构光学深度是公开尺度约束下的合成实现，不冒充 JUNOSW 参数。当前
-仍不等价于完整 JUNO 光学：PMT glass/photocathode 多层反射与未探测光子的回流属于
-下一批 PMT 光学实现。
+吸收长度、结构光学深度以及 PMT 表面/落点响应是公开尺度约束下的合成实现，不冒充
+JUNOSW 参数。当前仍不等价于完整 JUNO 光学：PMT glass/photocathode 的薄膜
+transfer-matrix、保护罩细节、落点相关 TT/TTS 和 SPE 谱仍是显式简化。
 
 ## 4. 1 MeV 分辨率的先验预算
 

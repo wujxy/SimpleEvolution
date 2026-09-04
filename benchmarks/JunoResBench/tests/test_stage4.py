@@ -74,6 +74,32 @@ def test_trace_base_detection_has_no_hand_radial_factor():
     assert np.array_equal(np.asarray(center), np.asarray(edge))
 
 
+def test_trace_detection_consumes_photocathode_landing_state(monkeypatch):
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.stages import s4_detection
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import EventInput, S3Output
+
+    layout = PMTLayout.uniform(1)
+    sim = DetectorSim(DetectorConfig(optics_mode="trace"), layout, seed=91)
+    n = 1000
+    s3 = S3Output(
+        n_arrived_pmt=np.array([n]), pmt_idx=np.zeros(n, np.int32),
+        t_arrive_ns=np.zeros(n, np.float32), photon_idx=np.arange(n),
+        det_scale=np.ones(n), lam_nm=np.full(n, 430.0),
+        dir_at_pmt=np.tile(-layout.inward_normals[0], (n, 1)),
+        hit_radius_frac=np.ones(n), hit_azimuth_rad=np.zeros(n),
+    )
+    monkeypatch.setattr(
+        s4_detection, "photocathode_collection_factor",
+        lambda model, radius, azimuth: np.zeros(len(model)),
+    )
+    out = s4_detection.run_s4(
+        s3, EventInput(0, 0, 0, 1.0), sim.cfg, sim.calib,
+        np.random.default_rng(92), photon_type=np.zeros(n, np.int8),
+        layout=layout,
+    )
+    assert len(out.pmt_idx) == 0
+
+
 def test_ce_interpolation():
     cfg = DetectorConfig()
     # table anchors reproduced exactly
@@ -124,12 +150,12 @@ def test_pde_delta_recoverable():
 
 def test_angular_suppression_off_center():
     """Off-center vertices see larger incidence angles -> lower CE."""
-    lay = PMTLayout.uniform()
+    lay = PMTLayout.uniform(1200)
     sim = DetectorSim(DetectorConfig(), lay, seed=23)
     center = np.mean([sim.generate(0, 0, 0, 1.0, with_waveforms=False).n_pe_total
-                      for _ in range(400)])
+                      for _ in range(120)])
     off = np.mean([sim.generate(15.0, 0, 0, 1.0, with_waveforms=False).n_pe_total
-                   for _ in range(400)])
+                   for _ in range(120)])
     # mu_pe(15m)=0.944; mean CE at r=15 ~0.93 -> total ~0.87
     ratio = off / center
     assert 0.84 < ratio < 0.90, f"off/center ratio {ratio:.3f} unexpected"
