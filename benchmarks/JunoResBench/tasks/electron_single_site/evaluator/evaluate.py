@@ -117,7 +117,7 @@ def score_predictions(truth, prediction, config):
         prediction[probe, 0],
         np.asarray(truth["evt_vertex_m"])[probe],
         prediction[probe, 1:],
-        np.asarray(truth["evt_e_vis"])[control],
+        np.asarray(truth["evt_e_true"])[control],
         prediction[control, 0],
         config["vertex_threshold_m"],
     )
