@@ -130,14 +130,18 @@ def select_layout(mode, n_pmt, position_csv, type_csv):
     raise ValueError(f"unknown geometry mode: {mode}")
 
 
-def build(task_name, output_root, seed, layout, calibration_events_per_point, probe_events_per_point, controls):
+def build(task_name, output_root, seed, layout, calibration_events_per_point, probe_events_per_point, controls, detector_seed=None):
     """Generate a task's data artifacts without copying executable code."""
     output_root = Path(output_root)
     _ensure_fresh(output_root)
     streams = np.random.SeedSequence(seed).spawn(5)
     seeds = [int(stream.generate_state(1, dtype=np.uint64)[0]) for stream in streams]
     config = DetectorConfig(optics_mode="trace", full_readout=True, three_gamma_frac=0.0)
-    simulator = DetectorSim(config, layout, seed=seeds[4])
+    simulator = DetectorSim(
+        config, layout,
+        seed=seeds[4] if detector_seed is None else detector_seed,
+        event_seed=None if detector_seed is None else seeds[4],
+    )
     public = output_root / "public"
     private = output_root / "private"
     public.mkdir(parents=True)
@@ -181,6 +185,16 @@ def main():
     parser.add_argument("--calibration-events-per-point", type=int, default=20)
     parser.add_argument("--probe-events-per-point", type=int, default=1000)
     parser.add_argument("--controls", type=int, default=6400)
+    parser.add_argument(
+        "--detector-seed",
+        type=int,
+        default=None,
+        help=(
+            "fix the per-detector calibration stream to this seed while --seed "
+            "still drives populations and per-event streams; enables sharded "
+            "generation of one consistent detector across processes"
+        ),
+    )
     args = parser.parse_args()
     layout = select_layout(
         args.geometry_mode,
@@ -188,7 +202,7 @@ def main():
         args.juno_position_csv,
         args.juno_type_csv,
     )
-    build(args.task, args.out, args.seed, layout, args.calibration_events_per_point, args.probe_events_per_point, args.controls)
+    build(args.task, args.out, args.seed, layout, args.calibration_events_per_point, args.probe_events_per_point, args.controls, detector_seed=args.detector_seed)
 
 
 if __name__ == "__main__":

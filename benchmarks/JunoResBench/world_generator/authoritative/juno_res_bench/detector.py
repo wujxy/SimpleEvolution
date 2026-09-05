@@ -60,16 +60,27 @@ class DetectorSim:
         layout: PMTLayout,
         seed: int = 0,
         wave_config=None,
+        event_seed=None,
     ):
         self.cfg = config
         self.layout = layout
         self.rngs = make_rngs(seed)
+        if event_seed is not None:
+            # Sharded generation: per-tube calibration constants stay on the
+            # `seed` stream so every shard sees the same detector, while the
+            # per-event physics/electronics streams come from `event_seed`.
+            event_rngs = make_rngs(event_seed)
+            for key in self.rngs:
+                if key != "calibration":
+                    self.rngs[key] = event_rngs[key]
 
         from ._vendor.wavegen_v1 import WaveGenConfig
         from ._vendor.wavegen_v1.generator import WaveformGenerator
 
         self.wave_cfg = wave_config or WaveGenConfig()
-        self.wavegen = WaveformGenerator(self.wave_cfg, seed=seed + 1)
+        self.wavegen = WaveformGenerator(
+            self.wave_cfg, seed=(event_seed if event_seed is not None else seed) + 1
+        )
 
         self.calib = build_calibration(
             config, layout, self.wave_cfg.gain_spread, self.rngs["calibration"]
