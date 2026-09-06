@@ -121,14 +121,22 @@ def _load_npz(path: Path):
 
 
 def _event_noise_sigma(event: EventWaveforms) -> float:
-    """Robust per-event noise sigma from stored baseline residual samples."""
+    """Robust per-event noise sigma from stored baseline residual samples.
+
+    Flat all-zero rows carry no noise information; if they dominate, the
+    MAD would collapse to zero, so they are excluded from the estimate.
+    """
     residual = np.asarray(event.samples, dtype=float)
     if residual.size == 0:
         return 0.0
-    if residual.size > 2_000_000:
-        residual = residual[:: residual.size // 2_000_000 + 1]
-    median = float(np.median(residual))
-    return float(1.4826 * np.median(np.abs(residual - median)))
+    live = residual[np.any(residual != 0.0, axis=1)].ravel() \
+        if residual.ndim == 2 else residual[residual != 0.0]
+    if live.size < 1_000:
+        live = residual.ravel()
+    if live.size > 2_000_000:
+        live = live[:: live.size // 2_000_000 + 1]
+    median = float(np.median(live))
+    return float(1.4826 * np.median(np.abs(live - median)))
 
 
 def _event_metrics(reader: ReleaseWaveforms, index: int) -> EventMetrics:

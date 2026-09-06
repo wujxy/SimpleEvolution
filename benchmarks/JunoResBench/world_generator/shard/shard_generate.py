@@ -44,7 +44,7 @@ def _shard_slice(total, shard, shards):
     return lo, hi
 
 
-def _simulate_slice(population, simulator, layout, destination, lo, hi):
+def _simulate_slice(population, simulator, layout, destination, lo, hi, noise_rng):
     """Simulate population[lo:hi] into `destination` (shard-local streams)."""
     writer = SparseSplitWriter(destination)
     truth_rows = {key: [] for key in ("evt_e_vis", "evt_e_dep_mev", "evt_e_escape_mev", "evt_total_energy")}
@@ -61,10 +61,20 @@ def _simulate_slice(population, simulator, layout, destination, lo, hi):
         adc = np.asarray(event.adc, dtype=np.uint16).reshape(-1, simulator.wave_cfg.n_samples)
         adc_ids = np.asarray(event.adc_ids, dtype=np.int64).ravel()
         # the digitizer emits hit/dark channels only; a full waveform readout
-        # completes every quiet channel with a baseline row
-        full = np.full((layout.n_pmt, simulator.wave_cfg.n_samples),
-                       simulator.wave_cfg.baseline_adc, dtype=np.uint16)
+        # completes every quiet channel with a baseline-plus-white-noise row
+        # drawn from the same electronics noise model as the stored rows
+        n_samples = simulator.wave_cfg.n_samples
+        full = np.full((layout.n_pmt, n_samples),
+                       simulator.wave_cfg.baseline_adc, dtype=np.float64)
         full[adc_ids] = adc
+        quiet = np.ones(layout.n_pmt, dtype=bool)
+        quiet[adc_ids] = False
+        if quiet.any():
+            sigma_adc = (simulator.wave_cfg.noise_sigma_mv * 1e-3
+                         / simulator.wave_cfg.lsb_v)
+            full[quiet] += noise_rng.normal(
+                0.0, sigma_adc, (int(quiet.sum()), n_samples))
+        full = np.clip(np.rint(full), 0, 16383).astype(np.uint16)
         writer.append(encode_dense_event(
             full, np.arange(layout.n_pmt), simulator.wave_cfg.baseline_adc))
         truth_rows["evt_e_vis"].append(event.e_vis_mev)
@@ -125,6 +135,7 @@ def main():
     # electronics streams — statistically identical to one sequential run
     event_seed = int(np.random.default_rng([seeds[3], args.shard]).integers(0, 2**63))
     simulator = DetectorSim(config, layout, seed=seeds[4], event_seed=event_seed)
+    noise_rng = np.random.default_rng([event_seed, 0x5EED])
 
     populations = {
         "calibration": calibration,
@@ -143,7 +154,7 @@ def main():
             print(f"shard {args.shard} {name}: already finalized, skipping", flush=True)
             manifest["splits"][name] = [int(lo), int(hi), int(hi - lo)]
             continue
-        _simulate_slice(population, simulator, layout, destination, lo, hi)
+        _simulate_slice(population, simulator, layout, destination, lo, hi, noise_rng)
         manifest["splits"][name] = [int(lo), int(hi), int(hi - lo)]
         print(f"shard {args.shard}/{args.shards} {name}: events [{lo}:{hi}) -> {destination}", flush=True)
     (out / "shard_manifest.json").write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")

@@ -15,6 +15,8 @@ calib=20
 # user conda env in PATH (hep_sub propagates it) — pin the cluster system
 # python (3.9 + numpy 1.23) which is identical on every worker node
 PY=/usr/bin/python3
+# matplotlib for the validator atlas, installed for the pinned system python
+export PYTHONPATH=/lustrefs/juno26/users/lidian/pylibs/jrb_py39${PYTHONPATH:+:$PYTHONPATH}
 
 echo "=== $(hostname) $(date) shard ${shard}/${shards} task=${task} ==="
 $PY "$JRB_REPO_ROOT/benchmarks/JunoResBench/world_generator/shard/shard_generate.py" \

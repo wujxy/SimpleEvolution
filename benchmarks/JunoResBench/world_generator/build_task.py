@@ -82,7 +82,8 @@ def _metadata(config, layout, simulator):
     }
 
 
-def _simulate(population, simulator, layout, destination, public_truth, encoding="sparse"):
+def _simulate(population, simulator, layout, destination, public_truth, encoding="sparse", noise_rng=None):
+    noise_rng = noise_rng or np.random.default_rng()
     writer = SparseSplitWriter(destination)
     truth_rows = {key: [] for key in ("evt_e_vis", "evt_e_dep_mev", "evt_e_escape_mev", "evt_total_energy")}
     step_rows = {key: [] for key in ("step_pos_m", "step_e_dep_mev", "step_e_vis_mev", "step_dedx_mev_cm", "step_kinetic_mev", "step_length_m", "step_kind")}
@@ -94,17 +95,31 @@ def _simulate(population, simulator, layout, destination, public_truth, encoding
             direction=tuple(population["evt_direction"][index]),
             particle_type=PARTICLE_CODE_TYPE[int(population["evt_particle_type"][index])],
         )
-        adc = np.asarray(event.adc, dtype=np.uint16)
-        if adc.size == 0:
-            adc = np.empty((0, simulator.wave_cfg.n_samples), dtype=np.uint16)
+        adc = np.asarray(event.adc, dtype=np.uint16).reshape(-1, simulator.wave_cfg.n_samples)
+        adc_ids = np.asarray(event.adc_ids, dtype=np.int64).ravel()
         if encoding == "dense":
+            # the digitizer emits hit/dark channels only; a full waveform
+            # readout completes every quiet channel with a baseline-plus-
+            # white-noise row from the same electronics noise model
+            n_samples = simulator.wave_cfg.n_samples
+            full = np.full((layout.n_pmt, n_samples),
+                           simulator.wave_cfg.baseline_adc, dtype=np.float64)
+            full[adc_ids] = adc
+            quiet = np.ones(layout.n_pmt, dtype=bool)
+            quiet[adc_ids] = False
+            if quiet.any():
+                sigma_adc = (simulator.wave_cfg.noise_sigma_mv * 1e-3
+                             / simulator.wave_cfg.lsb_v)
+                full[quiet] += noise_rng.normal(
+                    0.0, sigma_adc, (int(quiet.sum()), n_samples))
+            full = np.clip(np.rint(full), 0, 16383).astype(np.uint16)
             encoded = encode_dense_event(
-                adc, event.adc_ids, simulator.wave_cfg.baseline_adc,
+                full, np.arange(layout.n_pmt), simulator.wave_cfg.baseline_adc,
             )
         else:
             encoded = encode_event(
                 adc,
-                event.adc_ids,
+                adc_ids,
                 simulator.wave_cfg.baseline_adc,
                 roi_threshold_adc(simulator.wave_cfg),
                 16,
@@ -182,6 +197,7 @@ def build(task_name, output_root, seed, layout, calibration_events_per_point, pr
         seed=seeds[4] if detector_seed is None else detector_seed,
         event_seed=None if detector_seed is None else seeds[4],
     )
+    noise_rng = np.random.default_rng([seeds[3], 0x5EED])
     public = output_root / "public"
     private = output_root / "private"
     public.mkdir(parents=True)
@@ -193,13 +209,13 @@ def build(task_name, output_root, seed, layout, calibration_events_per_point, pr
         pmt_model=layout.pmt_model,
     )
     calibration = calibration_population(seeds[0], calibration_events_per_point)
-    _simulate(calibration, simulator, layout, public / "calibration", None, encoding="dense")
+    _simulate(calibration, simulator, layout, public / "calibration", None, encoding="dense", noise_rng=noise_rng)
     np.savez_compressed(public / "calibration" / "labels.npz", source_energy_mev=calibration["evt_e_true"], deployment_position_m=calibration["evt_vertex_m"])
     dev = physics_population(task_name, seeds[1], probe_events_per_point, controls)
     dev = {key: value[:DEV_EVENTS] for key, value in dev.items()}
-    _simulate(dev, simulator, layout, public / "dev", None, encoding="dense")
+    _simulate(dev, simulator, layout, public / "dev", None, encoding="dense", noise_rng=noise_rng)
     final = physics_population(task_name, seeds[2], probe_events_per_point, controls)
-    truth = _simulate(final, simulator, layout, private / "final", None, encoding="dense")
+    truth = _simulate(final, simulator, layout, private / "final", None, encoding="dense", noise_rng=noise_rng)
     np.savez_compressed(private / "truth.npz", **truth)
     evaluation = {
         "energy_target_r_1mev": 0.03,
