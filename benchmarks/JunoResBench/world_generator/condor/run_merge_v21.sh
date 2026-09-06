@@ -43,7 +43,10 @@ $PY "$JRB_REPO_ROOT/benchmarks/JunoResBench/world_generator/shard/merge_release.
   --task "$TASK" --seed "$SEED" --geometry-mode juno \
   --calibration-events-per-point 20 \
   --probe-events-per-point 200 --controls 7680 \
-  --shards-root "$SCRATCH_BASE/merge_view" --out "$RELEASE"
+  --shards-root "$SCRATCH_BASE/merge_view" --out "$RELEASE" \
+  --dev-out "$JUNOFS_BASE"
+# quota split: calibration+final (~358 GiB) on lustrefs, dev (~65 GiB) on junofs
+ln -sfn "$JUNOFS_BASE/public/dev" "$RELEASE/public/dev"
 # shards (~420 GiB across scratchfs2 + junofs) are cleaned by hand after the
 # release is ACCEPTED and copied to its final homes
 

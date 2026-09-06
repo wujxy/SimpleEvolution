@@ -232,6 +232,9 @@ def main():
     parser.add_argument("--controls", type=int, default=7680)
     parser.add_argument("--shards-root", required=True, help="dir containing shard_*/ subdirs")
     parser.add_argument("--out", required=True, help="release output root (must be fresh)")
+    parser.add_argument("--dev-out", default=None,
+                        help="separate root for the dev split (quota split across disks); "
+                             "defaults to <out>/public/dev")
     parser.add_argument("--prune-shards", action="store_true",
                         help="delete each shard's population dir right after merging it "
                              "(disk-budget mode: merged release + shards never coexist in full)")
@@ -286,7 +289,10 @@ def main():
     )
 
     # dev: unlabeled real data — shards' dev truth is merged but not published
-    merge_split(shard_roots, "dev", public / "dev", prune=args.prune_shards)
+    dev_root = Path(args.dev_out) if args.dev_out else out
+    (dev_root / "public").mkdir(parents=True, exist_ok=True)
+    merge_split(shard_roots, "dev", dev_root / "public" / "dev",
+                prune=args.prune_shards)
 
     merge_split(shard_roots, "final", private / "final",
                 prune=args.prune_shards, truth_out=private / "truth.npz")
