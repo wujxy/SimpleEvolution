@@ -79,7 +79,7 @@ def run_online(submission, private_root, public_root):
     process = subprocess.Popen(_command(submission, evaluator, Path(public_root)), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, env={"HOME": "/tmp", "PATH": "/usr/bin:/bin", "PYTHONPATH": "/task", "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"}, preexec_fn=_limits)
     try:
         _message(process.stdout, deadline)
-        split = SparseSplit(Path(private_root) / "final_observations")
+        split = SparseSplit(Path(private_root) / "final")
         output = np.empty((len(split), 4), dtype=float)
         for index, event in enumerate(split.iter_events()):
             payload = pickle.dumps(event, protocol=5)
@@ -119,7 +119,7 @@ def score_predictions(truth, prediction, config):
         prediction[probe, 1:],
         np.asarray(truth["evt_e_true"])[control],
         prediction[control, 0],
-        config["vertex_threshold_m"],
+        config,
     )
 
 

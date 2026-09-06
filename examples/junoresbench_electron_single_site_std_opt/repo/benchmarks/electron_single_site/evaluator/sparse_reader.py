@@ -67,20 +67,41 @@ def encode_event(adc, pmt_ids, baseline, threshold_adc, pre, post):
         raise ValueError("adc must be [channel, sample] and align with pmt_ids")
     if threshold_adc <= 0 or pre < 0 or post < 0:
         raise ValueError("threshold must be positive and ROI padding non-negative")
+    return _encode_regions(adc, channel_ids, baseline, threshold_adc, pre, post)
+
+
+def encode_dense_event(adc, pmt_ids, baseline):
+    """Encode every channel as one full-window segment (no thresholding)."""
+    waveforms = np.asarray(adc)
+    channel_ids = np.asarray(pmt_ids, dtype=np.int32)
+    if waveforms.ndim != 2 or channel_ids.shape != (len(waveforms),):
+        raise ValueError("adc must be [channel, sample] and align with pmt_ids")
+    if len(channel_ids) == 0:
+        raise ValueError("dense encoding requires at least one channel")
+    return _encode_regions(adc, channel_ids, baseline, 0, 0, 0)
+
+
+def _encode_regions(adc, channel_ids, baseline, threshold_adc, pre, post):
+    waveforms = np.asarray(adc)
     if waveforms.shape[1] > np.iinfo(np.int16).max:
         raise ValueError("waveform is too long for int16 segment starts")
+
+    def regions(row):
+        if threshold_adc == 0:
+            return [(0, waveforms.shape[1])]
+        return _expanded_regions(
+            int(baseline) - row.astype(np.int32) >= threshold_adc,
+            waveforms.shape[1],
+            int(pre),
+            int(post),
+        )
 
     segment_ids = []
     starts = []
     sample_blocks = []
     offsets = [0]
     for row, pmt_id in zip(waveforms, channel_ids):
-        for start, stop in _expanded_regions(
-            int(baseline) - row.astype(np.int32) >= threshold_adc,
-            waveforms.shape[1],
-            int(pre),
-            int(post),
-        ):
+        for start, stop in regions(row):
             residual = row[start:stop].astype(np.int32) - int(baseline)
             if residual.size and (
                 residual.min() < np.iinfo(np.int16).min
@@ -121,7 +142,7 @@ class SparseSplitWriter:
         self._raw_path = self.destination / ".segment_samples.i16.tmp"
         self._raw = self._raw_path.open("wb")
         self._event_offsets = [0]
-        self._sample_offsets = [0]
+        self._segment_sizes = []
         self._segment_ids = []
         self._segment_starts = []
         self._configuration = None
@@ -148,8 +169,9 @@ class SparseSplitWriter:
         )
         self._segment_ids.append(event.segment_pmt_ids)
         self._segment_starts.append(event.segment_start_samples)
-        for size in np.diff(event.segment_sample_offsets):
-            self._sample_offsets.append(self._sample_offsets[-1] + int(size))
+        self._segment_sizes.append(
+            np.diff(np.asarray(event.segment_sample_offsets, dtype=np.int64))
+        )
         self._raw.write(np.asarray(event.samples, dtype="<i2").tobytes())
 
     def finalize(self, meta, truth=None):
@@ -160,7 +182,16 @@ class SparseSplitWriter:
         self._raw.close()
         self._finalized = True
 
-        total_samples = self._sample_offsets[-1]
+        sizes = (
+            np.concatenate(self._segment_sizes)
+            if self._segment_sizes
+            else np.empty(0, dtype=np.int64)
+        )
+        total_samples = int(sizes.sum())
+        sample_offsets = np.concatenate((
+            np.zeros(1, dtype=np.int64),
+            np.cumsum(sizes, dtype=np.int64),
+        ))
         with (self.destination / "segment_samples.npy").open("wb") as target:
             np.lib.format.write_array_header_2_0(target, {
                 "descr": "<i2",
@@ -174,7 +205,7 @@ class SparseSplitWriter:
         np.savez_compressed(
             self.destination / "index.npz",
             event_segment_offsets=np.asarray(self._event_offsets, dtype=np.int64),
-            segment_sample_offsets=np.asarray(self._sample_offsets, dtype=np.int64),
+            segment_sample_offsets=sample_offsets,
             segment_pmt_ids=(
                 np.concatenate(self._segment_ids)
                 if self._segment_ids
@@ -190,6 +221,7 @@ class SparseSplitWriter:
         metadata = dict(meta)
         metadata.update({
             "storage_format": "jrb_sparse_waveforms_v2",
+            "encoding": "dense" if threshold == 0 else "sparse",
             "n_events": len(self._event_offsets) - 1,
             "baseline": baseline,
             "n_samples": n_samples,
@@ -267,6 +299,7 @@ __all__ = [
     "SparseEvent",
     "SparseSplit",
     "SparseSplitWriter",
+    "encode_dense_event",
     "encode_event",
     "write_sparse_split",
 ]
