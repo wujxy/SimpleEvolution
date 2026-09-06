@@ -6,8 +6,10 @@ set -euo pipefail
 export PATH=/afs/ihep.ac.cn/soft/common/sysgroup/hep_job/bin:$PATH
 export JRB_REPO_ROOT=/lustrefs/juno26/users/lidian/SimpleEvolution
 PY=/usr/bin/python3
-# matplotlib for the validator atlas, installed for the pinned system python
-export PYTHONPATH=/lustrefs/juno26/users/lidian/pylibs/jrb_py39${PYTHONPATH:+:$PYTHONPATH}
+# cp39 matplotlib/numpy for the validator atlas, on the shared disk
+export PYTHONNOUSERSITE=1
+export PYTHONPATH=/junofs/users/lidian/jrb_v21/pylibs${PYTHONPATH:+:$PYTHONPATH}
+export MPLCONFIGDIR=/tmp/jrb-mpl-worker
 
 TASK=electron_single_site
 SEED=20260907
