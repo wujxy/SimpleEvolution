@@ -1,4 +1,9 @@
-"""Standalone scoring for the single-electron task."""
+"""Standalone scoring for the single-electron task.
+
+Thresholds are frozen release-side in ``public/evaluation_config.json`` and
+reach this module only through the ``thresholds`` mapping; gates decide
+validity, targets are the reported optimization quantities.
+"""
 
 from dataclasses import dataclass
 
@@ -6,11 +11,17 @@ import numpy as np
 
 
 ELECTRON_PROBE_MEV = np.arange(1.0, 11.0)
-TARGET_R_1MEV = 0.03
-ENERGY_BIAS_MAX = 0.02
-ENERGY_BIAS_1MEV_MAX = 0.015
-VERTEX_RADIAL_BIAS_MAX_M = 0.20
-VERTEX_HIGH_ENERGY_RMS_RATIO_MAX = 1.20
+
+REQUIRED_THRESHOLDS = (
+    "energy_target_r_1mev",
+    "energy_resolution_gate",
+    "energy_bias_1mev_abs_max",
+    "energy_bias_abs_max",
+    "vertex_rms_reference_m",
+    "vertex_resolution_gate_m",
+    "vertex_radial_bias_abs_max_m",
+    "vertex_high_energy_rms_ratio_max",
+)
 
 
 @dataclass(frozen=True)
@@ -96,8 +107,11 @@ def _energy_score(probe_energy, energy_rec, control_energy, control_rec):
     return fit, [], energy, width, bias
 
 
-def score_electron(probe_energy, energy_rec, vertex_true, vertex_rec, control_energy, control_rec, vertex_threshold_m):
+def score_electron(probe_energy, energy_rec, vertex_true, vertex_rec, control_energy, control_rec, thresholds):
     """Score energy and the 1-MeV three-dimensional vertex RMS together."""
+    missing = [key for key in REQUIRED_THRESHOLDS if key not in thresholds]
+    if missing:
+        raise KeyError(f"frozen evaluation thresholds are missing: {missing}")
     result = _energy_score(probe_energy, energy_rec, control_energy, control_rec)
     fit, reasons = result[:2]
     if reasons:
@@ -122,44 +136,37 @@ def score_electron(probe_energy, energy_rec, vertex_true, vertex_rec, control_en
             np.linalg.norm(vertex_rec[mask], axis=1)
             - np.linalg.norm(vertex_true[mask], axis=1)
         )))
-    energy_passed = fit.r_1mev <= TARGET_R_1MEV
+    energy_resolution_passed = fit.r_1mev <= float(thresholds["energy_resolution_gate"])
     energy_bias_passed = (
-        abs(float(energy_bias[0])) <= ENERGY_BIAS_1MEV_MAX
-        and float(np.max(np.abs(energy_bias))) <= ENERGY_BIAS_MAX
+        abs(float(energy_bias[0])) <= float(thresholds["energy_bias_1mev_abs_max"])
+        and float(np.max(np.abs(energy_bias))) <= float(thresholds["energy_bias_abs_max"])
     )
-    vertex_passed = vertex_rms <= float(vertex_threshold_m)
+    vertex_resolution_passed = vertex_rms <= float(thresholds["vertex_resolution_gate_m"])
     vertex_bias_passed = (
-        float(np.max(np.abs(vertex_radial_bias))) <= VERTEX_RADIAL_BIAS_MAX_M
+        float(np.max(np.abs(vertex_radial_bias))) <= float(thresholds["vertex_radial_bias_abs_max_m"])
     )
     high_energy_rms = float(np.max(np.asarray(vertex_rms_by_probe)[ELECTRON_PROBE_MEV >= 3.0]))
     vertex_multi_energy_passed = (
-        high_energy_rms <= VERTEX_HIGH_ENERGY_RMS_RATIO_MAX * vertex_rms
+        high_energy_rms
+        <= float(thresholds["vertex_high_energy_rms_ratio_max"]) * vertex_rms
     )
     gates = {
-        "energy_resolution": bool(energy_passed),
+        "energy_resolution": bool(energy_resolution_passed),
         "energy_bias": bool(energy_bias_passed),
-        "vertex_resolution": bool(vertex_passed),
+        "vertex_resolution": bool(vertex_resolution_passed),
         "vertex_bias": bool(vertex_bias_passed),
         "vertex_multi_energy": bool(vertex_multi_energy_passed),
     }
     return {
         "valid": True,
         "passed": all(gates.values()),
-        "energy_passed": energy_passed,
-        "energy_bias_passed": energy_bias_passed,
-        "vertex_passed": vertex_passed,
-        "vertex_bias_passed": vertex_bias_passed,
-        "vertex_multi_energy_passed": vertex_multi_energy_passed,
-        "R_1MeV": fit.r_1mev,
-        "vertex_rms_m": vertex_rms,
-        "vertex_threshold_m": float(vertex_threshold_m),
         "gates": gates,
-        "gate_thresholds": {
-            "energy_target_r_1mev": TARGET_R_1MEV,
-            "energy_bias_1mev_abs_max": ENERGY_BIAS_1MEV_MAX,
-            "energy_bias_abs_max": ENERGY_BIAS_MAX,
-            "vertex_radial_bias_abs_max_m": VERTEX_RADIAL_BIAS_MAX_M,
-            "vertex_high_energy_rms_ratio_max": VERTEX_HIGH_ENERGY_RMS_RATIO_MAX,
+        "gate_thresholds": {key: float(thresholds[key]) for key in REQUIRED_THRESHOLDS},
+        "targets": {
+            "R_1MeV": fit.r_1mev,
+            "R_1MeV_reference": float(thresholds["energy_target_r_1mev"]),
+            "vertex_rms_1mev_m": vertex_rms,
+            "vertex_rms_reference_m": float(thresholds["vertex_rms_reference_m"]),
         },
         "metrics": {
             "energy_mean_by_probe": energy_mean.tolist(),

@@ -14,6 +14,15 @@ def freeze_threshold(oracle_rms_m):
     return math.ceil(1.15 * float(oracle_rms_m) / 0.001) * 0.001
 
 
+def freeze_gate(oracle_rms_m, factor=1.5):
+    """Loose validity floor above the oracle, rounded upward to 0.1 cm."""
+    if not math.isfinite(oracle_rms_m) or oracle_rms_m <= 0:
+        raise ValueError("oracle vertex RMS must be positive and finite")
+    if factor <= 1.15:
+        raise ValueError("gate floor must sit above the reference line")
+    return math.ceil(factor * float(oracle_rms_m) / 0.001) * 0.001
+
+
 def charge_pattern_vertex_rms(vertices_m, layout, config, energy_mev=1.0):
     """Mean charge-pattern Cramer--Rao vertex limit for the hidden world.
 

@@ -22,10 +22,18 @@ from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geomet
     PMT_NNVT,
     PMTLayout,
 )
-from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.sparse_waveforms import SparseSplitWriter, encode_event
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.sparse_waveforms import (
+    SparseSplitWriter,
+    encode_dense_event,
+    encode_event,
+)
 from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import PARTICLE_CODE_TYPE
 from benchmarks.JunoResBench.world_generator.populations import calibration_population, physics_population
-from benchmarks.JunoResBench.world_generator.oracle_vertex import charge_pattern_vertex_rms, freeze_threshold
+from benchmarks.JunoResBench.world_generator.oracle_vertex import (
+    charge_pattern_vertex_rms,
+    freeze_gate,
+    freeze_threshold,
+)
 
 
 PUBLIC_METADATA = {
@@ -74,7 +82,7 @@ def _metadata(config, layout, simulator):
     }
 
 
-def _simulate(population, simulator, layout, destination, public_truth):
+def _simulate(population, simulator, layout, destination, public_truth, encoding="sparse"):
     writer = SparseSplitWriter(destination)
     truth_rows = {key: [] for key in ("evt_e_vis", "evt_e_dep_mev", "evt_e_escape_mev", "evt_total_energy")}
     step_rows = {key: [] for key in ("step_pos_m", "step_e_dep_mev", "step_e_vis_mev", "step_dedx_mev_cm", "step_kinetic_mev", "step_length_m", "step_kind")}
@@ -89,14 +97,20 @@ def _simulate(population, simulator, layout, destination, public_truth):
         adc = np.asarray(event.adc, dtype=np.uint16)
         if adc.size == 0:
             adc = np.empty((0, simulator.wave_cfg.n_samples), dtype=np.uint16)
-        writer.append(encode_event(
-            adc,
-            event.adc_ids,
-            simulator.wave_cfg.baseline_adc,
-            roi_threshold_adc(simulator.wave_cfg),
-            16,
-            48,
-        ))
+        if encoding == "dense":
+            encoded = encode_dense_event(
+                adc, event.adc_ids, simulator.wave_cfg.baseline_adc,
+            )
+        else:
+            encoded = encode_event(
+                adc,
+                event.adc_ids,
+                simulator.wave_cfg.baseline_adc,
+                roi_threshold_adc(simulator.wave_cfg),
+                16,
+                48,
+            )
+        writer.append(encoded)
         truth_rows["evt_e_vis"].append(event.e_vis_mev)
         truth_rows["evt_e_dep_mev"].append(event.e_dep_mev)
         truth_rows["evt_e_escape_mev"].append(event.e_escape_mev)
@@ -130,6 +144,32 @@ def select_layout(mode, n_pmt, position_csv, type_csv):
     raise ValueError(f"unknown geometry mode: {mode}")
 
 
+def _split_roles(population):
+    """Split one shuffled physics population into probe and control copies."""
+    probe = np.asarray(population["evt_sample_role"]) == 0
+    control = ~probe
+    return (
+        {key: value[probe] for key, value in population.items()},
+        {key: value[control] for key, value in population.items()},
+    )
+
+
+def _concat_truth(first, second):
+    """Concatenate two truth dicts so rows align with probe-then-control splits."""
+    return {key: np.concatenate((first[key], second[key])) for key in first}
+
+
+# Frozen validity floor for the energy-resolution target: an estimator worse
+# than this is not a usable energy reconstruction. Owner-set constant.
+ENERGY_RESOLUTION_GATE = 0.036
+ENERGY_BIAS_1MEV_MAX = 0.015
+ENERGY_BIAS_MAX = 0.02
+VERTEX_RADIAL_BIAS_MAX_M = 0.20
+VERTEX_HIGH_ENERGY_RMS_RATIO_MAX = 1.20
+
+DEV_EVENTS = 2000
+
+
 def build(task_name, output_root, seed, layout, calibration_events_per_point, probe_events_per_point, controls, detector_seed=None):
     """Generate a task's data artifacts without copying executable code."""
     output_root = Path(output_root)
@@ -153,23 +193,35 @@ def build(task_name, output_root, seed, layout, calibration_events_per_point, pr
         pmt_model=layout.pmt_model,
     )
     calibration = calibration_population(seeds[0], calibration_events_per_point)
-    _simulate(calibration, simulator, layout, public / "calibration", None)
+    _simulate(calibration, simulator, layout, public / "calibration", None, encoding="dense")
     np.savez_compressed(public / "calibration" / "labels.npz", source_energy_mev=calibration["evt_e_true"], deployment_position_m=calibration["evt_vertex_m"])
     dev = physics_population(task_name, seeds[1], probe_events_per_point, controls)
-    public_keys = {"evt_sample_role", "evt_e_true", "evt_e_vis"}
-    if task_name == "electron_single_site":
-        public_keys.add("evt_vertex_m")
-    _simulate(dev, simulator, layout, public / "dev", lambda truth: {key: truth[key] for key in public_keys})
+    dev = {key: value[:DEV_EVENTS] for key, value in dev.items()}
+    _simulate(dev, simulator, layout, public / "dev", None, encoding="dense")
     final = physics_population(task_name, seeds[2], probe_events_per_point, controls)
-    truth = _simulate(final, simulator, layout, private / "final_observations", None)
+    truth = _simulate(final, simulator, layout, private / "final", None, encoding="dense")
     np.savez_compressed(private / "truth.npz", **truth)
-    evaluation = {"energy_target_r_1mev": 0.03}
+    evaluation = {
+        "energy_target_r_1mev": 0.03,
+        "energy_resolution_gate": ENERGY_RESOLUTION_GATE,
+        "energy_bias_1mev_abs_max": ENERGY_BIAS_1MEV_MAX,
+        "energy_bias_abs_max": ENERGY_BIAS_MAX,
+        "vertex_radial_bias_abs_max_m": VERTEX_RADIAL_BIAS_MAX_M,
+        "vertex_high_energy_rms_ratio_max": VERTEX_HIGH_ENERGY_RMS_RATIO_MAX,
+    }
     if task_name == "electron_single_site":
         vertices = final["evt_vertex_m"][(final["evt_sample_role"] == 0) & (final["evt_e_true"] == 1.0)]
         oracle_rms = charge_pattern_vertex_rms(vertices, layout, config)
-        threshold = freeze_threshold(oracle_rms)
-        (private / "electron_oracle.json").write_text(json.dumps({"method": "ideal_charge_pattern_fisher", "oracle_vertex_rms_m": oracle_rms, "vertex_threshold_m": threshold}, indent=2) + "\n", encoding="utf-8")
-        evaluation["vertex_threshold_m"] = threshold
+        reference = freeze_threshold(oracle_rms)
+        gate = freeze_gate(oracle_rms)
+        (private / "electron_oracle.json").write_text(json.dumps({
+            "method": "ideal_charge_pattern_fisher",
+            "oracle_vertex_rms_m": oracle_rms,
+            "vertex_rms_reference_m": reference,
+            "vertex_resolution_gate_m": gate,
+        }, indent=2) + "\n", encoding="utf-8")
+        evaluation["vertex_rms_reference_m"] = reference
+        evaluation["vertex_resolution_gate_m"] = gate
     (public / "evaluation_config.json").write_text(json.dumps(evaluation, indent=2) + "\n", encoding="utf-8")
 
 
@@ -183,8 +235,8 @@ def main():
     parser.add_argument("--juno-type-csv", default=JUNO_LPMT_TYPE_CSV)
     parser.add_argument("--n-pmt", type=int)
     parser.add_argument("--calibration-events-per-point", type=int, default=20)
-    parser.add_argument("--probe-events-per-point", type=int, default=1000)
-    parser.add_argument("--controls", type=int, default=6400)
+    parser.add_argument("--probe-events-per-point", type=int, default=200)
+    parser.add_argument("--controls", type=int, default=7680)
     parser.add_argument(
         "--detector-seed",
         type=int,
