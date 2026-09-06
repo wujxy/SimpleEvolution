@@ -4,6 +4,36 @@ Reconstruct 1–10 MeV single-electron events from PMT waveforms in a
 JUNO-like liquid-scintillator detector, the way an experiment analyst
 would calibrate the detector and then reconstruct physics events.
 
+## Why this task exists
+
+JUNO determines the neutrino mass ordering from the fine vacuum-oscillation
+structure of the reactor ν̄_e spectrum. At the ~53 km baselines the two
+orderings shift the oscillation maxima slightly, and resolving that
+difference is the reason the experiment demands an energy resolution of
+σ_E/E ≈ 3%/√(E/MeV) with the energy scale known to better than 1%. The
+reconstructed spectrum therefore has to be sharp, unbiased, and absolutely
+calibrated at the same time: making peaks sharper while shifting their
+centers contributes nothing to the oscillation fit. Vertex reconstruction
+carries the same physics weight — the fiducial cut it enables suppresses
+the cosmogenic background that would otherwise contaminate the reactor
+sample.
+
+This benchmark is the single-electron core of that problem. Your
+reconstruction is scored exactly the way the physics consumes it.
+
+## The goal
+
+- Primary target: drive the fitted 1-MeV energy resolution R_1MeV toward
+  3.0%.
+- Secondary targets, equally binding under the same physics budget: keep
+  the energy response unbiased across 1–10 MeV, keep the reconstructed
+  vertex free of radial bias, and keep the 1-MeV vertex resolution small.
+
+Gates enforce the minimum each of these must satisfy, frozen in
+`public/evaluation_config.json`; targets are what ranking follows. Failing
+any gate marks the run invalid no matter how good the primary number
+looks.
+
 ## Detector and readout
 
 The scintillator volume is viewed by the PMTs listed in
@@ -59,8 +89,8 @@ threshold is frozen in `public/evaluation_config.json`.
 - vertex resolution floor: 1-MeV vertex RMS ≤ `vertex_resolution_gate_m`
 
 Optimization targets, reported and ranked: the JUNO-style resolution-curve
-fit gives `R_1MeV` (target 3.0%), and the 1-MeV vertex RMS is reported
-against `vertex_rms_reference_m`.
+fit gives `R_1MeV` (primary target 3.0%), and the 1-MeV vertex RMS is
+reported against `vertex_rms_reference_m`.
 
 ## Environment
 
