@@ -36,6 +36,7 @@ from benchmarks.JunoResBench.world_generator.oracle_vertex import (
     freeze_threshold,
 )
 from benchmarks.JunoResBench.world_generator.build_task import (
+    DEV_EVENTS,
     ENERGY_BIAS_1MEV_MAX,
     ENERGY_BIAS_MAX,
     ENERGY_RESOLUTION_GATE,
@@ -252,6 +253,7 @@ def main():
     seeds = [int(s.generate_state(1, dtype=np.uint64)[0]) for s in streams]
     calibration = calibration_population(seeds[0], args.calibration_events_per_point)
     dev = physics_population(args.task, seeds[1], args.probe_events_per_point, args.controls)
+    dev = {key: value[:DEV_EVENTS] for key, value in dev.items()}
     final = physics_population(args.task, seeds[2], args.probe_events_per_point, args.controls)
     expected = {"calibration": calibration, "dev": dev, "final": final}
     for name, population in expected.items():
