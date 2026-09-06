@@ -10,7 +10,10 @@ export PYTHONPATH=/lustrefs/juno26/users/lidian/pylibs/jrb_py39${PYTHONPATH:+:$P
 
 TASK=electron_single_site
 SEED=20260907
-BASE=/scratchfs2/juno/lidian/jrb_v21/preflight
+# unique run dir per condor cluster: hep_sub retry clones land on other
+# schedds and cannot be removed from here — a shared fixed dir would let two
+# clones interleave writes into one shard
+BASE=/scratchfs2/juno/lidian/jrb_v21/preflight_${_CONDOR_CLUSTER_ID:-manual$$}
 
 cd "$JRB_REPO_ROOT"
 # never rm the whole BASE: hep_sub writes its stdout/stderr logs inside it
