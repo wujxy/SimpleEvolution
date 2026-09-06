@@ -38,17 +38,12 @@ FIGURE_PURPOSE = {
     "waveform_examples": "低/中/高电荷波形是否合理",
     "waveform_overlays": "脉冲成形模板是否稳定",
     "pulse_integral_vs_peak": "峰高与积分是否自洽",
-    "roi_structure": "稀疏 ROI 是否真正稀疏",
 }
 
 FIGURE_GATE = {
     "charge_vs_energy": ("charge_energy_correlation",),
     "time_vs_distance": ("time_distance_slope_ns_per_m",),
-    "roi_structure": (
-        "roi_start_zero_fraction",
-        "roi_near_full_window_fraction",
-        "sparse_to_stored_dense_ratio",
-    ),
+    "waveform_examples": ("dense_channel_completeness",),
 }
 
 
@@ -107,7 +102,7 @@ def physics_report(task_name, truth_path):
 
 
 def sparse_structure_report(path):
-    """Validate sparse-array boundaries without opening waveform payloads fully."""
+    """Validate split-array boundaries without opening waveform payloads fully."""
     path = Path(path)
     required = ("metadata.json", "index.npz", "segment_samples.npy")
     missing = [name for name in required if not (path / name).is_file()]
@@ -115,6 +110,12 @@ def sparse_structure_report(path):
         return {"pass": False, "missing": missing}
     try:
         metadata = json.loads((path / "metadata.json").read_text(encoding="utf-8"))
+        encoding = metadata.get("encoding")
+        if encoding not in ("dense", "sparse"):
+            return {"pass": False, "error": f"unknown encoding: {encoding!r}"}
+        threshold = int(metadata["threshold_adc"])
+        if (encoding == "dense") != (threshold == 0):
+            return {"pass": False, "error": "encoding and threshold_adc disagree"}
         with np.load(path / "index.npz", allow_pickle=False) as index:
             events = index["event_segment_offsets"]
             samples = index["segment_sample_offsets"]
@@ -132,8 +133,17 @@ def sparse_structure_report(path):
             and starts.shape == ids.shape
             and int(metadata["n_events"]) == len(events) - 1
         )
+        if encoding == "dense" and valid:
+            n_events = len(events) - 1
+            n_samples = int(metadata["n_samples"])
+            valid = bool(
+                n_events > 0
+                and np.all(np.diff(samples) == n_samples)
+                and np.all(starts == 0)
+            )
         return {
             "pass": valid,
+            "encoding": encoding,
             "events": int(len(events) - 1),
             "segments": int(len(ids)),
             "samples": int(len(payload)),
@@ -145,17 +155,9 @@ def sparse_structure_report(path):
 def waveform_gates(summary):
     """Apply broad physical/data-volume envelopes to measured waveform metrics."""
     definitions = {
-        "roi_start_zero_fraction": (
-            summary["raw_roi_start_zero_fraction"], "<", 0.20,
-            "window-start ROIs must not be noise-dominated",
-        ),
-        "roi_near_full_window_fraction": (
-            summary["raw_roi_near_full_window_fraction"], "<", 0.05,
-            "ROI padding must not merge most channels into full windows",
-        ),
-        "sparse_to_stored_dense_ratio": (
-            summary["sparse_to_stored_dense_ratio"], "<", 0.35,
-            "sparse storage must materially reduce stored-channel samples",
+        "dense_channel_completeness": (
+            summary["dense_channel_completeness"], ">", 0.999,
+            "dense splits must carry every PMT with a full-window segment",
         ),
         "charge_energy_correlation": (
             summary["charge_energy_correlation"], ">", 0.0,
@@ -225,8 +227,9 @@ def validate_release(task_name, release_root, output_root, sample_limit=32):
     if not hygiene["pass"]:
         failures.append("dataset_contains_executable")
     structures = {
+        "public_calibration": sparse_structure_report(release / "public/calibration"),
         "public_dev": sparse_structure_report(release / "public/dev"),
-        "private_final": sparse_structure_report(release / "private/final_observations"),
+        "private_final": sparse_structure_report(release / "private/final"),
     }
     failures.extend(
         f"invalid_structure_{name}"

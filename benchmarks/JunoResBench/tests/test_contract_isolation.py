@@ -20,10 +20,12 @@ def test_contract_is_data_only_and_declares_sparse_fields():
 
     assert {path.suffix for path in contract.iterdir()} == {".json"}
     sparse = json.loads(
-        (contract / "sparse_waveform_v1.json").read_text(encoding="utf-8")
+        (contract / "sparse_waveform_v2.json").read_text(encoding="utf-8")
     )
     assert sparse["files"]["index.npz"]["event_segment_offsets"] == "int64[N+1]"
     assert sparse["files"]["segment_samples.npy"] == "int16[M]"
+    assert "encoding" in sparse["files"]["metadata.json"]["required_keys"]
+    assert "threshold_adc" in sparse["files"]["metadata.json"]["required_keys"]
 
 
 def test_active_generator_and_evaluators_have_no_cross_imports():

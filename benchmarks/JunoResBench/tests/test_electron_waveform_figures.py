@@ -26,99 +26,110 @@ EXPECTED = {
     "waveform_examples",
     "waveform_overlays",
     "pulse_integral_vs_peak",
-    "roi_structure",
 }
 
+N_PMT = 12
+N_SAMPLE = 128
+PULSE = np.r_[np.zeros(3), -10 * np.arange(1, 7), -10 * np.arange(5, 0, -1)]
 
-def _synthetic_release(
-    root: Path, bad_roi=False, public_vertices=True, low_energy_control=False
-):
-    split = root / "public/dev"
+positions_fixture = np.column_stack((
+    np.cos(np.linspace(0, 2 * np.pi, N_PMT, endpoint=False)),
+    np.sin(np.linspace(0, 2 * np.pi, N_PMT, endpoint=False)),
+    np.linspace(-0.8, 0.8, N_PMT),
+))
+positions_fixture *= 19.0 / np.linalg.norm(positions_fixture, axis=1)[:, None]
+
+
+def _write_dense_split(split: Path, energies, vertices, rng_seed=100):
     split.mkdir(parents=True)
-    (root / "private").mkdir()
-    n_event, n_pmt, n_sample = 12, 12, 128
-    positions = np.column_stack((
-        np.cos(np.linspace(0, 2 * np.pi, n_pmt, endpoint=False)),
-        np.sin(np.linspace(0, 2 * np.pi, n_pmt, endpoint=False)),
-        np.linspace(-0.8, 0.8, n_pmt),
-    ))
-    positions *= 19.0 / np.linalg.norm(positions, axis=1)[:, None]
-    np.savez(root / "public/detector_geometry.npz", pmt_positions_m=positions)
-    energies = np.tile(np.arange(1.0, 7.0), 2)
-    roles = np.zeros(n_event, dtype=np.int8)
-    if low_energy_control:
-        energies[-1] = 0.1
-        roles[-1] = 1
-    vertices = np.column_stack((np.linspace(0, 14, n_event), np.zeros((n_event, 2))))
-    public_truth = dict(
-        evt_e_true=energies,
-        evt_e_vis=energies * 0.975,
-        evt_sample_role=roles,
-    )
-    if public_vertices:
-        public_truth["evt_vertex_m"] = vertices
-    np.savez(split / "truth.npz", **public_truth)
-    step_offsets = np.arange(0, 2 * n_event + 1, 2, dtype=np.int64)
-    step_dep = np.column_stack((np.full(n_event, 0.05), energies - 0.05)).ravel()
-    np.savez(
-        root / "private/truth.npz",
-        evt_e_true=energies,
-        evt_vertex_m=vertices,
-        evt_t0_ns=np.linspace(-10, 10, n_event),
-        evt_e_escape_mev=np.zeros(n_event),
-        evt_total_energy=energies,
-        step_offsets=step_offsets,
-        step_e_dep_mev=step_dep,
-        step_e_vis_mev=step_dep * np.tile([0.80, 0.98], n_event),
-        step_kinetic_mev=np.tile([0.02, 1.0], n_event),
-    )
-
+    n_event = len(energies)
     event_offsets = [0]
-    sample_offsets = [0]
-    pmt_ids, starts, blocks = [], [], []
+    pmt_ids, starts, sizes = [], [], []
+    blocks = []
     for event in range(n_event):
-        for pmt in range(3 + int(energies[event])):
-            width = n_sample if bad_roi else 14 + pmt % 3
-            pulse = np.r_[np.zeros(3), -10 * np.arange(1, 7), -10 * np.arange(5, 0, -1)]
-            if bad_roi:
-                block = np.zeros(width, dtype=np.int16)
-                block[50:50 + len(pulse)] = pulse
-            else:
-                block = np.pad(pulse, (0, width - len(pulse))).astype(np.int16)
-            pmt_id = (pmt + event) % n_pmt
-            pmt_ids.append(pmt_id)
-            starts.append(0 if bad_roi else int(
-                10 + np.linalg.norm(positions[pmt_id] - vertices[event])
-            ))
+        pulse = (PULSE * (1.0 + float(energies[event]) / 4.0)).astype(np.int16)
+        rng = np.random.default_rng(rng_seed + event)
+        for pmt in range(N_PMT):
+            block = rng.normal(0.0, 3.0, N_SAMPLE).astype(np.int16)
+            start = int(10 + np.linalg.norm(positions_fixture[pmt] - vertices[event]))
+            block[start : start + len(pulse)] += pulse
+            pmt_ids.append(pmt)
+            starts.append(0)
+            sizes.append(N_SAMPLE)
             blocks.append(block)
-            sample_offsets.append(sample_offsets[-1] + width)
         event_offsets.append(len(pmt_ids))
     np.savez(
         split / "index.npz",
         event_segment_offsets=np.asarray(event_offsets, dtype=np.int64),
-        segment_sample_offsets=np.asarray(sample_offsets, dtype=np.int64),
+        segment_sample_offsets=np.concatenate(
+            (np.zeros(1, dtype=np.int64), np.cumsum(sizes, dtype=np.int64))
+        ),
         segment_pmt_ids=np.asarray(pmt_ids, dtype=np.int32),
         segment_start_samples=np.asarray(starts, dtype=np.int16),
     )
     np.save(split / "segment_samples.npy", np.concatenate(blocks))
-    (split / "metadata.json").write_text(json.dumps({
+    split.joinpath("metadata.json").write_text(json.dumps({
+        "storage_format": "jrb_sparse_waveforms_v2",
+        "encoding": "dense",
         "baseline": 4784,
         "n_events": n_event,
-        "n_samples": n_sample,
-        "threshold_adc": 6,
-        "pre_samples": 16,
-        "post_samples": 48,
+        "n_pmt": N_PMT,
+        "n_samples": N_SAMPLE,
+        "threshold_adc": 0,
+        "pre_samples": 0,
+        "post_samples": 0,
     }))
+
+
+def _synthetic_release(root: Path):
+    final_energies = np.asarray([1.0, 2.0, 5.0, 5.0, 7.0, 1.2, 4.4, 9.5])
+    final_roles = np.asarray([0, 0, 0, 0, 0, 1, 1, 1], dtype=np.int8)
+    final_vertices = np.zeros((len(final_energies), 3))
+    final_vertices[1, 0] = 14.0
+    final_vertices[3, 1] = 8.0
+    final_vertices[6, 0] = 6.0
+    dev_energies = np.asarray([1.5, 3.3, 6.0, 8.2])
+    dev_vertices = np.zeros((len(dev_energies), 3))
+    dev_vertices[:, 0] = np.linspace(2.0, 12.0, len(dev_energies))
+    n_event = len(final_energies)
+
+    (root / "public").mkdir(parents=True)
+    (root / "private").mkdir()
+    np.savez(
+        root / "public/detector_geometry.npz", pmt_positions_m=positions_fixture
+    )
+
+    _write_dense_split(
+        root / "public/calibration", np.asarray([0.511, 1.022]), np.zeros((2, 3))
+    )
+    _write_dense_split(root / "public/dev", dev_energies, dev_vertices)
+    _write_dense_split(root / "private/final", final_energies, final_vertices)
+    np.savez(
+        root / "private/truth.npz",
+        evt_e_true=final_energies,
+        evt_vertex_m=final_vertices,
+        evt_sample_role=final_roles,
+        evt_t0_ns=np.linspace(-10, 10, n_event),
+        evt_e_escape_mev=np.zeros(n_event),
+        evt_total_energy=final_energies,
+        step_offsets=np.arange(0, 2 * n_event + 1, 2, dtype=np.int64),
+        step_e_dep_mev=np.column_stack((
+            np.full(n_event, 0.05), final_energies - 0.05
+        )).ravel(),
+        step_e_vis_mev=np.column_stack((
+            np.full(n_event, 0.05), final_energies - 0.05
+        )).ravel() * np.tile([0.80, 0.98], n_event),
+        step_kinetic_mev=np.tile([0.02, 1.0], n_event),
+    )
 
 
 def test_builds_bounded_waveform_audit(tmp_path):
     release = tmp_path / "release"
     _synthetic_release(release)
 
-    reader = ReleaseWaveforms(release / "public/dev")
+    reader = ReleaseWaveforms(release / "private/final")
     event = reader.read_event(3)
     assert isinstance(reader.samples, np.memmap)
-    assert event.samples.size < reader.samples.size
 
     paths = build_waveform_figures(release, tmp_path / "figures", sample_limit=8)
 
@@ -127,12 +138,17 @@ def test_builds_bounded_waveform_audit(tmp_path):
     assert all(path.is_file() and path.stat().st_size > 0 for path in paths.values())
     summary = json.loads((tmp_path / "figures/summary.json").read_text())
     assert summary["events_scanned"] <= 8
-    assert summary["waveform_samples_read"] < reader.samples.size
-    assert 0 <= summary["raw_roi_start_zero_fraction"] <= 1
-    assert 0 <= summary["raw_roi_near_full_window_fraction"] <= 1
-    assert np.isfinite(summary["sparse_to_stored_dense_ratio"])
+    assert summary["events_total_dense_calibration"] == 2
+    assert summary["dense_channel_completeness"] == 1.0
     assert np.isfinite(summary["charge_energy_correlation"])
     assert np.isfinite(summary["time_distance_slope_ns_per_m"])
+
+
+def test_dev_split_carries_no_truth(tmp_path):
+    release = tmp_path / "release"
+    _synthetic_release(release)
+
+    assert not (release / "public/dev/truth.npz").exists()
 
 
 def test_plotter_is_independent_of_generator_and_copying():
@@ -144,38 +160,27 @@ def test_plotter_is_independent_of_generator_and_copying():
     assert "copyfile" not in source
 
 
-def test_owner_side_plotter_accepts_private_only_vertices(tmp_path):
-    release = tmp_path / "release"
-    output = tmp_path / "figures"
-    _synthetic_release(release, public_vertices=False)
+def test_dense_split_rejects_duplicate_channels(tmp_path):
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.sparse_waveforms import (
+        encode_dense_event,
+    )
 
-    paths = build_waveform_figures(release, output, sample_limit=8)
-
-    assert set(paths) == EXPECTED
-
-
-def test_light_yield_summary_excludes_sub_mev_control_events(tmp_path):
-    release = tmp_path / "release"
-    output = tmp_path / "figures"
-    _synthetic_release(release, low_energy_control=True)
-
-    build_waveform_figures(release, output, sample_limit=12)
-    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
-
-    assert summary["mean_integral_per_mev"] < 1_000
+    wave = np.full((4, 16), 4784, dtype=np.uint16)
+    with np.testing.assert_raises(ValueError):
+        encode_dense_event(wave, np.array([0, 1, 2, 2]), 4784)
 
 
 def test_rejects_invalid_sparse_offsets(tmp_path):
     release = tmp_path / "release"
     _synthetic_release(release)
-    index_path = release / "public/dev/index.npz"
+    index_path = release / "private/final/index.npz"
     with np.load(index_path) as index:
         arrays = {name: index[name] for name in index.files}
     arrays["segment_sample_offsets"][-1] += 10_000
     np.savez(index_path, **arrays)
 
     try:
-        ReleaseWaveforms(release / "public/dev")
+        ReleaseWaveforms(release / "private/final")
     except ValueError as error:
         assert "sample offsets" in str(error)
     else:

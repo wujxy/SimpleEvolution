@@ -59,7 +59,7 @@ def build_figures(release_root: Path, output_dir: Path):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     truth = _load(release_root / "private/truth.npz")
-    public = _load(release_root / "public/dev/truth.npz")
+    public = truth
     config = json.loads(
         (release_root / "public/evaluation_config.json").read_text(encoding="utf-8")
     )

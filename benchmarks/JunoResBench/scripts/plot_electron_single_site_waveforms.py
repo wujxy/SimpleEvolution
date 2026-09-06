@@ -32,7 +32,6 @@ FIGURE_NAMES = (
     "waveform_examples",
     "waveform_overlays",
     "pulse_integral_vs_peak",
-    "roi_structure",
 )
 
 
@@ -121,6 +120,17 @@ def _load_npz(path: Path):
         return {name: data[name] for name in data.files}
 
 
+def _event_noise_sigma(event: EventWaveforms) -> float:
+    """Robust per-event noise sigma from stored baseline residual samples."""
+    residual = np.asarray(event.samples, dtype=float)
+    if residual.size == 0:
+        return 0.0
+    if residual.size > 2_000_000:
+        residual = residual[:: residual.size // 2_000_000 + 1]
+    median = float(np.median(residual))
+    return float(1.4826 * np.median(np.abs(residual - median)))
+
+
 def _event_metrics(reader: ReleaseWaveforms, index: int) -> EventMetrics:
     event = reader.read_event(index)
     ids = event.segment_pmt_ids.astype(np.int64, copy=False)
@@ -137,7 +147,7 @@ def _event_metrics(reader: ReleaseWaveforms, index: int) -> EventMetrics:
     segment_charge = np.empty(len(ids), dtype=float)
     segment_peak = np.empty(len(ids), dtype=float)
     segment_first = np.full(len(ids), np.inf)
-    pulse_threshold = 5.0 * float(reader.metadata["threshold_adc"])
+    pulse_threshold = 5.0 * _event_noise_sigma(event)
     for segment, (lo, hi) in enumerate(zip(
         event.segment_sample_offsets[:-1], event.segment_sample_offsets[1:]
     )):
@@ -239,19 +249,16 @@ def _pattern_figure(metrics, positions, values, label, title):
 def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32):
     release_root, output = Path(release_root), Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    reader = ReleaseWaveforms(release_root / "public/dev")
-    public = _load_npz(release_root / "public/dev/truth.npz")
-    private = _load_npz(release_root / "private/truth.npz")
+    reader = ReleaseWaveforms(release_root / "private/final")
+    truth = _load_npz(release_root / "private/truth.npz")
     geometry = _load_npz(release_root / "public/detector_geometry.npz")
     positions = np.asarray(geometry["pmt_positions_m"], float)
-    energy = np.asarray(public["evt_e_true"], float)
-    vertices = np.asarray(
-        public.get("evt_vertex_m", private["evt_vertex_m"]), float
-    )
+    energy = np.asarray(truth["evt_e_true"], float)
+    vertices = np.asarray(truth["evt_vertex_m"], float)
     radius = np.linalg.norm(vertices, axis=1)
-    if len(reader) != len(energy) or len(private["evt_t0_ns"]) != len(energy):
+    if len(reader) != len(energy):
         raise ValueError("waveform and truth event counts differ")
-    role = np.asarray(public["evt_sample_role"])
+    role = np.asarray(truth["evt_sample_role"])
     probe_five = np.flatnonzero((role == 0) & np.isclose(energy, 5.0))
     if len(probe_five) < 2:
         probe_five = np.flatnonzero(np.isclose(energy, energy[np.argmin(abs(energy - 5.0))]))
@@ -285,7 +292,7 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
     paths["vertex_distribution"] = _save(fig, output, "vertex_distribution")
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    scatter = ax.scatter(radius, energy, c=np.asarray(public["evt_sample_role"]), s=5, alpha=0.4)
+    scatter = ax.scatter(radius, energy, c=role, s=5, alpha=0.4)
     ax.set(xlabel="vertex radius [m]", ylabel="true energy [MeV]",
            title="Energy-radius coverage: probe and control samples span the fiducial volume")
     fig.colorbar(scatter, ax=ax, label="sample role")
@@ -440,31 +447,24 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
            title="Integral versus peak: linear core; pile-up broadens high charge")
     paths["pulse_integral_vs_peak"] = _save(fig, output, "pulse_integral_vs_peak")
 
-    all_starts = np.concatenate([item.roi_starts for item in metrics])
-    all_lengths = np.concatenate([item.roi_lengths for item in metrics])
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-    axes[0].hist(all_starts, bins=100, log=True)
-    axes[0].set(xlabel="ROI start sample", ylabel="segments", title="ROI timing across readout window")
-    axes[1].hist(all_lengths, bins=min(80, max(10, len(np.unique(all_lengths)))), log=True)
-    axes[1].axvline(reader.metadata["pre_samples"] + reader.metadata["post_samples"] + 1,
-                    color="k", ls="--", label="isolated threshold ROI")
-    axes[1].set(xlabel="ROI length [samples]", ylabel="segments",
-                title="ROI length: long tail reveals merged/overlapping pulses")
-    axes[1].legend()
-    paths["roi_structure"] = _save(fig, output, "roi_structure")
-
+    dense_complete = [
+        len(item.event.segment_pmt_ids) == int(reader.metadata["n_pmt"])
+        and bool(np.all(np.diff(item.event.segment_sample_offsets) == item.event.n_samples))
+        for item in metrics
+    ]
     summary = {
         "events_total": len(reader),
+        "events_total_dense_final": len(reader),
+        "events_total_dense_calibration": len(
+            ReleaseWaveforms(release_root / "public/calibration")
+        ),
         "events_scanned": len(metrics),
         "selected_event_indices": selected.tolist(),
         "center_event": center.index,
         "edge_event": edge.index,
         "waveform_samples_total": int(len(reader.samples)),
         "waveform_samples_read": int(sum(item.event.samples.size for item in metrics)),
-        "sparse_to_stored_dense_ratio": float(
-            sum(item.event.samples.size for item in metrics)
-            / sum(len(item.pmt_ids) * item.event.n_samples for item in metrics)
-        ),
+        "dense_channel_completeness": float(np.mean(dense_complete)),
         "charge_energy_correlation": float(np.corrcoef(
             sample_energy[sampled_probe], total_charge[sampled_probe]
         )[0, 1]),
@@ -475,12 +475,7 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
             total_charge[sampled_probe] / sample_energy[sampled_probe]
         )),
         "median_first_sample_ns": float(np.nanmedian(median_time)),
-        "pulse_selection_threshold_adc": 5.0 * float(reader.metadata["threshold_adc"]),
-        "raw_roi_threshold_adc": float(reader.metadata["threshold_adc"]),
-        "raw_roi_start_zero_fraction": float(np.mean(all_starts == 0)),
-        "raw_roi_near_full_window_fraction": float(
-            np.mean(all_lengths >= 0.9 * reader.metadata["n_samples"])
-        ),
+        "pulse_selection_threshold_source": "per-event 5-sigma MAD of stored residuals",
         "tof_residual_core_sigma_ns": float(np.std(all_residual[np.abs(all_residual) < 50])),
         "note": "Waveforms are trigger-relative; t0 cannot be recovered from release truth without stored trigger time.",
     }

@@ -49,12 +49,9 @@ def test_physics_report_requires_low_energy_quenching(tmp_path):
     assert report["quenching_pass"] is True
 
 
-def _candidate(tmp_path, bad_roi=False):
+def _candidate(tmp_path):
     release = tmp_path / "release"
-    _synthetic_release(release, bad_roi=bad_roi)
-    (release / "private/final_observations").symlink_to(
-        release / "public/dev", target_is_directory=True
-    )
+    _synthetic_release(release)
     return release
 
 
@@ -79,26 +76,6 @@ def test_validation_bundle_accepts_physical_candidate_without_expert(tmp_path):
     assert all(f"figures/{name}.png" in atlas for name in EXPECTED)
     assert "| `vertex_distribution` | 顶点总体是否符合球体部署 | REVIEW |" in atlas
     assert "| `charge_vs_energy` | 积分电荷是否保存能量信息 | PASS |" in atlas
-
-
-def test_validation_bundle_rejects_noise_merged_full_window_rois(tmp_path):
-    release = _candidate(tmp_path, bad_roi=True)
-    output = tmp_path / "validation"
-
-    report = validate_release(
-        "electron_single_site", release, output, sample_limit=8
-    )
-
-    assert report["release_ready"] is False
-    assert {
-        "roi_start_zero_fraction",
-        "roi_near_full_window_fraction",
-        "sparse_to_stored_dense_ratio",
-    } <= set(report["failures"])
-    assert (output / "REJECTED").is_file()
-    assert not (output / "ACCEPTED").exists()
-    atlas = (output / "README.md").read_text(encoding="utf-8")
-    assert "| `roi_structure` | 稀疏 ROI 是否真正稀疏 | FAIL |" in atlas
 
 
 def test_validator_cli_resolves_repo_imports_outside_checkout(tmp_path):

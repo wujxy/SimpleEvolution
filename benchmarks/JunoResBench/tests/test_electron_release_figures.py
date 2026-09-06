@@ -10,7 +10,7 @@ from benchmarks.JunoResBench.scripts.plot_electron_single_site_release import (
 
 def _synthetic_release(root: Path):
     (root / "private").mkdir(parents=True)
-    (root / "public/dev").mkdir(parents=True)
+    (root / "public").mkdir(parents=True)
     energies = np.tile(np.arange(1.0, 11.0), 2)
     role = np.r_[np.zeros(10, dtype=np.int8), np.ones(10, dtype=np.int8)]
     step_kinetic = np.tile([0.02, 1.0], len(energies))
@@ -37,15 +37,17 @@ def _synthetic_release(root: Path):
         step_kind=np.zeros(len(step_dep), dtype=np.int8),
         step_offsets=offsets,
     )
-    np.savez(
-        root / "public/dev/truth.npz",
-        evt_e_true=energies,
-        evt_sample_role=role,
-        evt_e_vis=np.add.reduceat(step_vis, offsets[:-1]),
-        evt_vertex_m=vertex,
-    )
     (root / "public/evaluation_config.json").write_text(
-        json.dumps({"energy_target_r_1mev": 0.03, "vertex_threshold_m": 0.54}),
+        json.dumps({
+            "energy_target_r_1mev": 0.03,
+            "energy_resolution_gate": 0.036,
+            "energy_bias_1mev_abs_max": 0.015,
+            "energy_bias_abs_max": 0.02,
+            "vertex_rms_reference_m": 0.092,
+            "vertex_resolution_gate_m": 0.54,
+            "vertex_radial_bias_abs_max_m": 0.20,
+            "vertex_high_energy_rms_ratio_max": 1.20,
+        }),
         encoding="utf-8",
     )
 

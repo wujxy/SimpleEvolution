@@ -12,39 +12,76 @@ sys.path.insert(0, str(ROOT / "tasks" / "electron_single_site" / "evaluator"))
 
 from scoring import parse_prediction, score_electron  # noqa: E402
 from evaluate import score_predictions  # noqa: E402
-from benchmarks.JunoResBench.world_generator.oracle_vertex import freeze_threshold
-from benchmarks.JunoResBench.world_generator.oracle_vertex import charge_pattern_vertex_rms
-from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.config import DetectorConfig
-from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import PMTLayout
+from benchmarks.JunoResBench.world_generator.oracle_vertex import (  # noqa: E402
+    freeze_gate,
+    freeze_threshold,
+    charge_pattern_vertex_rms,
+)
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.config import DetectorConfig  # noqa: E402
+from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import PMTLayout  # noqa: E402
 
 
-def _energy_fixture(seed=7, events_per_probe=4000):
+def _thresholds():
+    return {
+        "energy_target_r_1mev": 0.03,
+        "energy_resolution_gate": 0.036,
+        "energy_bias_1mev_abs_max": 0.015,
+        "energy_bias_abs_max": 0.02,
+        "vertex_rms_reference_m": 0.092,
+        "vertex_resolution_gate_m": 0.54,
+        "vertex_radial_bias_abs_max_m": 0.20,
+        "vertex_high_energy_rms_ratio_max": 1.20,
+    }
+
+
+def _energy_fixture(seed=7, events_per_probe=4000, width_scale=1.0):
     rng = np.random.default_rng(seed)
     probe = np.repeat(np.arange(1.0, 11.0), events_per_probe)
     relative = np.sqrt(0.015**2 / probe + 0.002**2 + 0.004**2 / probe**2)
-    reconstructed = probe + rng.normal(size=len(probe)) * probe * relative
+    reconstructed = probe + rng.normal(size=len(probe)) * probe * relative * width_scale
     controls = np.linspace(1.0, 10.0, 6400)
     return probe, reconstructed, controls
 
 
-def test_electron_score_requires_energy_and_vertex_targets():
+def test_electron_score_rejects_vertex_resolution_above_gate():
     probe, reconstructed, controls = _energy_fixture()
     truth_vertex = np.zeros((len(probe), 3))
     reconstructed_vertex = np.full((len(probe), 3), 0.20 / np.sqrt(3.0))
 
+    thresholds = _thresholds()
+    thresholds["vertex_resolution_gate_m"] = 0.10
     score = score_electron(
-        probe,
-        reconstructed,
-        truth_vertex,
-        reconstructed_vertex,
-        controls,
-        controls,
-        vertex_threshold_m=0.10,
+        probe, reconstructed, truth_vertex, reconstructed_vertex,
+        controls, controls, thresholds,
     )
 
-    assert score["energy_passed"] is True
-    assert score["vertex_passed"] is False
+    assert score["gates"]["energy_resolution"] is True
+    assert score["gates"]["vertex_resolution"] is False
     assert score["passed"] is False
+
+
+def test_energy_resolution_target_is_not_the_gate():
+    probe, reconstructed, controls = _energy_fixture(width_scale=2.2)
+    truth_vertex = np.zeros((len(probe), 3))
+    score = score_electron(
+        probe, reconstructed, truth_vertex, np.zeros((len(probe), 3)),
+        controls, controls, _thresholds(),
+    )
+
+    assert score["valid"] is True
+    assert score["targets"]["R_1MeV"] > score["targets"]["R_1MeV_reference"]
+    assert score["targets"]["R_1MeV"] <= score["gate_thresholds"]["energy_resolution_gate"]
+    assert score["gates"]["energy_resolution"] is True
+    assert score["passed"] is True
+
+    probe, reconstructed, controls = _energy_fixture(width_scale=3.0)
+    worse = score_electron(
+        probe, reconstructed, truth_vertex, np.zeros((len(probe), 3)),
+        controls, controls, _thresholds(),
+    )
+    assert worse["targets"]["R_1MeV"] > worse["gate_thresholds"]["energy_resolution_gate"]
+    assert worse["gates"]["energy_resolution"] is False
+    assert worse["passed"] is False
 
 
 def test_electron_score_rejects_large_probe_energy_bias():
@@ -54,18 +91,11 @@ def test_electron_score_rejects_large_probe_energy_bias():
     reconstructed_vertex = np.zeros((len(probe), 3))
 
     score = score_electron(
-        probe,
-        biased,
-        truth_vertex,
-        reconstructed_vertex,
-        controls,
-        controls * 1.05,
-        vertex_threshold_m=0.54,
+        probe, biased, truth_vertex, reconstructed_vertex,
+        controls, controls * 1.05, _thresholds(),
     )
 
     assert score["valid"] is True
-    assert score["energy_passed"] is True
-    assert score["energy_bias_passed"] is False
     assert score["gates"]["energy_bias"] is False
     assert score["passed"] is False
     assert max(abs(item) for item in score["metrics"]["energy_bias_by_probe"]) > 0.02
@@ -79,21 +109,24 @@ def test_electron_score_rejects_radial_vertex_bias():
     reconstructed_vertex[:, 0] += 0.35
 
     score = score_electron(
-        probe,
-        reconstructed,
-        truth_vertex,
-        reconstructed_vertex,
-        controls,
-        controls,
-        vertex_threshold_m=0.54,
+        probe, reconstructed, truth_vertex, reconstructed_vertex,
+        controls, controls, _thresholds(),
     )
 
     assert score["valid"] is True
-    assert score["vertex_passed"] is True
-    assert score["vertex_bias_passed"] is False
     assert score["gates"]["vertex_bias"] is False
     assert score["passed"] is False
     assert max(abs(item) for item in score["metrics"]["vertex_radial_bias_by_probe_m"]) > 0.20
+
+
+def test_missing_frozen_threshold_is_an_error():
+    probe, reconstructed, controls = _energy_fixture(events_per_probe=200)
+    broken = {key: value for key, value in _thresholds().items() if key != "energy_resolution_gate"}
+    with pytest.raises(KeyError, match="energy_resolution_gate"):
+        score_electron(
+            probe, reconstructed, np.zeros((len(probe), 3)), np.zeros((len(probe), 3)),
+            controls, controls, broken,
+        )
 
 
 def test_electron_prediction_requires_four_finite_scalars():
@@ -102,9 +135,13 @@ def test_electron_prediction_requires_four_finite_scalars():
         parse_prediction((1.0, np.nan, 0.0))
 
 
-def test_vertex_threshold_is_one_point_fifteen_times_oracle_rounded_up():
+def test_vertex_freeze_functions_round_upward_to_tenth_of_cm():
     assert freeze_threshold(0.08101) == 0.094
     assert freeze_threshold(0.08000) == 0.092
+    assert freeze_gate(0.08101) == 0.122
+    assert freeze_gate(0.08101, factor=1.5) == 0.122
+    with pytest.raises(ValueError, match="above the reference"):
+        freeze_gate(0.08101, factor=1.1)
 
 
 def test_charge_pattern_oracle_has_a_finite_positive_vertex_limit():
@@ -138,7 +175,7 @@ def test_online_evaluator_splits_probe_and_control_roles():
         )
     )
 
-    score = score_predictions(truth, prediction, {"vertex_threshold_m": 0.54})
+    score = score_predictions(truth, prediction, _thresholds())
 
     assert score["valid"] is True
 
@@ -161,6 +198,6 @@ def test_online_evaluator_controls_validate_against_true_energy():
         )
     )
 
-    score = score_predictions(truth, prediction, {"vertex_threshold_m": 0.54})
+    score = score_predictions(truth, prediction, _thresholds())
 
     assert score["valid"] is True
