@@ -11,7 +11,8 @@ SEED=20260907
 BASE=/scratchfs2/juno/lidian/jrb_v21/preflight
 
 cd "$JRB_REPO_ROOT"
-rm -rf "$BASE"
+# never rm the whole BASE: hep_sub writes its stdout/stderr logs inside it
+rm -rf "$BASE/shards" "$BASE/release" "$BASE/validation"
 mkdir -p "$BASE/shards/shard_0"
 
 $PY "$JRB_REPO_ROOT/benchmarks/JunoResBench/world_generator/shard/shard_generate.py" \
