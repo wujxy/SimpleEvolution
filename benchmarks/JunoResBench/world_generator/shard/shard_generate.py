@@ -17,6 +17,7 @@ Population stream ids match build_task spawn order:
 import argparse
 import json
 import os
+import shutil
 from pathlib import Path
 import sys
 import time
@@ -35,6 +36,32 @@ from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.sparse
 from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.truth import PARTICLE_CODE_TYPE
 from benchmarks.JunoResBench.world_generator.build_task import DEV_EVENTS, PUBLIC_METADATA, _metadata, select_layout
 from benchmarks.JunoResBench.world_generator.populations import calibration_population, physics_population
+
+def _finalized(destination):
+    """True only if the split's payload bytes match its declared index.
+
+    A crashed run can leave index.npz beside a truncated or empty
+    segment_samples.npy; treating that as finalized would publish a hole.
+    """
+    if not (destination / "index.npz").exists():
+        return False
+    try:
+        with np.load(destination / "index.npz", allow_pickle=False) as ix:
+            declared = int(ix["segment_sample_offsets"][-1])
+        samples = destination / "segment_samples.npy"
+        with samples.open("rb") as fh:
+            version = np.lib.format.read_magic(fh)
+            if version == (1, 0):
+                shape, _, _ = np.lib.format.read_array_header_1_0(fh)
+            elif version == (2, 0):
+                shape, _, _ = np.lib.format.read_array_header_2_0(fh)
+            else:
+                return False
+            start = fh.tell()
+        return samples.stat().st_size - start == declared * 2 and shape[0] == declared
+    except (OSError, ValueError, KeyError):
+        return False
+
 
 def _shard_slice(total, shard, shards):
     """Contiguous [lo, hi) covering `total` events across `shards` parts."""
@@ -151,10 +178,13 @@ def main():
             manifest["splits"][name] = [lo, hi, 0]
             continue
         destination = out / name
-        if (destination / "index.npz").exists():
+        if _finalized(destination):
             print(f"shard {args.shard} {name}: already finalized, skipping", flush=True)
             manifest["splits"][name] = [int(lo), int(hi), int(hi - lo)]
             continue
+        if destination.exists():
+            print(f"shard {args.shard} {name}: incomplete leftover, regenerating", flush=True)
+            shutil.rmtree(destination)
         _simulate_slice(population, simulator, layout, destination, lo, hi, noise_rng)
         manifest["splits"][name] = [int(lo), int(hi), int(hi - lo)]
         print(f"shard {args.shard}/{args.shards} {name}: events [{lo}:{hi}) -> {destination}", flush=True)
