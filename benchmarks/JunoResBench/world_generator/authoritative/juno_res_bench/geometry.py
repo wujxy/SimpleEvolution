@@ -7,6 +7,10 @@ Two layout modes:
     data/Detector/Geometry/PMTPos_CD_LPMT.csv (CopyNo X Y Z ... in mm).
 """
 
+# PEP 604 annotations on 3.9 workers (hep_sub pins system python)
+from __future__ import annotations
+
+
 from dataclasses import dataclass
 import hashlib
 from pathlib import Path
