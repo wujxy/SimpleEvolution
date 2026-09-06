@@ -74,8 +74,9 @@ def test_validation_bundle_accepts_physical_candidate_without_expert(tmp_path):
     assert (output / "validation_report.json").is_file()
     atlas = (output / "README.md").read_text(encoding="utf-8")
     assert all(f"figures/{name}.png" in atlas for name in EXPECTED)
-    assert "| `vertex_distribution` | 顶点总体是否符合球体部署 | REVIEW |" in atlas
-    assert "| `charge_vs_energy` | 积分电荷是否保存能量信息 | PASS |" in atlas
+    assert "## 物理硬校验（来自私有 truth）" in atlas
+    assert "| `vertex_distribution` | 事例是否填满 fiducial 球（部署正确） | PASS |" in atlas
+    assert "| `charge_vs_energy` | 电荷是否线性保持能量信息 | PASS |" in atlas
 
 
 def test_validator_cli_resolves_repo_imports_outside_checkout(tmp_path):

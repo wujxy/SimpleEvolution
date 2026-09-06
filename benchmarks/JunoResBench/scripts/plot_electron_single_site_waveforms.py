@@ -16,22 +16,15 @@ from matplotlib.colors import LogNorm  # noqa: E402
 import numpy as np  # noqa: E402
 
 
+# Core-flow checkpoints: each answers one physics question about the
+# generator. Evidence for the owner, not a mechanism showcase.
 FIGURE_NAMES = (
-    "vertex_distribution",
-    "energy_radius_coverage",
-    "radial_light_yield",
-    "hit_pattern_comparison",
-    "charge_pattern_comparison",
-    "hit_multiplicity_vs_energy",
-    "charge_vs_energy",
-    "event_anatomy",
-    "first_hit_time",
-    "time_vs_distance",
-    "tof_corrected_residual",
-    "timing_vs_radius",
-    "waveform_examples",
-    "waveform_overlays",
-    "pulse_integral_vs_peak",
+    "vertex_distribution",      # 事例是否填满 fiducial 球（部署正确性）
+    "energy_radius_coverage",   # 能量×半径覆盖（题库覆盖完整性）
+    "radial_light_yield",       # 光收集不均匀性（刻度必须吸收的效应）
+    "charge_vs_energy",         # 电荷线性响应（能量信息存在）
+    "first_hit_time",           # prompt/晚光结构（时间信息存在）
+    "time_vs_distance",         # 首光随距离推迟（光传播正确）
 )
 
 
@@ -287,6 +280,7 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
     sample_radius = radius[selected]
     sampled_probe = role[selected] == 0
     paths = {}
+    _ = median_time  # diagnostic only
 
     fig, axes = plt.subplots(1, 3, figsize=(13, 4))
     for ax, (a, b, xlabel, ylabel) in zip(axes, (
@@ -317,24 +311,6 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
            title="Radial light yield: geometry-driven nonuniformity must be calibratable")
     paths["radial_light_yield"] = _save(fig, output, "radial_light_yield")
 
-    fig = _pattern_figure(
-        (center, edge), positions, lambda item: np.ones(len(item.pmt_ids)),
-        "stored-hit PMT", "Hit pattern: edge event should be localized toward nearby PMTs",
-    )
-    paths["hit_pattern_comparison"] = _save(fig, output, "hit_pattern_comparison")
-
-    fig = _pattern_figure(
-        (center, edge), positions, lambda item: item.charge,
-        "pulse integral [ADC count]", "Charge pattern: off-center illumination should be asymmetric",
-    )
-    paths["charge_pattern_comparison"] = _save(fig, output, "charge_pattern_comparison")
-
-    fig, ax = plt.subplots(figsize=(7, 4.5))
-    ax.scatter(sample_energy, hit_count, c=sample_radius, s=30)
-    ax.set(xlabel="true energy [MeV]", ylabel="unique stored PMTs",
-           title="Hit multiplicity: occupancy should rise with energy and vary with radius")
-    paths["hit_multiplicity_vs_energy"] = _save(fig, output, "hit_multiplicity_vs_energy")
-
     fig, ax = plt.subplots(figsize=(7, 4.5))
     ax.scatter(sample_energy, total_charge, c=sample_radius, s=30, label="sampled events")
     if len(sample_energy) >= 2:
@@ -345,27 +321,6 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
            title="Charge response: near-linearity with position-dependent spread")
     ax.legend()
     paths["charge_vs_energy"] = _save(fig, output, "charge_vs_energy")
-
-    fig = plt.figure(figsize=(12, 8))
-    ax = fig.add_subplot(2, 2, 1, projection="mollweide")
-    edge_ids = edge.pmt_ids[edge.signal_mask]
-    edge_charge = edge.charge[edge.signal_mask]
-    lon, lat = _sky(positions[edge_ids])
-    sc = ax.scatter(lon, lat, c=edge_charge, s=5, cmap="viridis", norm=LogNorm())
-    fig.colorbar(sc, ax=ax, shrink=0.6, label="integral")
-    ax.set_title("charge sky map")
-    ax = fig.add_subplot(2, 2, 2)
-    ax.hist(edge.first_sample[edge.signal_mask], bins=50)
-    ax.set(xlabel="first stored pulse sample", ylabel="PMTs", title="first-hit timing")
-    ax = fig.add_subplot(2, 2, 3)
-    ax.scatter(edge_charge, edge.peak[edge.signal_mask], s=8)
-    ax.set(xlabel="integral", ylabel="peak", title="channel pulse shape")
-    ax = fig.add_subplot(2, 2, 4)
-    bright = int(edge_ids[np.argmax(edge_charge)])
-    ax.plot(_waveform(edge, bright), lw=0.8)
-    ax.set(xlabel="sample [ns]", ylabel="baseline - ADC", title=f"brightest PMT {bright}")
-    fig.suptitle(f"One-event anatomy: event {edge.index}, E={energy[edge.index]:.2f} MeV, r={radius[edge.index]:.2f} m")
-    paths["event_anatomy"] = _save(fig, output, "event_anatomy")
 
     all_first = np.concatenate([
         item.first_sample[item.signal_mask] for item in metrics if item.signal_mask.any()
@@ -406,55 +361,6 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
            title="Time-distance relation: longer optical paths should arrive later")
     paths["time_vs_distance"] = _save(fig, output, "time_vs_distance")
 
-    fig, ax = plt.subplots(figsize=(7, 4.5))
-    ax.hist(all_residual, bins=120, range=(-100, 250), log=True)
-    ax.axvline(0, color="k", ls="--")
-    ax.set(xlabel="per-event-centered t - 1.50 d/c [ns]", ylabel="PMTs",
-           title="TOF residual: prompt core plus scattering/re-emission tail")
-    paths["tof_corrected_residual"] = _save(fig, output, "tof_corrected_residual")
-
-    fig, ax = plt.subplots(figsize=(7, 4.5))
-    ax.scatter(sample_radius, median_time, c=sample_energy, s=30)
-    ax.set(xlabel="vertex radius [m]", ylabel="median first pulse sample [ns]",
-           title="Trigger-relative timing versus radius")
-    paths["timing_vs_radius"] = _save(fig, output, "timing_vs_radius")
-
-    channels = []
-    for item in metrics:
-        channels.extend(
-            (float(q), item, int(pmt))
-            for q, pmt in zip(item.charge[item.signal_mask], item.pmt_ids[item.signal_mask])
-        )
-    channels.sort(key=lambda row: row[0])
-    chosen_channels = [channels[int(fraction * (len(channels) - 1))] for fraction in (0.1, 0.5, 0.95)]
-    fig, axes = plt.subplots(3, 1, figsize=(9, 7), sharex=True)
-    for ax, (charge, item, pmt), label in zip(axes, chosen_channels, ("low", "median", "high")):
-        ax.plot(_waveform(item, pmt), lw=0.8)
-        ax.set_ylabel("baseline-ADC")
-        ax.set_title(f"{label} integral: event {item.index}, PMT {pmt}, Q={charge:.0f}")
-    axes[-1].set_xlabel("sample [ns]")
-    fig.suptitle("Representative stored waveforms: shaped negative ADC pulses shown positive")
-    paths["waveform_examples"] = _save(fig, output, "waveform_examples")
-
-    fig, ax = plt.subplots(figsize=(8, 4.8))
-    for charge, item, pmt in channels[::max(1, len(channels) // 24)][:24]:
-        wave = _waveform(item, pmt)
-        peak_at = int(np.argmax(wave))
-        lo, hi = max(0, peak_at - 30), min(len(wave), peak_at + 80)
-        segment = wave[lo:hi]
-        ax.plot(np.arange(len(segment)) - min(30, peak_at), segment / max(segment.max(), 1), alpha=0.3)
-    ax.set(xlabel="sample relative to pulse peak [ns]", ylabel="normalized amplitude",
-           title="Pulse-shape overlays: common shaping with noise/overlap variation")
-    paths["waveform_overlays"] = _save(fig, output, "waveform_overlays")
-
-    all_charge = np.concatenate([item.charge[item.signal_mask] for item in metrics])
-    all_peak = np.concatenate([item.peak[item.signal_mask] for item in metrics])
-    fig, ax = plt.subplots(figsize=(7, 4.5))
-    ax.scatter(all_peak, all_charge, s=3, alpha=0.2)
-    ax.set(xlabel="peak amplitude [ADC count]", ylabel="pulse integral [ADC count]",
-           title="Integral versus peak: linear core; pile-up broadens high charge")
-    paths["pulse_integral_vs_peak"] = _save(fig, output, "pulse_integral_vs_peak")
-
     dense_complete = [
         len(item.event.segment_pmt_ids) == int(reader.metadata["n_pmt"])
         and bool(np.all(np.diff(item.event.segment_sample_offsets) == item.event.n_samples))
@@ -467,24 +373,16 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
             ReleaseWaveforms(release_root / "public/calibration")
         ),
         "events_scanned": len(metrics),
-        "selected_event_indices": selected.tolist(),
-        "center_event": center.index,
-        "edge_event": edge.index,
-        "waveform_samples_total": int(len(reader.samples)),
-        "waveform_samples_read": int(sum(item.event.samples.size for item in metrics)),
         "dense_channel_completeness": float(np.mean(dense_complete)),
         "charge_energy_correlation": float(np.corrcoef(
             sample_energy[sampled_probe], total_charge[sampled_probe]
         )[0, 1]),
         "time_distance_slope_ns_per_m": time_distance_slope,
         "mean_hit_pmts": float(hit_count.mean()),
-        "mean_stored_pmts": float(np.mean([len(item.pmt_ids) for item in metrics])),
         "mean_integral_per_mev": float(np.mean(
             total_charge[sampled_probe] / sample_energy[sampled_probe]
         )),
-        "median_first_sample_ns": float(np.nanmedian(median_time)),
         "pulse_selection_threshold_source": "per-event 5-sigma MAD of stored residuals",
-        "tof_residual_core_sigma_ns": float(np.std(all_residual[np.abs(all_residual) < 50])),
         "note": "Waveforms are trigger-relative; t0 cannot be recovered from release truth without stored trigger time.",
     }
     (output / "summary.json").write_text(

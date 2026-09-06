@@ -14,18 +14,9 @@ EXPECTED = {
     "vertex_distribution",
     "energy_radius_coverage",
     "radial_light_yield",
-    "hit_pattern_comparison",
-    "charge_pattern_comparison",
-    "hit_multiplicity_vs_energy",
     "charge_vs_energy",
-    "event_anatomy",
     "first_hit_time",
     "time_vs_distance",
-    "tof_corrected_residual",
-    "timing_vs_radius",
-    "waveform_examples",
-    "waveform_overlays",
-    "pulse_integral_vs_peak",
 }
 
 N_PMT = 12

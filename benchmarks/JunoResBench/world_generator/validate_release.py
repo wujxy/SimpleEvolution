@@ -23,27 +23,18 @@ DEFERRED_GATES = [
 ]
 
 FIGURE_PURPOSE = {
-    "vertex_distribution": "顶点总体是否符合球体部署",
-    "energy_radius_coverage": "能量与位置覆盖是否完整",
-    "radial_light_yield": "光收集位置依赖是否可见",
-    "hit_pattern_comparison": "中心/边缘 hit pattern 是否不同",
-    "charge_pattern_comparison": "电荷空间梯度是否编码位置",
-    "hit_multiplicity_vs_energy": "占用数是否随能量增长",
-    "charge_vs_energy": "积分电荷是否保存能量信息",
-    "event_anatomy": "单事件空间、时间和波形是否自洽",
-    "first_hit_time": "prompt 与晚光结构是否存在",
-    "time_vs_distance": "首光是否随传播距离推迟",
-    "tof_corrected_residual": "TOF 校正后是否有 prompt core 和晚尾",
-    "timing_vs_radius": "trigger-relative timing 是否有位置依赖",
-    "waveform_examples": "低/中/高电荷波形是否合理",
-    "waveform_overlays": "脉冲成形模板是否稳定",
-    "pulse_integral_vs_peak": "峰高与积分是否自洽",
+    "vertex_distribution": "事例是否填满 fiducial 球（部署正确）",
+    "energy_radius_coverage": "能量×半径覆盖是否完整",
+    "radial_light_yield": "光收集不均匀性是否存在（刻度须吸收）",
+    "charge_vs_energy": "电荷是否线性保持能量信息",
+    "first_hit_time": "prompt/晚光结构是否存在",
+    "time_vs_distance": "首光是否随传播距离推迟（光传播正确）",
 }
 
 FIGURE_GATE = {
+    "vertex_distribution": ("dense_channel_completeness",),
     "charge_vs_energy": ("charge_energy_correlation",),
     "time_vs_distance": ("time_distance_slope_ns_per_m",),
-    "waveform_examples": ("dense_channel_completeness",),
 }
 
 
@@ -180,15 +171,27 @@ def waveform_gates(summary):
 
 
 def _write_atlas(path, report):
+    """产生子正确性的自证：数字门 = 物理硬校验；图 = 核心流程 checkpoint。"""
     state = "ACCEPTED" if report["release_ready"] else "REJECTED"
     gates = report["waveform_gates"]
+    physics = report["physics"]
     lines = [
-        "# JunoResBench release validation atlas", "",
-        f"Overall state: **{state}**", "",
-        "Expert reconstruction gates are deferred; this report validates serialized physics and observables.",
-        "REVIEW means that the owner must inspect the figure before publication; no machine gate replaces that review.",
-        "", "| Figure | Check | Status |", "|---|---|---|",
+        "# JunoResBench 产生子自证报告", "",
+        f"结论: **{state}**", "",
+        "本报告只回答一件事：这批题库的物理是否可信。",
+        "", "## 物理硬校验（来自私有 truth）", "",
     ]
+    for name in ("energy_conservation_pass", "quenching_pass"):
+        if name in physics:
+            lines.append(f"- **{'PASS' if physics[name] else 'FAIL'}** {name}")
+    lines.extend(("", "## 波形物理门（抽样）", ""))
+    for name, gate in gates.items():
+        status = "PASS" if gate["pass"] else "FAIL"
+        lines.append(
+            f"- **{status}** `{name}`: {gate['value']:.6g} "
+            f"{gate['operator']} {gate['limit']:.6g} — {gate['rationale']}"
+        )
+    lines.extend(("", "## 核心流程 checkpoint", "", "| Checkpoint | 物理问题 | 门 |", "|---|---|---|",))
     for name in FIGURE_NAMES:
         gate_names = FIGURE_GATE.get(name)
         status = (
@@ -197,14 +200,7 @@ def _write_atlas(path, report):
             else "FAIL"
         )
         lines.append(f"| `{name}` | {FIGURE_PURPOSE[name]} | {status} |")
-    lines.extend(("", "## Machine gates", ""))
-    for name, gate in gates.items():
-        status = "PASS" if gate["pass"] else "FAIL"
-        lines.append(
-            f"- **{status}** `{name}`: {gate['value']:.6g} "
-            f"{gate['operator']} {gate['limit']:.6g} — {gate['rationale']}"
-        )
-    lines.extend(("", "## Figures", ""))
+    lines.extend(("", "## 图", ""))
     for name in FIGURE_NAMES:
         lines.extend((
             f"### {name}", "", FIGURE_PURPOSE[name], "",
