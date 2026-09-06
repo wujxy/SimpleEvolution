@@ -222,11 +222,12 @@ def validate_release(task_name, release_root, output_root, sample_limit=32):
     hygiene = hygiene_report(release / "public", release / "private")
     if not hygiene["pass"]:
         failures.append("dataset_contains_executable")
-    structures = {
-        "public_calibration": sparse_structure_report(release / "public/calibration"),
-        "public_dev": sparse_structure_report(release / "public/dev"),
-        "private_final": sparse_structure_report(release / "private/final"),
-    }
+    manifest = json.loads((release / "public/MANIFEST.json").read_text())
+    structures = {}
+    for name, population in manifest.items():
+        for entry in population["shards"]:
+            key = f"{name}_{entry['shard']}"
+            structures[key] = sparse_structure_report(Path(entry["index"]).parent)
     failures.extend(
         f"invalid_structure_{name}"
         for name, result in structures.items() if not result["pass"]

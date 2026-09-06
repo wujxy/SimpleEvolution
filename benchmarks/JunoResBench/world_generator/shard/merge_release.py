@@ -213,6 +213,145 @@ def merge_split(shard_roots, name, merged_dir, prune=False, truth_out=None):
     return {k: np.concatenate(b) for k, b in truth_small.items()}
 
 
+def publish_shards(shard_roots, out, args, populations, config, layout):
+    """Zero-copy publication: waveform shards stay exactly where they are.
+
+    Writes only the small bookkeeping into `out`: concatenated private truth,
+    calibration labels, evaluation_config, oracle record, and per-population
+    manifests (ordered shard entries with sha256 of every waveform payload,
+    which doubles as the byte-completeness check).
+    """
+    import hashlib
+
+    public = out / "public"
+    private = out / "private"
+    populations = {
+        "calibration": populations["calibration"],
+        "dev": populations["dev"],
+        "final": populations["final"],
+    }
+    manifest = {}
+    for name, population in populations.items():
+        entries = []
+        truths = []
+        for root in shard_roots:
+            src = root / name
+            index_path = src / "index.npz"
+            if not index_path.exists():
+                continue
+            with np.load(index_path, allow_pickle=False) as ix:
+                events = int(len(ix["event_segment_offsets"]) - 1)
+                declared = int(ix["segment_sample_offsets"][-1])
+            payload = src / "segment_samples.npy"
+            digest = hashlib.sha256()
+            payload_bytes = 0
+            with payload.open("rb") as fh:
+                version = np.lib.format.read_magic(fh)
+                if version == (1, 0):
+                    shape, _, _ = np.lib.format.read_array_header_1_0(fh)
+                elif version == (2, 0):
+                    shape, _, _ = np.lib.format.read_array_header_2_0(fh)
+                else:
+                    raise IOError(f"unsupported npy version {version}")
+                data_start = fh.tell()
+                for block in iter(lambda: fh.read(1 << 24), b""):
+                    digest.update(block)
+                    payload_bytes += len(block)
+            expected_bytes = shape[0] * 2
+            if payload_bytes != expected_bytes or shape[0] != declared:
+                raise IOError(
+                    f"{src}: payload holds {payload_bytes} bytes, npy header "
+                    f"declares {expected_bytes}, index declares {declared * 2}"
+                    " — regenerate this shard")
+            shard_truth = src / "truth.npz"
+            if shard_truth.exists():
+                with np.load(shard_truth, allow_pickle=False) as data:
+                    truths.append({k: data[k] for k in data.files})
+            entries.append({
+                "shard": root.name,
+                "index": str(index_path.resolve()),
+                "samples": str(payload.resolve()),
+                "truth": str(shard_truth.resolve()),
+                "events": events,
+                "declared_samples": declared,
+                "sha256": digest.hexdigest(),
+            })
+        total = sum(e["events"] for e in entries)
+        expected = len(population["evt_e_true"])
+        assert total == expected, f"{name}: shards hold {total}/{expected} events"
+        manifest[name] = {"n_events": expected, "shards": entries}
+
+    # final truth: concatenated in shard order (small per-event arrays only)
+    final_truth = {}
+    step_blocks = []
+    step_base = 0
+    for block in manifest["final"]["shards"]:
+        with np.load(block["truth"], allow_pickle=False) as data:
+            for key in data.files:
+                arr = data[key]
+                if key == "step_offsets":  # per-shard offsets restart at 0
+                    step_blocks.append(arr[:-1] + step_base)
+                    step_base += int(arr[-1])
+                    continue
+                final_truth.setdefault(key, []).append(arr)
+    # drop each shard's terminal boundary while concatenating, then close the
+    # stream with one final boundary so len(step_offsets) == n_events + 1
+    final_truth["step_offsets"] = [np.concatenate(
+        step_blocks + [np.array([step_base], dtype=step_blocks[0].dtype)])]
+    np.savez_compressed(
+        private / "truth.npz",
+        **{k: np.concatenate(v) for k, v in final_truth.items()},
+    )
+    (public / "calibration").mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        public / "calibration" / "labels.npz",
+        source_energy_mev=populations["calibration"]["evt_e_true"],
+        deployment_position_m=populations["calibration"]["evt_vertex_m"],
+    )
+
+    evaluation = {
+        "energy_target_r_1mev": 0.03,
+        "energy_resolution_gate": ENERGY_RESOLUTION_GATE,
+        "energy_bias_1mev_abs_max": ENERGY_BIAS_1MEV_MAX,
+        "energy_bias_abs_max": ENERGY_BIAS_MAX,
+        "vertex_radial_bias_abs_max_m": VERTEX_RADIAL_BIAS_MAX_M,
+        "vertex_high_energy_rms_ratio_max": VERTEX_HIGH_ENERGY_RMS_RATIO_MAX,
+    }
+    if args.task == "electron_single_site":
+        final = populations["final"]
+        vertices = final["evt_vertex_m"][(final["evt_sample_role"] == 0) & (final["evt_e_true"] == 1.0)]
+        oracle_rms = charge_pattern_vertex_rms(vertices, layout, config)
+        reference = freeze_threshold(oracle_rms)
+        gate = freeze_gate(oracle_rms)
+        (private / "electron_oracle.json").write_text(
+            json.dumps({"method": "ideal_charge_pattern_fisher",
+                        "oracle_vertex_rms_m": oracle_rms,
+                        "vertex_rms_reference_m": reference,
+                        "vertex_resolution_gate_m": gate}, indent=2) + "\n",
+            encoding="utf-8")
+        evaluation["vertex_rms_reference_m"] = reference
+        evaluation["vertex_resolution_gate_m"] = gate
+    (public / "evaluation_config.json").write_text(
+        json.dumps(evaluation, indent=2) + "\n", encoding="utf-8")
+    (public / "MANIFEST.json").write_text(
+        json.dumps(manifest, indent=1) + "\n", encoding="utf-8")
+    (private / "final_shards.json").write_text(
+        json.dumps(manifest["final"], indent=1) + "\n", encoding="utf-8")
+
+    # symlink the in-place shards into one release tree: readers may either
+    # follow MANIFEST paths or walk <root>/<population>/shard_*/ directly
+    roots = {"calibration": public / "calibration",
+             "dev": public / "dev",
+             "final": private / "final"}
+    for name, population in manifest.items():
+        link_root = roots[name]
+        link_root.mkdir(parents=True, exist_ok=True)
+        for e in population["shards"]:
+            (link_root / e["shard"]).symlink_to(
+                Path(e["samples"]).parent, target_is_directory=True)
+    print(f"published {len(shard_roots)} shards in place -> {out}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", choices=("electron_single_site", "ibd_positron_multisite"), required=True)
@@ -231,6 +370,9 @@ def main():
     parser.add_argument("--prune-shards", action="store_true",
                         help="delete each shard's population dir right after merging it "
                              "(disk-budget mode: merged release + shards never coexist in full)")
+    parser.add_argument("--publish-shards", action="store_true",
+                        help="zero-copy publication: keep waveform shards in place, write "
+                             "only truth/labels/config/oracle/manifests into --out")
     args = parser.parse_args()
 
     out = Path(args.out)
@@ -266,6 +408,19 @@ def main():
     layout = select_layout(
         args.geometry_mode, args.n_pmt, JUNO_LPMT_CSV, JUNO_LPMT_TYPE_CSV
     )
+
+    if args.publish_shards:
+        np.savez_compressed(
+            public / "detector_geometry.npz",
+            pmt_positions_m=layout.positions_m,
+            pmt_copy_no=layout.copy_no,
+            pmt_model=layout.pmt_model,
+        )
+        publish_shards(shard_roots, out, args,
+                       {"calibration": calibration, "dev": dev, "final": final},
+                       config, layout)
+        return
+
     np.savez_compressed(
         public / "detector_geometry.npz",
         pmt_positions_m=layout.positions_m,

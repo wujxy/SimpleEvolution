@@ -79,9 +79,9 @@ def run_online(submission, private_root, public_root):
     process = subprocess.Popen(_command(submission, evaluator, Path(public_root)), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, env={"HOME": "/tmp", "PATH": "/usr/bin:/bin", "PYTHONPATH": "/task", "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"}, preexec_fn=_limits)
     try:
         _message(process.stdout, deadline)
-        split = SparseSplit(Path(private_root) / "final")
-        output = np.empty((len(split), 4), dtype=float)
-        for index, event in enumerate(split.iter_events()):
+        output = np.empty((sum(e["events"] for e in _final_shards(private_root)), 4), dtype=float)
+        index = 0
+        for event in _iter_final(private_root):
             payload = pickle.dumps(event, protocol=5)
             process.stdin.write(struct.pack("!Q", len(payload)) + payload)
             process.stdin.flush()
@@ -89,6 +89,7 @@ def run_online(submission, private_root, public_root):
             if len(response) != 32:
                 raise RuntimeError("submission worker returned malformed prediction")
             output[index] = struct.unpack("!dddd", response)
+            index += 1
         process.stdin.write(struct.pack("!Q", 0))
         process.stdin.close()
         process.wait(timeout=max(0.01, deadline - time.monotonic()))
@@ -100,6 +101,18 @@ def run_online(submission, private_root, public_root):
             except ProcessLookupError:
                 pass
         stderr.close()
+
+
+def _final_shards(private_root):
+    """Ordered final-shard manifest published alongside the private truth."""
+    manifest = json.loads((Path(private_root) / "final_shards.json").read_text())
+    return manifest["shards"]
+
+
+def _iter_final(private_root):
+    for entry in _final_shards(private_root):
+        split = SparseSplit(Path(entry["index"]).parent)
+        yield from split.iter_events()
 
 
 def score_predictions(truth, prediction, config):

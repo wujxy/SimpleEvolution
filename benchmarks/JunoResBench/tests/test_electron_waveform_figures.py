@@ -6,6 +6,7 @@ import numpy as np
 from benchmarks.JunoResBench.scripts.plot_electron_single_site_waveforms import (
     FIGURE_NAMES,
     ReleaseWaveforms,
+    ShardWaveforms,
     build_waveform_figures,
 )
 
@@ -31,7 +32,7 @@ positions_fixture = np.column_stack((
 positions_fixture *= 19.0 / np.linalg.norm(positions_fixture, axis=1)[:, None]
 
 
-def _write_dense_split(split: Path, energies, vertices, rng_seed=100):
+def _write_dense_split(split: Path, energies, vertices, truth=None, rng_seed=100):
     split.mkdir(parents=True)
     n_event = len(energies)
     event_offsets = [0]
@@ -70,9 +71,19 @@ def _write_dense_split(split: Path, energies, vertices, rng_seed=100):
         "pre_samples": 0,
         "post_samples": 0,
     }))
+    if truth is not None:
+        np.savez(split / "truth.npz", **truth)
 
 
 def _synthetic_release(root: Path):
+    """Two in-place shards per population, bound by publish_shards."""
+    from types import SimpleNamespace
+
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.config import DetectorConfig
+    from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import PMTLayout
+    from benchmarks.JunoResBench.world_generator.shard.merge_release import publish_shards
+
+    calib_energies = np.asarray([0.511, 1.022, 2.223, 4.44])
     final_energies = np.asarray([1.0, 2.0, 5.0, 5.0, 7.0, 1.2, 4.4, 9.5])
     final_roles = np.asarray([0, 0, 0, 0, 0, 1, 1, 1], dtype=np.int8)
     final_vertices = np.zeros((len(final_energies), 3))
@@ -82,35 +93,89 @@ def _synthetic_release(root: Path):
     dev_energies = np.asarray([1.5, 3.3, 6.0, 8.2])
     dev_vertices = np.zeros((len(dev_energies), 3))
     dev_vertices[:, 0] = np.linspace(2.0, 12.0, len(dev_energies))
-    n_event = len(final_energies)
 
-    (root / "public").mkdir(parents=True)
-    (root / "private").mkdir()
+    shards_root = root / "shards"
+    release = root
+    (release / "public").mkdir(parents=True)
+    (release / "private").mkdir(parents=True)
     np.savez(
-        root / "public/detector_geometry.npz", pmt_positions_m=positions_fixture
+        release / "public/detector_geometry.npz",
+        pmt_positions_m=positions_fixture,
     )
 
-    _write_dense_split(
-        root / "public/calibration", np.asarray([0.511, 1.022]), np.zeros((2, 3))
-    )
-    _write_dense_split(root / "public/dev", dev_energies, dev_vertices)
-    _write_dense_split(root / "private/final", final_energies, final_vertices)
-    np.savez(
-        root / "private/truth.npz",
-        evt_e_true=final_energies,
-        evt_vertex_m=final_vertices,
-        evt_sample_role=final_roles,
-        evt_t0_ns=np.linspace(-10, 10, n_event),
-        evt_e_escape_mev=np.zeros(n_event),
-        evt_total_energy=final_energies,
-        step_offsets=np.arange(0, 2 * n_event + 1, 2, dtype=np.int64),
-        step_e_dep_mev=np.column_stack((
-            np.full(n_event, 0.05), final_energies - 0.05
-        )).ravel(),
-        step_e_vis_mev=np.column_stack((
-            np.full(n_event, 0.05), final_energies - 0.05
-        )).ravel() * np.tile([0.80, 0.98], n_event),
-        step_kinetic_mev=np.tile([0.02, 1.0], n_event),
+    halves = {}
+    for shard in (0, 1):
+        lo, hi = shard * 2, shard * 2 + 2
+        flo, fhi = shard * 4, shard * 4 + 4
+        calib_dir = shards_root / f"shard_{shard:03d}" / "calibration"
+        dev_dir = shards_root / f"shard_{shard:03d}" / "dev"
+        final_dir = shards_root / f"shard_{shard:03d}" / "final"
+        _write_dense_split(
+            calib_dir, calib_energies[lo:hi], np.zeros((2, 3))
+        )
+        _write_dense_split(dev_dir, dev_energies[lo:hi], dev_vertices[lo:hi])
+        _write_dense_split(
+            final_dir, final_energies[flo:fhi], final_vertices[flo:fhi]
+        )
+        halves[shard] = (calib_energies[lo:hi], dev_energies[lo:hi],
+                         final_energies[flo:fhi], final_vertices[flo:fhi],
+                         final_roles[flo:fhi])
+
+    populations = {}
+    for name, source in (
+        ("calibration", calib_energies), ("dev", dev_energies),
+        ("final", final_energies),
+    ):
+        populations[name] = {"evt_e_true": source}
+
+    def _truth(shard):
+        calib_e, dev_e, final_e, final_v, final_r = halves[shard]
+        n = len(final_e)
+        return (
+            {"evt_e_true": calib_e, "evt_vertex_m": np.zeros((len(calib_e), 3))},
+            {"evt_e_true": dev_e, "evt_vertex_m": dev_vertices[shard * 2:shard * 2 + 2]},
+            {
+                "evt_e_true": final_e,
+                "evt_vertex_m": final_v,
+                "evt_sample_role": final_r,
+                "evt_t0_ns": np.linspace(-10, 10, n),
+                "evt_e_escape_mev": np.zeros(n),
+                "evt_total_energy": final_e,
+                "step_offsets": np.arange(0, 2 * n + 1, 2, dtype=np.int64),
+                "step_e_dep_mev": np.column_stack((
+                    np.full(n, 0.05), final_e - 0.05)).ravel(),
+                "step_e_vis_mev": np.column_stack((
+                    np.full(n, 0.05), final_e - 0.05)).ravel()
+                    * np.tile([0.80, 0.98], n),
+                "step_kinetic_mev": np.tile([0.02, 1.0], n),
+            },
+        )
+
+    for shard in (0, 1):
+        calib_truth, _dev_truth, final_truth = _truth(shard)
+        base = shards_root / f"shard_{shard:03d}"
+        np.savez(base / "calibration" / "truth.npz", **calib_truth)
+        np.savez(base / "final" / "truth.npz", **final_truth)
+
+    layout = PMTLayout.uniform(N_PMT, DetectorConfig().detector_radius_m)
+    publish_shards(
+        [shards_root / f"shard_{s:03d}" for s in (0, 1)],
+        release, SimpleNamespace(task="electron_single_site"),
+        {
+            "calibration": {
+                "evt_e_true": calib_energies,
+                "evt_vertex_m": np.zeros((len(calib_energies), 3)),
+            },
+            "dev": {"evt_e_true": dev_energies,
+                    "evt_vertex_m": dev_vertices},
+            "final": {
+                "evt_e_true": final_energies,
+                "evt_vertex_m": final_vertices,
+                "evt_sample_role": final_roles,
+            },
+        },
+        DetectorConfig(optics_mode="trace"),
+        layout,
     )
 
 
@@ -118,18 +183,21 @@ def test_builds_bounded_waveform_audit(tmp_path):
     release = tmp_path / "release"
     _synthetic_release(release)
 
-    reader = ReleaseWaveforms(release / "private/final")
+    reader = ShardWaveforms(release / "private/final_shards.json")
     event = reader.read_event(3)
-    assert isinstance(reader.samples, np.memmap)
+    assert all(isinstance(r.samples, np.memmap) for r in reader.readers)
 
     paths = build_waveform_figures(release, tmp_path / "figures", sample_limit=8)
+    from benchmarks.JunoResBench.scripts.plot_electron_single_site_waveforms import (
+        ShardWaveforms as _SW,
+    )
 
     assert set(FIGURE_NAMES) == EXPECTED
     assert set(paths) == EXPECTED
     assert all(path.is_file() and path.stat().st_size > 0 for path in paths.values())
     summary = json.loads((tmp_path / "figures/summary.json").read_text())
     assert summary["events_scanned"] <= 8
-    assert summary["events_total_dense_calibration"] == 2
+    assert summary["events_total_dense_calibration"] == 4
     assert summary["dense_channel_completeness"] == 1.0
     assert np.isfinite(summary["charge_energy_correlation"])
     assert np.isfinite(summary["time_distance_slope_ns_per_m"])
@@ -164,14 +232,14 @@ def test_dense_split_rejects_duplicate_channels(tmp_path):
 def test_rejects_invalid_sparse_offsets(tmp_path):
     release = tmp_path / "release"
     _synthetic_release(release)
-    index_path = release / "private/final/index.npz"
+    index_path = release / "shards/shard_001/final/index.npz"
     with np.load(index_path) as index:
         arrays = {name: index[name] for name in index.files}
     arrays["segment_sample_offsets"][-1] += 10_000
     np.savez(index_path, **arrays)
 
     try:
-        ReleaseWaveforms(release / "private/final")
+        ShardWaveforms(release / "private/final_shards.json")
     except ValueError as error:
         assert "sample offsets" in str(error)
     else:

@@ -108,6 +108,39 @@ class ReleaseWaveforms:
         )
 
 
+class ShardWaveforms:
+    """Event reader over an ordered shard manifest.
+
+    Accepts either a bare shard list or a population-keyed manifest; exposes
+    the ReleaseWaveforms interface with a global event index across all
+    shards in published order.
+    """
+
+    def __init__(self, manifest_path: Path, key: str = "final"):
+        manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        entries = manifest["shards"] if "shards" in manifest else manifest[key]["shards"]
+        self.readers = [ReleaseWaveforms(Path(e["index"]).parent) for e in entries]
+        self._counts = [len(r) for r in self.readers]
+        self.metadata = dict(self.readers[0].metadata)
+        self.metadata["n_events"] = sum(self._counts)
+
+    def __len__(self):
+        return sum(self._counts)
+
+    def _locate(self, index: int):
+        if index < 0 or index >= len(self):
+            raise IndexError(index)
+        for reader, count in zip(self.readers, self._counts):
+            if index < count:
+                return reader, index
+            index -= count
+        raise IndexError(index)
+
+    def read_event(self, index: int) -> EventWaveforms:
+        reader, local = self._locate(index)
+        return reader.read_event(local)
+
+
 def _load_npz(path: Path):
     with np.load(path, allow_pickle=False) as data:
         return {name: data[name] for name in data.files}
@@ -250,7 +283,7 @@ def _pattern_figure(metrics, positions, values, label, title):
 def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32):
     release_root, output = Path(release_root), Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    reader = ReleaseWaveforms(release_root / "private/final")
+    reader = ShardWaveforms(release_root / "private/final_shards.json")
     truth = _load_npz(release_root / "private/truth.npz")
     geometry = _load_npz(release_root / "public/detector_geometry.npz")
     positions = np.asarray(geometry["pmt_positions_m"], float)
@@ -370,7 +403,7 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
         "events_total": len(reader),
         "events_total_dense_final": len(reader),
         "events_total_dense_calibration": len(
-            ReleaseWaveforms(release_root / "public/calibration")
+            ShardWaveforms(release_root / "public/MANIFEST.json", key="calibration")
         ),
         "events_scanned": len(metrics),
         "dense_channel_completeness": float(np.mean(dense_complete)),

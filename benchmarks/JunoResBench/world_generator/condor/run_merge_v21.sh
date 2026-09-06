@@ -39,15 +39,16 @@ while [ "$i" -lt "$SHARDS" ]; do
 done
 
 rm -rf "$RELEASE" "$VALIDATION"
+# publish mode: shards stay in place on scratchfs2/junofs, symlinked into
+# the release tree; only truth/labels/config/manifests are written
 $PY "$JRB_REPO_ROOT/benchmarks/JunoResBench/world_generator/shard/merge_release.py" \
   --task "$TASK" --seed "$SEED" --geometry-mode juno \
   --calibration-events-per-point 20 \
   --probe-events-per-point 200 --controls 7680 \
-  --shards-root "$SCRATCH_BASE/merge_view" --out "$RELEASE"
-# calibration+final+dev (~423 GiB) all on lustrefs: pipeline source was
-# migrated to junofs + symlinked, freeing the 99 GiB this needs
-# shards (~420 GiB across scratchfs2 + junofs) are cleaned by hand after the
-# release is ACCEPTED and copied to its final homes
+  --shards-root "$SCRATCH_BASE/merge_view" --out "$RELEASE" --publish-shards
+# publish mode bookkeeping (~100 MB) lands on lustrefs; the ~420 GiB of
+# waveform shards stay in place on scratchfs2 + junofs, symlinked into the
+# release tree, and are cleaned only after the bank is superseded
 
 $PY "$JRB_REPO_ROOT/benchmarks/JunoResBench/world_generator/validate_release.py" \
   --task "$TASK" --release "$RELEASE" --output "$VALIDATION"
