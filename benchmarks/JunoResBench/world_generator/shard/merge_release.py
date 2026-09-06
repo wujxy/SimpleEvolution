@@ -107,13 +107,14 @@ def merge_split(shard_roots, name, merged_dir, prune=False, truth_out=None):
         meta = meta or json.loads((src / "metadata.json").read_text())
 
     merged_dir.mkdir(parents=True, exist_ok=True)
-    staged_samples = merged_dir / ".samples.tmp"
+    samples_target = (merged_dir / "segment_samples.npy").open("wb")
+    np.lib.format.write_array_header_2_0(samples_target, {
+        "descr": "<i2", "fortran_order": False, "shape": (n_samples,)})
     raw_files = {k: (merged_dir / f".{k}.tmp").open("wb")
                  for k, _ in INDEX_KEYS}
     for k in step_keys:
         raw_files[k] = (merged_dir / f".{k}.tmp").open("wb")
     truth_small = {}   # per-event truth keys, small enough for RAM
-    raw = staged_samples.open("wb")
     for key in ("event_segment_offsets", "segment_sample_offsets", "step_offsets"):
         raw_files[key].write(np.zeros(1, "<i8").tobytes())
     seg_base = samp_base = step_base = 0
@@ -133,7 +134,8 @@ def merge_split(shard_roots, name, merged_dir, prune=False, truth_out=None):
             raw_files["segment_pmt_ids"].write(ids.astype("<i4").tobytes())
             raw_files["segment_start_samples"].write(starts.astype("<i2").tobytes())
         with open(src / "segment_samples.npy", "rb") as fh:
-            # verify byte-completeness, then stream the payload
+            # verify byte-completeness, then append straight into the
+            # merged npy — no staged copy, so peak disk is one payload
             version = np.lib.format.read_magic(fh)
             if version == (1, 0):
                 shape, _, _ = np.lib.format.read_array_header_1_0(fh)
@@ -145,11 +147,13 @@ def merge_split(shard_roots, name, merged_dir, prune=False, truth_out=None):
             expected = shape[0] * np.dtype("<i2").itemsize
             actual = (src / "segment_samples.npy").stat().st_size - data_start
             if actual != expected or shape[0] != int(s_off[-1] - s_off[0]):
+                samples_target.close()
+                (merged_dir / "segment_samples.npy").unlink()
                 raise IOError(
                     f"truncated shard {root.name}/{name}: file holds {actual} "
                     f"sample bytes, header declares {expected}, index declares "
                     f"{int(s_off[-1] - s_off[0]) * 2} — regenerate this shard")
-            shutil.copyfileobj(fh, raw, length=1 << 24)
+            shutil.copyfileobj(fh, samples_target, length=1 << 24)
         with np.load(src / "truth.npz", allow_pickle=False) as t:
             for key in t.files:
                 if key.startswith("step_"):
@@ -166,22 +170,11 @@ def merge_split(shard_roots, name, merged_dir, prune=False, truth_out=None):
         samp_base += int(s_off[-1])
         if prune:
             shutil.rmtree(src)
-    raw.close()
+    samples_target.close()
     for fh in raw_files.values():
         fh.close()
 
-    if staged_samples.stat().st_size != n_samples * 2:
-        raise IOError(f"{name}: staged {staged_samples.stat().st_size} sample "
-                      f"bytes, shards declared {n_samples * 2}")
-
     # ---- assemble the split ----
-    total = n_samples
-    with (merged_dir / "segment_samples.npy").open("wb") as target:
-        np.lib.format.write_array_header_2_0(target, {
-            "descr": "<i2", "fortran_order": False, "shape": (total,)})
-        with staged_samples.open("rb") as src:
-            shutil.copyfileobj(src, target, length=1 << 24)
-    staged_samples.unlink()
     shapes = {"event_segment_offsets": (n_events + 1,),
               "segment_sample_offsets": (n_segments + 1,),
               "segment_pmt_ids": (n_segments,),
