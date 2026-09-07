@@ -81,7 +81,7 @@ def _synthetic_release(root: Path):
 
     from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.config import DetectorConfig
     from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import PMTLayout
-    from benchmarks.JunoResBench.world_generator.shard.merge_release import publish_shards
+    from benchmarks.JunoResBench.world_generator.shard.publish_release import publish_shards
 
     calib_energies = np.asarray([0.511, 1.022, 2.223, 4.44])
     final_energies = np.asarray([1.0, 2.0, 5.0, 5.0, 7.0, 1.2, 4.4, 9.5])

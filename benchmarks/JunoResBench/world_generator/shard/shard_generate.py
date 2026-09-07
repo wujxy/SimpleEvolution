@@ -6,8 +6,8 @@ seeds as build_task.build: populations are pure numpy draws, cheap), takes
 a contiguous slice of events for each population, and simulates only its
 slice with per-event RNG streams (detector.generate(..., event_index=i,
 stream=k)). Waveforms stream to disk exactly as in build_task; per-shard
-truth is small. merge_release.py later concatenates shards in order into
-the release public/private trees — identical populations, same detector,
+truth is small. publish_release.py later binds the shards in order into
+the release trees (zero copy) — identical populations, same detector,
 events statistically independent and order-free.
 
 Population stream ids match build_task spawn order:

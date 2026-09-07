@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Merge the v2.1 electron shards into the release tree and validate.
+# Publish the v2.1 electron shard bank in place and run acceptance:
+# sha256 gate, bookkeeping (truth/labels/config/manifest), symlink tree,
+# then validate_release. Zero waveform copies — shards ARE the release.
 # Run AFTER every shard has finished (240 shard_manifest.json files).
 #   usage: run_merge_v21.sh
 set -euo pipefail
@@ -41,7 +43,7 @@ done
 rm -rf "$RELEASE" "$VALIDATION"
 # publish mode: shards stay in place on scratchfs2/junofs, symlinked into
 # the release tree; only truth/labels/config/manifests are written
-$PY "$JRB_REPO_ROOT/benchmarks/JunoResBench/world_generator/shard/merge_release.py" \
+$PY "$JRB_REPO_ROOT/benchmarks/JunoResBench/world_generator/shard/publish_release.py" \
   --task "$TASK" --seed "$SEED" --geometry-mode juno \
   --calibration-events-per-point 20 \
   --probe-events-per-point 200 --controls 7680 \

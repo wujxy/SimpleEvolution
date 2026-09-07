@@ -10,8 +10,8 @@ while true; do
   [ "$c" -ge "$n" ] && break
   sleep 120
 done
-echo "$(date +%H:%M) ALL SHARDS DONE — merging"
-"$JRB_REPO_ROOT/benchmarks/JunoResBench/world_generator/condor/run_merge_v21.sh"
+echo "$(date +%H:%M) ALL SHARDS DONE — publishing"
+"$JRB_REPO_ROOT/benchmarks/JunoResBench/world_generator/condor/publish_release_v21.sh"
 rc=$?
 echo "$(date +%H:%M) FINISHER exit=$rc"
 exit $rc
