@@ -185,7 +185,7 @@ def test_builds_bounded_waveform_audit(tmp_path):
 
     reader = ShardWaveforms(release / "private/final_shards.json")
     event = reader.read_event(3)
-    assert all(isinstance(r.samples, np.memmap) for r in reader.readers)
+    assert isinstance(event.samples, np.memmap)
 
     paths = build_waveform_figures(release, tmp_path / "figures", sample_limit=8)
     from benchmarks.JunoResBench.scripts.plot_electron_single_site_waveforms import (

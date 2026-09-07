@@ -7,9 +7,10 @@ PY=/usr/bin/python3
 export PYTHONPATH=/lustrefs/juno26/users/lidian/pylibs/jrb_py39${PYTHONPATH:+:$PYTHONPATH}
 
 TASK=electron_single_site
-BASE=/scratchfs2/juno/lidian/jrb_v21/preflight
+RELEASE=${1:?usage: run_validate_only_v21.sh <release-dir> [<output-dir>]}"
+OUTPUT=${2:-$RELEASE/validation}
 
 cd "$JRB_REPO_ROOT"
 $PY "$JRB_REPO_ROOT/benchmarks/JunoResBench/world_generator/validate_release.py" \
-  --task "$TASK" --release "$BASE/release" --output "$BASE/validation"
-[ -f "$BASE/validation/ACCEPTED" ] && echo "PREFLIGHT: ACCEPTED" || { echo "PREFLIGHT: REJECTED"; exit 1; }
+  --task "$TASK" --release "$RELEASE" --output "$OUTPUT"
+[ -f "$OUTPUT/ACCEPTED" ] && echo "VALIDATION: ACCEPTED" || { echo "VALIDATION: REJECTED"; exit 1; }

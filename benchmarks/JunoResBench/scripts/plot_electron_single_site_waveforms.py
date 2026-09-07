@@ -119,9 +119,45 @@ class ShardWaveforms:
     def __init__(self, manifest_path: Path, key: str = "final"):
         manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
         entries = manifest["shards"] if "shards" in manifest else manifest[key]["shards"]
-        self.readers = [ReleaseWaveforms(Path(e["index"]).parent) for e in entries]
-        self._counts = [len(r) for r in self.readers]
-        self.metadata = dict(self.readers[0].metadata)
+        # shard roots only — memmaps open lazily per read_event, so virtual
+        # memory stays at one shard regardless of how many shards exist
+        self._roots = [Path(e["index"]).parent for e in entries]
+        self._counts = []
+        for root in self._roots:
+            # validate each shard index eagerly (small arrays, no mmap) so a
+            # corrupt shard fails construction, not mid-plot
+            with np.load(root / "index.npz", allow_pickle=False) as index:
+                event_offsets = index["event_segment_offsets"]
+                sample_offsets = index["segment_sample_offsets"]
+                segment_pmt_ids = index["segment_pmt_ids"]
+                segment_starts = index["segment_start_samples"]
+            n_segment = len(segment_pmt_ids)
+            valid = (
+                event_offsets.ndim == 1
+                and len(event_offsets) >= 2
+                and int(event_offsets[0]) == 0
+                and int(event_offsets[-1]) == n_segment
+                and sample_offsets.shape == (n_segment + 1,)
+                and int(sample_offsets[0]) == 0
+                and segment_starts.shape == (n_segment,)
+            )
+            if not valid:
+                raise ValueError("invalid shard index arrays")
+            payload = root / "segment_samples.npy"
+            with payload.open("rb") as fh:
+                version = np.lib.format.read_magic(fh)
+                shape, _, _ = (
+                    np.lib.format.read_array_header_1_0(fh) if version == (1, 0)
+                    else np.lib.format.read_array_header_2_0(fh)
+                )
+                data_start = fh.tell()
+            declared = int(sample_offsets[-1])
+            if shape[0] != declared or payload.stat().st_size - data_start != declared * 2:
+                raise ValueError("invalid sample offsets")
+            self._counts.append(len(event_offsets) - 1)
+        self.metadata = json.loads(
+            (self._roots[0] / "metadata.json").read_text(encoding="utf-8")
+        )
         self.metadata["n_events"] = sum(self._counts)
 
     def __len__(self):
@@ -130,15 +166,15 @@ class ShardWaveforms:
     def _locate(self, index: int):
         if index < 0 or index >= len(self):
             raise IndexError(index)
-        for reader, count in zip(self.readers, self._counts):
+        for shard, count in enumerate(self._counts):
             if index < count:
-                return reader, index
+                return self._roots[shard], index
             index -= count
         raise IndexError(index)
 
     def read_event(self, index: int) -> EventWaveforms:
-        reader, local = self._locate(index)
-        return reader.read_event(local)
+        root, local = self._locate(index)
+        return ReleaseWaveforms(root).read_event(local)
 
 
 def _load_npz(path: Path):
