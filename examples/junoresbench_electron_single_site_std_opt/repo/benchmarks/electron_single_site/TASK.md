@@ -95,6 +95,10 @@ reported against `vertex_rms_reference_m`.
 ## Environment
 
 The evaluator sends hidden events one at a time into a mount-isolated
-worker with an 8 GiB address-space limit; per-event memory must stay
-bounded, and caching the full event stream will not fit. The private data
-directory and the generator are not supplied.
+worker; per-event memory must stay bounded (an 8 GiB address-space limit
+makes caching the full event stream impossible). The whole evaluation,
+every event, must finish within one hour. The worker sees only this
+task's runtime: the system `python3` with `numpy`/`scipy`, your
+`submission.py`, and the public `data/` directory — no network, no other
+files. The private data directory and the generator are not supplied.
+Nothing else about your submission is restricted.

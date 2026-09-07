@@ -31,7 +31,7 @@ def _command(submission, evaluator, public):
     bwrap = shutil.which("bwrap")
     if bwrap is None:
         raise RuntimeError("bubblewrap is required for hidden-stream evaluation")
-    command = [bwrap, "--die-with-parent", "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--new-session"]
+    command = [bwrap, "--die-with-parent", "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-net", "--new-session"]
     for path in (Path("/usr"), Path("/lib"), Path("/lib64"), Path(sys.prefix).resolve()):
         if path.exists():
             command.extend(("--ro-bind", str(path), str(path)))
@@ -39,10 +39,11 @@ def _command(submission, evaluator, public):
 
 
 def _limits():
+    # the only machine fact is the declared 8 GiB address space; the wall
+    # clock is enforced evaluator-side (declared in TASK.md) and nothing
+    # else about the submission is constrained
     os.setsid()
     resource.setrlimit(resource.RLIMIT_AS, (MEMORY_BYTES, MEMORY_BYTES))
-    resource.setrlimit(resource.RLIMIT_CPU, (WALL_SECONDS, WALL_SECONDS))
-    resource.setrlimit(resource.RLIMIT_FSIZE, (16 * 1024**2, 16 * 1024**2))
 
 
 def _read(stream, size, deadline):
