@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v2.1 preflight: one real-geometry shard at tiny counts, merged and validated.
+# v2.1 preflight: one real-geometry shard at tiny counts, published and validated.
 # The full 240-shard array is only submitted after this prints ACCEPTED.
 set -euo pipefail
 export PATH=/afs/ihep.ac.cn/soft/common/sysgroup/hep_job/bin:$PATH
@@ -27,7 +27,7 @@ $PY "$JRB_REPO_ROOT/benchmarks/JunoResBench/world_generator/shard/shard_generate
   --shard 0 --shards 1 \
   --out "$BASE/shards/shard_0"
 
-$PY "$JRB_REPO_ROOT/benchmarks/JunoResBench/world_generator/shard/merge_release.py" \
+$PY "$JRB_REPO_ROOT/benchmarks/JunoResBench/world_generator/shard/publish_release.py" \
   --task "$TASK" --seed "$SEED" --geometry-mode juno \
   --calibration-events-per-point 2 \
   --probe-events-per-point 2 --controls 64 \

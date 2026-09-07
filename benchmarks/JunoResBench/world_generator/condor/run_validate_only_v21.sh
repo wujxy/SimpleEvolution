@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Re-run the v2.1 validator on an existing merged release.
+# Re-run the v2.1 validator on an existing published release.
 set -euo pipefail
 export PATH=/afs/ihep.ac.cn/soft/common/sysgroup/hep_job/bin:$PATH
 export JRB_REPO_ROOT=/lustrefs/juno26/users/lidian/SimpleEvolution
