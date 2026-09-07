@@ -4,9 +4,10 @@
 验收失败永不阻塞/改写已发布的切片数据。
 
 原则只有三条：
-1. **切片即发布**——波形只在生成作业里写一次，之后零拷贝、零重写，release 树里是软链。
-2. **完整性下放到片**——每个切片作业结束时自己算好 sha256/字节数写进片内 manifest；
-   发布时信任它并抽查，绝不全库重哈希。
+1. **切片即发布**——波形只在生成作业里写一次，之后零拷贝、零重写；发布只是写一份索引文书，消费方按索引直读片目录。
+2. **完整性在产生子内部闭环**——切片作业写 manifest 前自检 payload 字节数
+   （`_finalized`），"有 manifest 必有完整字节"；发布端只做 stat 级复核
+   （npy 头 + 文件长度），不读内容、不哈希。
 3. **先验证后删除**——旧数据在 ACCEPTED 且逐字节核对前一个都不删。
 
 ---
@@ -41,7 +42,8 @@
 - 每片结束（shard_generate.py）：
   - `_finalized()` 校验"index.npz + payload 字节数一致"才算成品，
     残缺目录直接删除重生成（ENOSPC 暗伤的根源堵点）；
-  - 对本片三个 split 计算 sha256 与字节数写入 `shard_manifest.json`；
+  - 写 `shard_manifest.json`（各 split 的事件区间；真值只属于 calibration/final，
+    **dev 不写 truth**——它是无标注练习集，真值外泄即泄题）；
   - 逐文件 fsync 后才写 manifest（防"manifest 先可见、内容后到"）。
 - **交完作业 2 分钟内必须确认作业真的开工了**：看 worker 侧日志/目录有无新文件。
   日志 0 字节 + 队列里消失 = 立刻查（env、挂载、quota），不要等。
@@ -77,19 +79,19 @@ lfs quota -u lidian /lustrefs/juno26 /junofs /scratchfs2
 ## 发 PUBLISH
 
 脚本：`world_generator/condor/publish_release_v21.sh`
-（零波形拷贝：真相/标签/配置/manifest 等簿记 ~100MB + 软链树）
+（`publish_release.py`：发布 = 写发布文书，零波形读/拷贝）
 
-- `publish_release.py --publish-shards`：
-  1. 逐片读片内 manifest 的 sha256/字节数，与磁盘 stat 核对；
-  2. **随机抽 8 片实算 sha256 抽查**（不全库重哈希——全库 434G 单线程 ~40min，
-     是发布从 20 分钟劣化到 1 小时的主因）；
-  3. 拼接各片 truth（`step_offsets` 按 step_base 重定基 + 补收尾边界——
-     两个历史 bug，均有测试覆盖）；
-  4. 写 `public/`（labels、评测配置）与 `private/`（truth、oracle、final_shards.json）、
-     `MANIFEST.json`，软链 `shard_XXX` 进 release 树。
-- 拼接/软链等结构改动**必须先有 fixture 测试**（现有 10 个测试就是为
-  这类 bug 立的）。
-- 发布失败 = 门禁拒发，release 树零副作用；修复后直接重跑本阶段。
+- 输入：一个或多个 `shards 根目录`（内含 `shard_*`），输出 release 树：
+  - `public/release.json`——calibration+dev 的有序片索引（agent 可见）
+  - `public/calibration/labels.npz`——刻度源能量+部署位置
+  - `public/evaluation_config.json`——冻结的 gate/目标
+  - `private/final.json`——final 有序片索引（含各片 truth 路径，仅 owner/evaluator 可见）
+  - `private/electron_oracle.json`——冻结顶点 oracle 记录
+- 每片每 split 做 stat 复核（index 数组一致 + npy 头 + 字节数），坏片当场指名报错；
+  全程秒级～分钟级，与片数线性、与波形大小无关。
+- 真值逐片保留在片目录里，**永不拼接**（跨片索引换算这类 bug 从结构上消失）；
+  evaluator / validator / 画图全部按索引逐片读、各自片内对齐。
+- 发布失败零副作用；修好后直接重跑本阶段。
 
 ## 收 ACCEPT（独立、可重跑、不阻塞）
 
@@ -117,10 +119,10 @@ lfs quota -u lidian /lustrefs/juno26 /junofs /scratchfs2
 | 160 片 ENOSPC 暴毙 | dev 未截断 3× 超盘 | DEV_EVENTS + 配额预留 |
 | manifest 谎报成品 | 跳过逻辑只看 index 存在 | `_finalized()` 字节校验 |
 | 27 片 final 0 字节 | ENOSPC 崩溃残留 + 上述跳过 | 全量扫雷 + 确定性重放 |
-| 240 片 dev 全缺 | 同期清理/崩溃 | 修复流程 + 真相拼接测试 |
+| 240 片 dev 全缺 | 同期清理/崩溃 | 修复流程（确定性重放） |
 | 验收 ENOMEM | 读取器全开 240 片 memmap（336GB 虚拟） | lazy 单片打开（4GB 纪律） |
 | rsync 只拷了空目录 | `--files-from` 隐含 -d | 显式 `-r` |
 | 作业秒挂 | 漏 export JRB_REPO_ROOT | 2 分钟开工确认 |
 | EDQUOT 八路齐挂 | lustre 配额账本滞后回冲 | 写前查 quota + 15% 余量 |
-| truth 拼接错位/断尾 | step_offsets 未重定基/未补边界 | fixture 测试覆盖 |
+| truth 拼接错位/断尾 | 跨片 step_offsets 换算 | **真值永不拼接**，逐片自对齐 |
 | 改名打断在跑脚本 | finisher 按旧文件名调用 127 | 改名前查引用、挑时机 |

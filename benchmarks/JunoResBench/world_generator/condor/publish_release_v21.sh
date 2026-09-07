@@ -26,28 +26,15 @@ cd "$JRB_REPO_ROOT"
 n_manifest=$(cat "$LUSTRE_BASE"/shards/shard_*/shard_manifest.json "$JUNOFS_BASE"/shards/shard_*/shard_manifest.json 2>/dev/null | wc -l)
 [ "$n_manifest" -ge "$SHARDS" ] || { echo "only $n_manifest/$SHARDS shard manifests — array incomplete"; exit 1; }
 
-# two-root shard view: shards 000-149 on lustrefs, 150-239 on junofs
-rm -rf "$LUSTRE_BASE/merge_view"
-mkdir -p "$LUSTRE_BASE/merge_view"
-i=0
-while [ "$i" -lt "$SHARDS" ]; do
-    id=$(printf '%03d' "$i")
-    if [ "$i" -lt 150 ]; then
-        ln -s "$LUSTRE_BASE/shards/shard_${id}" "$LUSTRE_BASE/merge_view/shard_${id}"
-    else
-        ln -s "$JUNOFS_BASE/shards/shard_${id}" "$LUSTRE_BASE/merge_view/shard_${id}"
-    fi
-    i=$((i+1))
-done
-
 rm -rf "$RELEASE" "$VALIDATION"
-# publish mode: shards stay in place on scratchfs2/junofs, symlinked into
-# the release tree; only truth/labels/config/manifests are written
+# shards stay in place on lustrefs (0-149) + junofs (150-239); publishing
+# writes only the release documents (release.json, final.json, labels,
+# config, oracle) — no waveform byte is read or copied
 $PY "$JRB_REPO_ROOT/benchmarks/JunoResBench/world_generator/shard/publish_release.py" \
-  --task "$TASK" --seed "$SEED" --geometry-mode juno \
-  --calibration-events-per-point 20 \
-  --probe-events-per-point 200 --controls 7680 \
-  --shards-root "$LUSTRE_BASE/merge_view" --out "$RELEASE" --publish-shards
+  --task "$TASK" --geometry-mode juno \
+  --shards-root "$LUSTRE_BASE/shards" \
+  --shards-root "$JUNOFS_BASE/shards" \
+  --out "$RELEASE"
 # publish mode bookkeeping (~100 MB) lands on lustrefs; the ~420 GiB of
 # waveform shards stay in place on scratchfs2 + junofs, symlinked into the
 # release tree, and are cleaned only after the bank is superseded

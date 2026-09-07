@@ -118,7 +118,10 @@ class ShardWaveforms:
 
     def __init__(self, manifest_path: Path, key: str = "final"):
         manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
-        entries = manifest["shards"] if "shards" in manifest else manifest[key]["shards"]
+        if "shards" in manifest:
+            entries = manifest["shards"]
+        else:
+            entries = manifest["populations"][key]["shards"]
         # shard roots only — memmaps open lazily per read_event, so virtual
         # memory stays at one shard regardless of how many shards exist
         self._roots = [Path(e["index"]).parent for e in entries]
@@ -155,6 +158,7 @@ class ShardWaveforms:
             if shape[0] != declared or payload.stat().st_size - data_start != declared * 2:
                 raise ValueError("invalid sample offsets")
             self._counts.append(len(event_offsets) - 1)
+        self.entries = entries
         self.metadata = json.loads(
             (self._roots[0] / "metadata.json").read_text(encoding="utf-8")
         )
@@ -175,6 +179,15 @@ class ShardWaveforms:
     def read_event(self, index: int) -> EventWaveforms:
         root, local = self._locate(index)
         return ReleaseWaveforms(root).read_event(local)
+
+
+def _concat_truth(paths):
+    blocks = {}
+    for path in paths:
+        with np.load(path, allow_pickle=False) as data:
+            for key in data.files:
+                blocks.setdefault(key, []).append(data[key])
+    return {key: np.concatenate(value) for key, value in blocks.items()}
 
 
 def _load_npz(path: Path):
@@ -319,8 +332,9 @@ def _pattern_figure(metrics, positions, values, label, title):
 def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32):
     release_root, output = Path(release_root), Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    reader = ShardWaveforms(release_root / "private/final_shards.json")
-    truth = _load_npz(release_root / "private/truth.npz")
+    reader = ShardWaveforms(release_root / "private/final.json")
+    truth = _concat_truth([
+        Path(e["truth"]) for e in reader.entries])
     geometry = _load_npz(release_root / "public/detector_geometry.npz")
     positions = np.asarray(geometry["pmt_positions_m"], float)
     energy = np.asarray(truth["evt_e_true"], float)
@@ -439,7 +453,7 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
         "events_total": len(reader),
         "events_total_dense_final": len(reader),
         "events_total_dense_calibration": len(
-            ShardWaveforms(release_root / "public/MANIFEST.json", key="calibration")
+            ShardWaveforms(release_root / "public/release.json", key="calibration")
         ),
         "events_scanned": len(metrics),
         "dense_channel_completeness": float(np.mean(dense_complete)),

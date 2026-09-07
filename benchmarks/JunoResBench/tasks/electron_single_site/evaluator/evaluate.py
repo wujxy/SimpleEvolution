@@ -104,9 +104,8 @@ def run_online(submission, private_root, public_root):
 
 
 def _final_shards(private_root):
-    """Ordered final-shard manifest published alongside the private truth."""
-    manifest = json.loads((Path(private_root) / "final_shards.json").read_text())
-    return manifest["shards"]
+    """Ordered final-shard index; truth lives per shard beside its waveforms."""
+    return json.loads((Path(private_root) / "final.json").read_text())["shards"]
 
 
 def _iter_final(private_root):
@@ -143,9 +142,14 @@ def main():
     parser.add_argument("--submission", required=True)
     args = parser.parse_args()
     prediction = run_online(args.submission, args.private, args.public)
-    with np.load(Path(args.private) / "truth.npz") as truth:
-        config = json.loads((Path(args.public) / "evaluation_config.json").read_text())
-        result = score_predictions(truth, prediction, config)
+    blocks = {}
+    for entry in _final_shards(args.private):
+        with np.load(entry["truth"], allow_pickle=False) as data:
+            for key in data.files:
+                blocks.setdefault(key, []).append(data[key])
+    truth = {key: np.concatenate(value) for key, value in blocks.items()}
+    config = json.loads((Path(args.public) / "evaluation_config.json").read_text())
+    result = score_predictions(truth, prediction, config)
     print(json.dumps(result, indent=2))
 
 

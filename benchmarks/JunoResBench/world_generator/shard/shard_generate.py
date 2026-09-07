@@ -71,7 +71,7 @@ def _shard_slice(total, shard, shards):
     return lo, hi
 
 
-def _simulate_slice(population, simulator, layout, destination, lo, hi, noise_rng):
+def _simulate_slice(population, simulator, layout, destination, lo, hi, noise_rng, include_truth=True):
     """Simulate population[lo:hi] into `destination` (shard-local streams)."""
     writer = SparseSplitWriter(destination)
     truth_rows = {key: [] for key in ("evt_e_vis", "evt_e_dep_mev", "evt_e_escape_mev", "evt_total_energy")}
@@ -123,7 +123,8 @@ def _simulate_slice(population, simulator, layout, destination, lo, hi, noise_rn
         truth[key] = np.concatenate(blocks) if blocks else np.empty(0)
     public_meta = {key: _metadata(simulator.cfg, layout, simulator)[key]
                    for key in PUBLIC_METADATA}
-    writer.finalize(public_meta, truth=truth)
+    # dev is the agent's unlabeled practice split: it ships without truth
+    writer.finalize(public_meta, truth=truth if include_truth else None)
     return truth
 
 
@@ -185,7 +186,8 @@ def main():
         if destination.exists():
             print(f"shard {args.shard} {name}: incomplete leftover, regenerating", flush=True)
             shutil.rmtree(destination)
-        _simulate_slice(population, simulator, layout, destination, lo, hi, noise_rng)
+        _simulate_slice(population, simulator, layout, destination, lo, hi,
+                        noise_rng, include_truth=(name != "dev"))
         manifest["splits"][name] = [int(lo), int(hi), int(hi - lo)]
         print(f"shard {args.shard}/{args.shards} {name}: events [{lo}:{hi}) -> {destination}", flush=True)
     (out / "shard_manifest.json").write_text(json.dumps(manifest, indent=1) + "\n", encoding="utf-8")

@@ -49,11 +49,9 @@ def hygiene_report(public_root, private_root):
     return {"pass": not unexpected, "unexpected_executables": sorted(unexpected)}
 
 
-def physics_report(task_name, truth_path):
-    """Check private particle truth without importing any evaluator."""
-    with np.load(truth_path, allow_pickle=False) as data:
-        truth = {key: data[key] for key in data.files}
-    report = {}
+def _physics_one(task_name, truth):
+    """Physics checks on one shard's self-contained truth block."""
+    report = {"n_events": int(len(truth.get("evt_e_true", [])))}
     if {
         "step_offsets", "step_e_dep_mev", "evt_e_escape_mev", "evt_total_energy"
     } <= set(truth):
@@ -89,6 +87,35 @@ def physics_report(task_name, truth_path):
         report["annihilation_pass"] = bool(
             abs(report["annihilation_mean_energy_mev"] - 1.021998) < 1e-6
         )
+    return report
+
+
+def physics_report(task_name, truth_paths):
+    """Per-shard physics checks, aggregated. Shards are never concatenated:
+    each shard's truth is self-contained, so cross-shard index math (a past
+    bug source) cannot exist."""
+    if isinstance(truth_paths, (str, Path)):
+        truth_paths = [truth_paths]
+    merged = {}
+    passes = []
+    for path in truth_paths:
+        with np.load(path, allow_pickle=False) as data:
+            shard = {key: data[key] for key in data.files}
+        report = _physics_one(task_name, shard)
+        for key, value in report.items():
+            if isinstance(value, bool):
+                merged.setdefault(key, []).append(value)
+            elif isinstance(value, float):
+                merged.setdefault(key, []).append(value)
+            # ints other than n_events (summed explicitly above) carry no meaning
+        passes.append(report)
+    report = {"n_shards": len(passes),
+              "n_events": int(sum(r["n_events"] for r in passes))}
+    for key, values in merged.items():
+        if isinstance(values[0], bool):
+            report[key] = bool(all(values))
+        else:
+            report[key] = float(max(values))
     return report
 
 
@@ -222,9 +249,12 @@ def validate_release(task_name, release_root, output_root, sample_limit=32):
     hygiene = hygiene_report(release / "public", release / "private")
     if not hygiene["pass"]:
         failures.append("dataset_contains_executable")
-    manifest = json.loads((release / "public/MANIFEST.json").read_text())
+    release_index = json.loads((release / "public/release.json").read_text())
+    final_index = json.loads((release / "private/final.json").read_text())
     structures = {}
-    for name, population in manifest.items():
+    for name, population in (
+        *release_index["populations"].items(), ("final", final_index)
+    ):
         for entry in population["shards"]:
             key = f"{name}_{entry['shard']}"
             structures[key] = sparse_structure_report(Path(entry["index"]).parent)
@@ -232,7 +262,13 @@ def validate_release(task_name, release_root, output_root, sample_limit=32):
         f"invalid_structure_{name}"
         for name, result in structures.items() if not result["pass"]
     )
-    physics = physics_report(task_name, release / "private/truth.npz")
+    # physics truth comes from the hidden final population only
+    truth_paths = [entry["truth"] for entry in final_index["shards"]
+                   if "truth" in entry]
+    physics = physics_report(task_name, truth_paths)
+    final_events = sum(entry["events"] for entry in final_index["shards"])
+    if physics["n_events"] != final_events:
+        failures.append("final_truth_event_mismatch")
     required_physics = ["energy_conservation_pass", "quenching_pass"]
     if task_name == "ibd_positron_multisite":
         required_physics.append("annihilation_pass")

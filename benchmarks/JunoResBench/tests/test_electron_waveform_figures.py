@@ -76,12 +76,12 @@ def _write_dense_split(split: Path, energies, vertices, truth=None, rng_seed=100
 
 
 def _synthetic_release(root: Path):
-    """Two in-place shards per population, bound by publish_shards."""
+    """Two in-place shards bound by publish_release (parent shard dir)."""
     from types import SimpleNamespace
 
     from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.config import DetectorConfig
     from benchmarks.JunoResBench.world_generator.authoritative.juno_res_bench.geometry import PMTLayout
-    from benchmarks.JunoResBench.world_generator.shard.publish_release import publish_shards
+    from benchmarks.JunoResBench.world_generator.shard.publish_release import publish_release
 
     calib_energies = np.asarray([0.511, 1.022, 2.223, 4.44])
     final_energies = np.asarray([1.0, 2.0, 5.0, 5.0, 7.0, 1.2, 4.4, 9.5])
@@ -113,7 +113,7 @@ def _synthetic_release(root: Path):
         _write_dense_split(
             calib_dir, calib_energies[lo:hi], np.zeros((2, 3))
         )
-        _write_dense_split(dev_dir, dev_energies[lo:hi], dev_vertices[lo:hi])
+        _write_dense_split(dev_dir, dev_energies[lo:hi], dev_vertices[lo:hi], None)
         _write_dense_split(
             final_dir, final_energies[flo:fhi], final_vertices[flo:fhi]
         )
@@ -158,22 +158,9 @@ def _synthetic_release(root: Path):
         np.savez(base / "final" / "truth.npz", **final_truth)
 
     layout = PMTLayout.uniform(N_PMT, DetectorConfig().detector_radius_m)
-    publish_shards(
-        [shards_root / f"shard_{s:03d}" for s in (0, 1)],
-        release, SimpleNamespace(task="electron_single_site"),
-        {
-            "calibration": {
-                "evt_e_true": calib_energies,
-                "evt_vertex_m": np.zeros((len(calib_energies), 3)),
-            },
-            "dev": {"evt_e_true": dev_energies,
-                    "evt_vertex_m": dev_vertices},
-            "final": {
-                "evt_e_true": final_energies,
-                "evt_vertex_m": final_vertices,
-                "evt_sample_role": final_roles,
-            },
-        },
+    publish_release(
+        [shards_root],
+        release, "electron_single_site",
         DetectorConfig(optics_mode="trace"),
         layout,
     )
@@ -183,7 +170,7 @@ def test_builds_bounded_waveform_audit(tmp_path):
     release = tmp_path / "release"
     _synthetic_release(release)
 
-    reader = ShardWaveforms(release / "private/final_shards.json")
+    reader = ShardWaveforms(release / "private/final.json")
     event = reader.read_event(3)
     assert isinstance(event.samples, np.memmap)
 
@@ -207,7 +194,10 @@ def test_dev_split_carries_no_truth(tmp_path):
     release = tmp_path / "release"
     _synthetic_release(release)
 
-    assert not (release / "public/dev/truth.npz").exists()
+    assert not (release / "public/dev").exists()
+    assert not list(release.glob("shards/shard_*/dev/truth.npz"))
+    assert "dev" not in json.loads(
+        (release / "public/release.json").read_text())["populations"]["dev"]["shards"][0]
 
 
 def test_plotter_is_independent_of_generator_and_copying():
@@ -239,7 +229,7 @@ def test_rejects_invalid_sparse_offsets(tmp_path):
     np.savez(index_path, **arrays)
 
     try:
-        ShardWaveforms(release / "private/final_shards.json")
+        ShardWaveforms(release / "private/final.json")
     except ValueError as error:
         assert "sample offsets" in str(error)
     else:

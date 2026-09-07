@@ -79,9 +79,9 @@ def run_online(submission, private_root, public_root):
     process = subprocess.Popen(_command(submission, evaluator, Path(public_root)), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, env={"HOME": "/tmp", "PATH": "/usr/bin:/bin", "PYTHONPATH": "/task", "PYTHONNOUSERSITE": "1", "PYTHONDONTWRITEBYTECODE": "1"}, preexec_fn=_limits)
     try:
         _message(process.stdout, deadline)
-        split = SparseSplit(Path(private_root) / "final")
-        output = np.empty((len(split), 4), dtype=float)
-        for index, event in enumerate(split.iter_events()):
+        output = np.empty((sum(e["events"] for e in _final_shards(private_root)), 4), dtype=float)
+        index = 0
+        for event in _iter_final(private_root):
             payload = pickle.dumps(event, protocol=5)
             process.stdin.write(struct.pack("!Q", len(payload)) + payload)
             process.stdin.flush()
@@ -89,6 +89,7 @@ def run_online(submission, private_root, public_root):
             if len(response) != 32:
                 raise RuntimeError("submission worker returned malformed prediction")
             output[index] = struct.unpack("!dddd", response)
+            index += 1
         process.stdin.write(struct.pack("!Q", 0))
         process.stdin.close()
         process.wait(timeout=max(0.01, deadline - time.monotonic()))
@@ -100,6 +101,17 @@ def run_online(submission, private_root, public_root):
             except ProcessLookupError:
                 pass
         stderr.close()
+
+
+def _final_shards(private_root):
+    """Ordered final-shard index; truth lives per shard beside its waveforms."""
+    return json.loads((Path(private_root) / "final.json").read_text())["shards"]
+
+
+def _iter_final(private_root):
+    for entry in _final_shards(private_root):
+        split = SparseSplit(Path(entry["index"]).parent)
+        yield from split.iter_events()
 
 
 def score_predictions(truth, prediction, config):
@@ -130,9 +142,14 @@ def main():
     parser.add_argument("--submission", required=True)
     args = parser.parse_args()
     prediction = run_online(args.submission, args.private, args.public)
-    with np.load(Path(args.private) / "truth.npz") as truth:
-        config = json.loads((Path(args.public) / "evaluation_config.json").read_text())
-        result = score_predictions(truth, prediction, config)
+    blocks = {}
+    for entry in _final_shards(args.private):
+        with np.load(entry["truth"], allow_pickle=False) as data:
+            for key in data.files:
+                blocks.setdefault(key, []).append(data[key])
+    truth = {key: np.concatenate(value) for key, value in blocks.items()}
+    config = json.loads((Path(args.public) / "evaluation_config.json").read_text())
+    result = score_predictions(truth, prediction, config)
     print(json.dumps(result, indent=2))
 
 
