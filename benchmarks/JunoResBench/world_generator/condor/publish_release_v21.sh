@@ -3,7 +3,7 @@
 # sha256 gate, bookkeeping (truth/labels/config/manifest), symlink tree,
 # then validate_release. Zero waveform copies — shards ARE the release.
 # Run AFTER every shard has finished (240 shard_manifest.json files).
-#   usage: run_merge_v21.sh
+#   usage: publish_release_v21.sh
 set -euo pipefail
 export PATH=/afs/ihep.ac.cn/soft/common/sysgroup/hep_job/bin:$PATH
 export JRB_REPO_ROOT=/lustrefs/juno26/users/lidian/SimpleEvolution
