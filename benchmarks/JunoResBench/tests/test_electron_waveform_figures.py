@@ -157,7 +157,9 @@ def _synthetic_release(root: Path):
         np.savez(base / "calibration" / "truth.npz", **calib_truth)
         np.savez(base / "final" / "truth.npz", **final_truth)
 
-    layout = PMTLayout.uniform(N_PMT, DetectorConfig().detector_radius_m)
+    # the fixture's waveform timing was built from positions_fixture, so the
+    # published geometry must be that same arrangement
+    layout = PMTLayout(positions_fixture)
     publish_release(
         [shards_root],
         release, "electron_single_site",
