@@ -128,6 +128,8 @@ def publish_release(shard_roots, out, task, config, layout):
                               "shards": entries}
 
     (public / "calibration").mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        public / "detector_geometry.npz", pmt_positions_m=layout.positions_m)
     (private).mkdir(parents=True, exist_ok=True)
     labels_truth = _load_truth_entries(roots, "calibration")
     np.savez_compressed(
