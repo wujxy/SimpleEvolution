@@ -462,9 +462,16 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
     paths["hit_pattern"] = _save(fig, output, "hit_pattern")
 
     # --- delivery checkpoint: trigger-window-aligned hit times, center vs edge ---
+    # the readout window is trigger-referenced by construction: it starts
+    # pre_trigger_ns (=300) before the sliding-sum threshold trigger and runs
+    # 1000 ns, so hit time relative to trigger = sample_index - 300. No
+    # per-event re-alignment: the trigger swap the user asks for is already
+    # baked into the stored time axis.
+    PRE_TRIGGER_NS = 300.0
+
     def _aligned_times(radius_lo, radius_hi, limit):
         """CFD-style arrival per PMT: scan back from each row's pulse peak to
-        its 25%-of-peak crossing (noise-robust), aligned per event."""
+        its 25%-of-peak crossing (noise-robust), in trigger-referenced time."""
         pool = np.flatnonzero(
             sampled_probe & (sample_radius >= radius_lo)
             & (sample_radius < radius_hi))
@@ -475,45 +482,42 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
             ev = reader.read_event(int(pool[k]))
             n_seg = len(ev.segment_pmt_ids)
             sig = -np.asarray(ev.samples, dtype=np.float32).reshape(n_seg, n_samples)
-            # the trigger places the physical pulse in [200, 600] ns
-            # (cf. time_vs_distance); masking outside it keeps dark pulses
-            # from masquerading as the signal
-            masked = np.where((grid[None, :] >= 200) & (grid[None, :] < 600),
-                              sig, np.float32(-1))
-            peak = masked.max(axis=1)
-            peak_idx = masked.argmax(axis=1)
-            back = (grid[None, :] >= np.maximum(peak_idx - 200, 200)[:, None]) \
-                & (grid[None, :] <= peak_idx[:, None])
-            crossing = (sig >= (0.25 * peak)[:, None]) & back
-            arrival = np.where(peak > 20.0, crossing.argmax(axis=1), -1)
-            arrival = arrival[arrival >= 0].astype(float)
+            # leading-edge time of each PMT's pulse: first crossing of
+            # max(25% peak, 5 sigma). The 5-sigma floor keeps weak rows
+            # (peak ~ noise) from reporting noise blips as hits; dark
+            # pulses larger than the threshold genuinely precede the
+            # signal and are kept — they are part of the physics.
+            noise = float(1.4826 * np.median(np.abs(sig - np.median(sig))))
+            peak = sig.max(axis=1)
+            peak_idx = sig.argmax(axis=1)
+            thr = np.maximum(0.25 * peak, 5.0 * noise)
+            window = (grid[None, :] >= 1) & (grid[None, :] <= peak_idx[:, None])
+            crossing = (sig >= thr[:, None]) & window
+            arrival = np.where(peak > 5.0 * noise, crossing.argmax(axis=1), -1)
+            arrival = (arrival[arrival >= 0].astype(float) - PRE_TRIGGER_NS)
             if len(arrival):
-                arrival -= np.percentile(arrival, 1)
                 times.append(arrival)
         return np.concatenate(times) if times else np.empty(0)
 
     center_times = _aligned_times(0.0, 3.0, 8)
     edge_times = _aligned_times(12.0, 17.0, 8)
     fig, ax = plt.subplots(figsize=(7, 4.5))
-    span = max(center_times.max() if len(center_times) else 400,
-               edge_times.max() if len(edge_times) else 400)
-    bins = np.linspace(0, min(span, 400), 81)
+    bins = np.linspace(-100, 400, 101)
     for times, label, color in ((center_times, "center-like (r<3 m)", "tab:blue"),
                                 (edge_times, "edge-like (r>12 m)", "tab:red")):
         if len(times):
             ax.hist(times, bins=bins, histtype="step", linewidth=1.8,
                     density=True, label=label, color=color)
     if len(center_times) and len(edge_times):
-        ax.text(0.98, 0.60,
+        ax.text(0.98, 0.85,
                 f"std {center_times.std():.0f} ns (center)  vs  "
-                f"{edge_times.std():.0f} ns (edge):\nedge events fill the early "
-                "window (near-side PMTs)\nand widen the tail — timing "
-                "complements the charge pattern",
+                f"{edge_times.std():.0f} ns (edge)\nphoton-transport spread "
+                "dominates; vertex rides on charge",
                 transform=ax.transAxes, ha="right", va="top", fontsize=9)
-    ax.set(xlabel="time since first light of the event [ns]",
+    ax.set(xlabel="hit time relative to threshold trigger [ns]",
            ylabel="normalized PMTs", yscale="log",
-           xlim=(0, 400),
-           title="Aligned hit time: prompt peak + scatter tail, center vs edge")
+           xlim=(-100, 400),
+           title="Hit time vs threshold trigger: center vs edge events")
     ax.legend()
     paths["hit_time_center_vs_edge"] = _save(fig, output, "hit_time_center_vs_edge")
 
