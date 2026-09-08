@@ -18,6 +18,10 @@ EXPECTED = {
     "charge_vs_energy",
     "first_hit_time",
     "time_vs_distance",
+    "hit_pattern",
+    "hit_time_center_vs_edge",
+    "raw_waveform",
+    "evis_nonlinearity",
 }
 
 N_PMT = 12
@@ -141,6 +145,7 @@ def _synthetic_release(root: Path):
                 "evt_t0_ns": np.linspace(-10, 10, n),
                 "evt_e_escape_mev": np.zeros(n),
                 "evt_total_energy": final_e,
+                "evt_e_vis": final_e * (1.0 - 0.05 / np.maximum(final_e, 1e-9)),
                 "step_offsets": np.arange(0, 2 * n + 1, 2, dtype=np.int64),
                 "step_e_dep_mev": np.column_stack((
                     np.full(n, 0.05), final_e - 0.05)).ravel(),

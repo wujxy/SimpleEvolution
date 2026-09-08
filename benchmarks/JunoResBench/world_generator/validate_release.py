@@ -29,6 +29,10 @@ FIGURE_PURPOSE = {
     "charge_vs_energy": "电荷是否线性保持能量信息",
     "first_hit_time": "prompt/晚光结构是否存在",
     "time_vs_distance": "首光是否随传播距离推迟（光传播正确）",
+    "hit_pattern": "中心/边缘事例的电荷图案是否可区分（位置信息）",
+    "hit_time_center_vs_edge": "对齐后边缘事例填充早到窗口并展宽尾部（近侧 PMT 先到）",
+    "raw_waveform": "原始单 PMT 波形是否携带白噪声/TTS/暗噪声全效应",
+    "evis_nonlinearity": "液闪非线性 E_vis/E_true 是否呈现淬灭弯曲",
 }
 
 FIGURE_GATE = {

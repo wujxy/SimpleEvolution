@@ -25,6 +25,10 @@ FIGURE_NAMES = (
     "charge_vs_energy",         # 电荷线性响应（能量信息存在）
     "first_hit_time",           # prompt/晚光结构（时间信息存在）
     "time_vs_distance",         # 首光随距离推迟（光传播正确）
+    "hit_pattern",              # 中心/边缘事例的电荷击中图案（位置信息存在）
+    "hit_time_center_vs_edge",  # 触发窗对齐后中心 vs 非中心事例的首光时分布
+    "raw_waveform",             # 单 PMT 原始波形（白噪声/TTS/暗噪声全效应）
+    "evis_nonlinearity",        # 液闪非线性 E_vis/E_true vs E_true
 )
 
 
@@ -449,6 +453,116 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
         and bool(np.all(np.diff(item.event.segment_sample_offsets) == item.event.n_samples))
         for item in metrics
     ]
+    # --- delivery checkpoint: per-PMT charge hit pattern, center vs edge ---
+    positions = np.asarray(geometry["pmt_positions_m"], float)
+    fig = _pattern_figure(
+        [center, edge], positions,
+        lambda m: m.charge, "PMT charge [ADC]",
+        "Hit pattern: center-like vs edge-like charge footprints")
+    paths["hit_pattern"] = _save(fig, output, "hit_pattern")
+
+    # --- delivery checkpoint: trigger-window-aligned hit times, center vs edge ---
+    def _aligned_times(radius_lo, radius_hi, limit):
+        """CFD-style arrival per PMT: scan back from each row's pulse peak to
+        its 25%-of-peak crossing (noise-robust), aligned per event."""
+        pool = np.flatnonzero(
+            sampled_probe & (sample_radius >= radius_lo)
+            & (sample_radius < radius_hi))
+        n_samples = int(reader.metadata["n_samples"])
+        grid = np.arange(n_samples)
+        times = []
+        for k in range(min(limit, len(pool))):
+            ev = reader.read_event(int(pool[k]))
+            n_seg = len(ev.segment_pmt_ids)
+            sig = -np.asarray(ev.samples, dtype=np.float32).reshape(n_seg, n_samples)
+            # the trigger places the physical pulse in [200, 600] ns
+            # (cf. time_vs_distance); masking outside it keeps dark pulses
+            # from masquerading as the signal
+            masked = np.where((grid[None, :] >= 200) & (grid[None, :] < 600),
+                              sig, np.float32(-1))
+            peak = masked.max(axis=1)
+            peak_idx = masked.argmax(axis=1)
+            back = (grid[None, :] >= np.maximum(peak_idx - 200, 200)[:, None]) \
+                & (grid[None, :] <= peak_idx[:, None])
+            crossing = (sig >= (0.25 * peak)[:, None]) & back
+            arrival = np.where(peak > 20.0, crossing.argmax(axis=1), -1)
+            arrival = arrival[arrival >= 0].astype(float)
+            if len(arrival):
+                arrival -= np.percentile(arrival, 1)
+                times.append(arrival)
+        return np.concatenate(times) if times else np.empty(0)
+
+    center_times = _aligned_times(0.0, 3.0, 8)
+    edge_times = _aligned_times(12.0, 17.0, 8)
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    span = max(center_times.max() if len(center_times) else 400,
+               edge_times.max() if len(edge_times) else 400)
+    bins = np.linspace(0, min(span, 400), 81)
+    for times, label, color in ((center_times, "center-like (r<3 m)", "tab:blue"),
+                                (edge_times, "edge-like (r>12 m)", "tab:red")):
+        if len(times):
+            ax.hist(times, bins=bins, histtype="step", linewidth=1.8,
+                    density=True, label=label, color=color)
+    if len(center_times) and len(edge_times):
+        ax.text(0.98, 0.60,
+                f"std {center_times.std():.0f} ns (center)  vs  "
+                f"{edge_times.std():.0f} ns (edge):\nedge events fill the early "
+                "window (near-side PMTs)\nand widen the tail — timing "
+                "complements the charge pattern",
+                transform=ax.transAxes, ha="right", va="top", fontsize=9)
+    ax.set(xlabel="time since first light of the event [ns]",
+           ylabel="normalized PMTs", yscale="log",
+           xlim=(0, 400),
+           title="Aligned hit time: prompt peak + scatter tail, center vs edge")
+    ax.legend()
+    paths["hit_time_center_vs_edge"] = _save(fig, output, "hit_time_center_vs_edge")
+
+    # --- delivery checkpoint: raw stored waveform of the hardest-hit PMT ---
+    dense = np.asarray([
+        len(m.event.segment_pmt_ids) == int(reader.metadata["n_pmt"])
+        for m in metrics])
+    usable = np.flatnonzero(dense & (total_charge == total_charge.max()))
+    raw_metric = metrics[int(usable[0])]
+    raw_event = reader.read_event(int(raw_metric.index))
+    n_s = int(reader.metadata["n_samples"])
+    seg = np.flatnonzero(raw_event.segment_pmt_ids == raw_metric.pmt_ids[
+        int(np.argmax(raw_metric.charge))])[0]
+    lo, hi = int(raw_event.segment_sample_offsets[seg]), int(raw_event.segment_sample_offsets[seg + 1])
+    row = np.asarray(raw_event.samples[lo:hi], float)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.2), sharex=True)
+    axes[0].plot(np.arange(n_s) * (1000.0 / n_s), -row, linewidth=0.7,
+                 color="tab:blue")
+    axes[0].set(xlabel="sample [ns]", ylabel="baseline−ADC",
+                title=f"hardest-hit PMT, event {raw_metric.index}: pulse on raw baseline")
+    axes[1].plot(np.arange(n_s) * (1000.0 / n_s), -row, linewidth=0.7,
+                 color="tab:blue")
+    sigma_floor = float(row[: n_s // 5].std())
+    axes[1].set(ylim=(-8 * sigma_floor, 8 * sigma_floor),
+                xlabel="sample [ns]",
+                title="baseline zoom: white noise, TTS smear, dark spikes")
+    fig.suptitle("Raw stored waveform (int16 residual, no threshold, no smoothing)")
+    paths["raw_waveform"] = _save(fig, output, "raw_waveform")
+
+    # --- delivery checkpoint: scintillator nonlinearity E_vis / E_true ---
+    if "evt_e_vis" in truth:
+        ratio = np.asarray(truth["evt_e_vis"], float) / np.asarray(truth["evt_e_true"], float)
+        grid = np.asarray(truth["evt_e_true"], float)
+        fig, ax = plt.subplots(figsize=(7, 4.5))
+        ax.scatter(grid[:: 20], ratio[:: 20], s=2, alpha=0.12, label="events")
+        edges = np.linspace(grid.min(), grid.max(), 25)
+        centers, medians = [], []
+        for a, b in zip(edges[:-1], edges[1:]):
+            mask = (grid >= a) & (grid < b)
+            if mask.sum() > 30:
+                centers.append(0.5 * (a + b))
+                medians.append(np.median(ratio[mask]))
+        ax.plot(centers, medians, "k-", linewidth=2, label="median per bin")
+        ax.axhline(1.0, color="grey", linestyle="--", linewidth=1)
+        ax.set(xlabel="E_true [MeV]", ylabel="E_vis / E_true",
+               title="Scintillator nonlinearity: quenching bends the response")
+        ax.legend()
+        paths["evis_nonlinearity"] = _save(fig, output, "evis_nonlinearity")
+
     summary = {
         "events_total": len(reader),
         "events_total_dense_final": len(reader),
@@ -466,6 +580,11 @@ def build_waveform_figures(release_root: Path, output_dir: Path, sample_limit=32
             total_charge[sampled_probe] / sample_energy[sampled_probe]
         )),
         "pulse_selection_threshold_source": "per-event 5-sigma MAD of stored residuals",
+        "hit_pattern_events": [int(center.index), int(edge.index)],
+        "hit_time_events": {"center": int(len(center_times)), "edge": int(len(edge_times))},
+        "raw_waveform": {"event": int(raw_metric.index),
+                         "pmt": int(raw_metric.pmt_ids[int(np.argmax(raw_metric.charge))])},
+        "evis_nonlinearity_points": int(len(np.asarray(truth["evt_e_vis"], float))) if "evt_e_vis" in truth else 0,
         "note": "Waveforms are trigger-relative; t0 cannot be recovered from release truth without stored trigger time.",
     }
     (output / "summary.json").write_text(

@@ -98,7 +98,7 @@ lfs quota -u lidian /lustrefs/juno26 /junofs /scratchfs2
 脚本：`world_generator/condor/run_validate_only_v21.sh <release-dir> [<output-dir>]`
 
 - 物理硬校验只读私有 truth（秒级）：能量守恒、淬灭、（IBD 还有湮灭）。
-- 波形门禁 + 6 张核心图：抽 32 事例。
+- 波形门禁 + 10 张交付图（含 hit pattern/对齐 hit time/原始波形/E_vis 非线性）：抽 32 事例。
 - **内存纪律：worker 只有 4GB**。读取器（plot/validate 共用的
   `ShardWaveforms`）按需打开单片 memmap，构造时全量校验各片索引与
   payload 字节数但不映射波形。任何新读取代码都必须保持这个形态。
